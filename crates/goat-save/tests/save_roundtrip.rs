@@ -11,7 +11,7 @@ use goat_core::{
     week::{Intensity, Routine},
 };
 use goat_rng::GoatRng;
-use goat_save::save::{from_world_state, to_world_state};
+use goat_save::save::{from_world_state, load_from_file, save_to_file, to_world_state};
 use goat_world::world::{CLUBS, DIV_CLUBS, DIV_ENG_SEC};
 
 fn setup_state() -> WorldState {
@@ -105,6 +105,28 @@ fn save_load_restores_season_state() {
     assert_eq!(state.pc_div_idx, restored.pc_div_idx, "pc_div_idx");
     assert_eq!(state.pc_form, restored.pc_form, "pc_form");
     assert_eq!(state.table_raw, restored.table_raw, "table_raw");
+}
+
+#[test]
+fn save_load_restores_epoch_day_through_bytes() {
+    // Exercises the full byte path (save_to_file → load_from_file), not just the
+    // in-memory SaveData conversion — covers the v6 pc_epoch_day field.
+    let mut state = setup_state();
+    state.pc_epoch_day = 287; // non-trivial calendar position
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join("goat_save_epoch_roundtrip.gsav");
+    save_to_file(&data, &path).unwrap();
+    let loaded = load_from_file(&path).unwrap();
+    let restored = to_world_state(&loaded);
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(
+        restored.pc_epoch_day, 287,
+        "pc_epoch_day must survive a full byte round-trip"
+    );
 }
 
 #[test]

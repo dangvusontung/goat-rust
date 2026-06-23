@@ -388,6 +388,7 @@ dependencies = [
 name = "goat-core"
 version = "0.1.0"
 dependencies = [
+ "goat-calendar",
  "goat-fixed",
  "goat-rng",
 ]
@@ -432,16 +433,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "goat-training"
-version = "0.1.0"
-dependencies = [
- "goat-calendar",
- "goat-core",
- "goat-fixed",
- "goat-rng",
-]
-
-[[package]]
 name = "goat-traits"
 version = "0.1.0"
 dependencies = [
@@ -453,6 +444,7 @@ dependencies = [
 name = "goat-tui"
 version = "0.1.0"
 dependencies = [
+ "goat-calendar",
  "goat-core",
  "goat-fixed",
  "goat-match",

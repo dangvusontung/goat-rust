@@ -8,6 +8,7 @@ use goat_fixed::Fixed;
 use goat_rng::RngSource;
 
 use crate::attrs::{AttrId, NUM_ATTRS};
+use crate::calendar_loop::{advance_calendar_week, CalendarFlashpoint};
 use crate::generation::{self, CreationChoices};
 use crate::player::{PlayerId, PlayerStore};
 use crate::roles::FamiliarityTier;
@@ -103,6 +104,11 @@ pub struct WorldState {
     pub pc_current_calendar_week: u32,
     /// Whether the player has taken their training session this calendar week.
     pub pc_week_training_done: bool,
+    /// Live calendar position (epoch days since career start). Advanced 7/week by the
+    /// week loop, which drives the CalendarEngine. Persisted in the save (v6+).
+    pub pc_epoch_day: u32,
+    /// Calendar flashpoints (window openings) surfaced by the most recent week tick.
+    pub last_week_flashpoints: Vec<CalendarFlashpoint>,
 }
 
 /// Batch-ticked career state for one cohort peer (Phase 9).
@@ -170,6 +176,8 @@ impl WorldState {
             pc_retired: false,
             pc_current_calendar_week: 0,
             pc_week_training_done: false,
+            pc_epoch_day: 0,
+            last_week_flashpoints: Vec::new(),
         }
     }
 }
@@ -358,13 +366,18 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
         Intent::AdvanceWeek => tick_one_week(state, rng),
 
         Intent::AdvanceWeeks { n } => {
+            // Accumulate calendar flashpoints across the skipped weeks so a window that
+            // opens mid-fast-forward isn't lost (tick_one_week overwrites them each week).
+            let mut all_flashpoints = Vec::new();
             for _ in 0..n {
                 state.last_week_events.clear();
                 state = tick_one_week(state, rng);
+                all_flashpoints.append(&mut state.last_week_flashpoints);
                 if !state.last_week_events.is_empty() {
                     break; // stop at the first noteworthy event
                 }
             }
+            state.last_week_flashpoints = all_flashpoints;
             state
         }
 
@@ -689,6 +702,7 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
         pc_id,
         &state.pc_routine,
         effective_mult,
+        state.pc_lifestyle,
         rng,
     );
 
@@ -697,6 +711,15 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
         core::array::from_fn(|a| state.players.get_current(pc_id, a) - before[a]);
 
     state.last_week_events = events;
+
+    // ── Live calendar tick (golden-safe) ─────────────────────────────────────
+    // Advance the CalendarEngine 7 days on its OWN RNG stream (seeded from
+    // world_seed) — independent of the growth RNG above, so attribute goldens are
+    // untouched. Surfaces window-opening flashpoints for the renderer.
+    let (new_epoch, flashpoints) = advance_calendar_week(state.pc_epoch_day, state.world_seed);
+    state.pc_epoch_day = new_epoch;
+    state.last_week_flashpoints = flashpoints;
+
     state
 }
 

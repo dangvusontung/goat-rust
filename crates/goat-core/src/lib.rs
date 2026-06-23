@@ -11,6 +11,7 @@
 //! - `roles::{RoleId, FamiliarityTier, ROLE_NAMES, NUM_ROLES}` — role metadata
 
 pub mod attrs;
+pub mod calendar_loop;
 pub mod derive;
 pub mod generation;
 pub mod player;

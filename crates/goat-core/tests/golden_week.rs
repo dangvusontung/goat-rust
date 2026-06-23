@@ -18,15 +18,14 @@ fn forward_state() -> WorldState {
         club: "Riverside Town",
     };
     let s = WorldState::new();
-    let s = reduce(
+    reduce(
         s,
         Intent::CreatePlayer {
             seed: 12345,
             choices,
         },
         &mut GoatRng::new(0),
-    );
-    s
+    )
 }
 
 /// Advance exactly 52 weeks (1 season) with a fixed routine and seed,

@@ -173,6 +173,32 @@ pub const INJURY_WEEKS_MIN: u8 = 1;
 /// Max injury duration (weeks).
 pub const INJURY_WEEKS_MAX: u8 = 8;
 
+// ── Lifestyle ↔ consequence (bible §8.6) ──────────────────────────────────────
+// The identity fork must be a real trade-off: a professional lifestyle extends the
+// peak and lowers injury risk; a flashy one burns out early. Balanced is the neutral
+// baseline (×1.0 everywhere) so all pre-existing golden values stay frozen.
+// Placeholders illustrating shape — frozen only on user approval.
+
+/// Injury-risk multiplier (×10) by lifestyle: Professional 0.7×, Balanced 1.0×, Flashy 1.5×.
+/// Tuned (seed sweep 0–19): keeps Pro robustly the safest tier and the injury spread
+/// well-proportioned (Flashy ≈ 2.1× Pro injured weeks) without an extra duration lever.
+pub const INJURY_LIFESTYLE_X10_PRO: u32 = 7;
+pub const INJURY_LIFESTYLE_X10_BALANCED: u32 = 10;
+pub const INJURY_LIFESTYLE_X10_FLASHY: u32 = 15;
+
+/// Effective ceiling: fraction of *potential* a lifestyle lets the player actually
+/// reach. Flashy burns a little of the ceiling (0.96); Professional/Balanced reach
+/// full potential. Never raises a current attr above its potential (pillar §2.4).
+pub const LIFESTYLE_CEILING_PRO: Fixed = Fixed::raw(1_000); // 1.000 — full potential
+pub const LIFESTYLE_CEILING_BALANCED: Fixed = Fixed::raw(1_000); // 1.000
+pub const LIFESTYLE_CEILING_FLASHY: Fixed = Fixed::raw(960); // 0.960 — burned potential
+
+/// Age-decline multiplier by lifestyle: Professional 0.7× (gentler, later burnout),
+/// Balanced 1.0×, Flashy 1.4× (steeper, earlier decline). Multiplies the base decay.
+pub const DECLINE_LIFESTYLE_PRO: Fixed = Fixed::raw(700); // 0.700
+pub const DECLINE_LIFESTYLE_BALANCED: Fixed = Fixed::raw(1_000); // 1.000
+pub const DECLINE_LIFESTYLE_FLASHY: Fixed = Fixed::raw(1_400); // 1.400
+
 // ── Week loop: breakthrough ───────────────────────────────────────────────────
 
 /// Chance of a training breakthrough event (per 1 000 rolls per week, when training).

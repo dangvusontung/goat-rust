@@ -9,7 +9,7 @@ use std::io;
 use std::path::Path;
 
 pub const MAGIC: &[u8; 4] = b"GOAT";
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 6;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -72,6 +72,8 @@ pub struct SaveData {
     pub pc_retired: bool,
     // ── Calendar ─────────────────────────────────────────────────────────────
     pub pc_week_training_done: bool,
+    /// Live calendar position in epoch days since career start (v6+).
+    pub pc_epoch_day: u32,
 }
 
 #[derive(Debug)]
@@ -161,6 +163,7 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_lifestyle: state.pc_lifestyle,
         pc_retired: state.pc_retired,
         pc_week_training_done: state.pc_week_training_done,
+        pc_epoch_day: state.pc_epoch_day,
     }
 }
 
@@ -356,6 +359,7 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
     state.pc_lifestyle = data.pc_lifestyle;
     state.pc_retired = data.pc_retired;
     state.pc_week_training_done = data.pc_week_training_done;
+    state.pc_epoch_day = data.pc_epoch_day;
 
     state
 }
@@ -428,6 +432,7 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     v.push(u8::from(d.pc_retired));
     // Calendar
     v.push(u8::from(d.pc_week_training_done));
+    push_u32(&mut v, d.pc_epoch_day); // v6+
     v
 }
 
@@ -530,6 +535,8 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     let pc_retired = read_u8(b, &mut cur).unwrap_or(0) != 0;
     // Calendar (v5+; default false for older saves)
     let pc_week_training_done = read_u8(b, &mut cur).unwrap_or(0) != 0;
+    // Calendar position (v6+; default 0 for older saves)
+    let pc_epoch_day = read_u32(b, &mut cur).unwrap_or(0);
 
     Ok(SaveData {
         world_seed,
@@ -578,6 +585,7 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_lifestyle,
         pc_retired,
         pc_week_training_done,
+        pc_epoch_day,
     })
 }
 
