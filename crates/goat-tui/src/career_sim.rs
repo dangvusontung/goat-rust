@@ -241,6 +241,163 @@ fn main() {
 
     let display_attrs = sim_pos.display_attrs();
 
+    // --lifestyle <professional|balanced|flashy> (default: balanced=1)
+    let lifestyle: u8 = args
+        .iter()
+        .position(|a| a == "--lifestyle")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| match s.to_lowercase().as_str() {
+            "professional" | "pro" | "0" => 0,
+            "flashy" | "toxic" | "2" => 2,
+            _ => 1,
+        })
+        .unwrap_or(1);
+
+    // --intensity <low|medium|high> (default: high)
+    let cli_intensity: Intensity = args
+        .iter()
+        .position(|a| a == "--intensity")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| match s.to_lowercase().as_str() {
+            "low" => Intensity::Low,
+            "medium" | "med" => Intensity::Medium,
+            _ => Intensity::High,
+        })
+        .unwrap_or(Intensity::High);
+
+    // --genesis [seed] — dump the SoA population fingerprint (Phase 9 Slice 9A.1 gate).
+    if args.iter().any(|a| a == "--genesis") {
+        let seed: u64 = args
+            .iter()
+            .position(|a| a == "--genesis")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(42);
+        let pop = goat_world::population::genesis(seed);
+        println!(
+            "GENESIS seed={seed}  players={}  fingerprint=0x{:016x}",
+            pop.len(),
+            pop.fingerprint()
+        );
+        return;
+    }
+
+    // --history [seed] — dump the seeded canon of past greats (Phase 9 Slice 9A.4 gate).
+    if args.iter().any(|a| a == "--history") {
+        let seed: u64 = args
+            .iter()
+            .position(|a| a == "--history")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(42);
+        let h = goat_world::history::backfill_history(seed, 30);
+        println!("PANTHEON CANON (seed {seed}, 30 backfilled seasons)");
+        println!(
+            "  {:<22} {:<10} {:>4}  {:>4}",
+            "Name", "Nation", "BdOr", "Peak"
+        );
+        println!("  {}", "─".repeat(46));
+        for g in h.canon_ranked().iter().take(8) {
+            println!(
+                "  {:<22} {:<10} {:>4}  {:>4}",
+                g.name,
+                goat_world::history::great_nation_name(g.nationality),
+                g.ballon_dors,
+                g.peak_ovr
+            );
+        }
+        return;
+    }
+
+    // --rival [seed] — crystallise the emergent rival vs a representative PC (Slice 9A.5).
+    if args.iter().any(|a| a == "--rival") {
+        let seed: u64 = args
+            .iter()
+            .position(|a| a == "--rival")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(42);
+        let mut pop = goat_world::population::genesis(seed);
+        for s in 1..=14u32 {
+            goat_world::batch_tick::batch_tick_season(&mut pop, seed, s, s * 52);
+        }
+        // A representative mid-tier PC career to set the bar.
+        match goat_world::rival::crystallise_rival(&pop, 16 * 52, 200, 5) {
+            goat_world::rival::RivalVerdict::Rival {
+                name,
+                peer_goals,
+                peer_titles,
+                ..
+            } => println!(
+                "RIVAL (seed {seed}): your generation produced {name} — {peer_goals} goals, {peer_titles} titles. The media frames the rivalry.",
+            ),
+            goat_world::rival::RivalVerdict::WeakEra => println!(
+                "RIVAL (seed {seed}): nobody kept pace. You reign alone — the schools apply the weak-era asterisk.",
+            ),
+        }
+        return;
+    }
+
+    // --world-sim [seed] [seasons] — simulate the WHOLE world headless and summarise.
+    if args.iter().any(|a| a == "--world-sim") {
+        let pos = args.iter().position(|a| a == "--world-sim").unwrap();
+        let seed: u64 = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(42);
+        let seasons: u32 = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(20);
+        // The PC career the rivalry is measured against (sets the "keep pace" bar). A
+        // GOAT-tier PC makes the weak-era asterisk reachable when the cohort is thin.
+        let pc_goals: u32 = args
+            .get(pos + 3)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300);
+        let pc_titles: u32 = args.get(pos + 4).and_then(|s| s.parse().ok()).unwrap_or(8);
+
+        let mut pop = goat_world::population::genesis(seed);
+        for s in 1..=seasons {
+            goat_world::batch_tick::batch_tick_season(&mut pop, seed, s, s * 52);
+        }
+
+        // All-time top scorer of the run.
+        let top = (0..pop.len()).max_by_key(|&i| pop.career_goals[i]).unwrap();
+        // Most-titled club (sum of its squad's titles).
+        let mut club_titles = [0u32; goat_world::world::NUM_CLUBS];
+        for i in 0..pop.len() {
+            club_titles[pop.club[i] as usize] += pop.career_titles[i];
+        }
+        let top_club = (0..goat_world::world::NUM_CLUBS)
+            .max_by_key(|&c| club_titles[c])
+            .unwrap();
+        // Pantheon GOAT from the backfilled canon.
+        let hist = goat_world::history::backfill_history(seed, 30);
+        let goat = hist.canon_ranked()[0];
+        // Emergent rival vs a representative mid-tier PC.
+        let rival = match goat_world::rival::crystallise_rival(&pop, 16 * 52, pc_goals, pc_titles) {
+            goat_world::rival::RivalVerdict::Rival {
+                name, peer_goals, ..
+            } => {
+                format!("RIVAL name=\"{name}\" goals={peer_goals}")
+            }
+            goat_world::rival::RivalVerdict::WeakEra => "WEAKERA".to_string(),
+        };
+
+        println!("WORLD seed={seed} players={} seasons={seasons}", pop.len());
+        println!(
+            "WORLD topscorer=\"{}\" goals={} club=\"{}\"",
+            goat_world::history::name_from_seed(pop.seed[top]),
+            pop.career_goals[top],
+            CLUBS[pop.club[top] as usize].name
+        );
+        println!(
+            "WORLD mosttitles_club=\"{}\" titles={}",
+            CLUBS[top_club].name, club_titles[top_club]
+        );
+        println!(
+            "WORLD pantheon_goat=\"{}\" ballondors={} peak={}",
+            goat.name, goat.ballon_dors, goat.peak_ovr
+        );
+        println!("WORLD rival={rival}");
+        return;
+    }
+
     // --scan mode
     if args.iter().any(|a| a == "--scan") {
         let (k1, k2, sup, ..) = sim_pos.scan_criteria();
@@ -322,9 +479,15 @@ fn main() {
         &mut GoatRng::new(0),
     );
 
+    state = reduce(
+        state,
+        Intent::SetLifestyle { lifestyle },
+        &mut GoatRng::new(0),
+    );
+
     let routine = Routine {
         focus_attrs: sim_pos.focus_attrs(),
-        intensity: Intensity::High,
+        intensity: cli_intensity,
     };
     state = reduce(state, Intent::SetRoutine { routine }, &mut GoatRng::new(0));
 
@@ -341,6 +504,7 @@ fn main() {
 
     let mut snaps: Vec<SeasonSnap> = Vec::new();
     let mut retired_at: Option<u32> = None;
+    let mut injured_weeks: u32 = 0; // weeks spent injured across the career
 
     // ── 20-season simulation ───────────────────────────────────────────────────
     for season in 1u32..=20 {
@@ -355,6 +519,9 @@ fn main() {
                 let age = state.players.get_age_weeks(pc_id);
                 let rng_seed = age as u64 ^ (season as u64 * 0xbeef) ^ (round as u64 * 7) ^ t;
                 state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(rng_seed));
+                if state.players.get_injury_weeks(pc_id) > 0 {
+                    injured_weeks += 1;
+                }
             }
 
             let all_fixtures = round_fixtures(seed, season, season_div_idx, round);
@@ -773,6 +940,20 @@ fn main() {
     println!(
         "║  {:76} ║",
         format!("Career apps    : {}  Goals: {}", career_apps, career_goals)
+    );
+    let lifestyle_label = match lifestyle {
+        0 => "Professional",
+        2 => "Flashy",
+        _ => "Balanced",
+    };
+    println!(
+        "║  {:76} ║",
+        format!(
+            "Lifestyle      : {}  Intensity: {}  Injured weeks: {}",
+            lifestyle_label,
+            cli_intensity.name(),
+            injured_weeks
+        )
     );
     println!(
         "║  {:76} ║",

@@ -406,13 +406,13 @@ fn run_game_loop(
             .unwrap();
             writeln!(
                 out,
-                "  [T] Table  [G] Legacy  [V] Sheet  [Z] Save  [Q] Quit"
+                "  [T] Table  [G] Legacy  [U] World  [V] Sheet  [Z] Save  [Q] Quit"
             )
             .unwrap();
         } else {
             writeln!(
                 out,
-                "\n  [W] Train  [F] Fast-fwd  [S] Routine  [V] Sheet  [Q] Quit"
+                "\n  [W] Train  [F] Fast-fwd  [S] Routine  [U] World  [V] Sheet  [Q] Quit"
             )
             .unwrap();
         }
@@ -427,6 +427,7 @@ fn run_game_loop(
                 "W" => {
                     state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(week_rng_seed));
                     display_events(out, &state.last_week_events);
+                    display_flashpoints(out, &state.last_week_flashpoints);
                 }
                 "F" => {
                     let n = loop {
@@ -442,6 +443,7 @@ fn run_game_loop(
                         &mut GoatRng::new(week_rng_seed),
                     );
                     display_events(out, &state.last_week_events);
+                    display_flashpoints(out, &state.last_week_flashpoints);
                 }
                 "S" => state = run_set_routine(lines, out, state),
                 "P" if has_season => {
@@ -451,6 +453,7 @@ fn run_game_loop(
                     state = run_next_round(lines, out, state, false, beat_lib, pc_traits)
                 }
                 "T" if has_season => render_table(out, &state),
+                "U" => render_world_screen(out, &state),
                 "G" if has_season => {
                     let ev = build_legacy_evidence(&state);
                     render_legacy_screen(out, &ev, &state);
@@ -1664,6 +1667,81 @@ fn render_player_sheet(
         .unwrap();
     }
     writeln!(out, "╚══════════════════════════════════════════════╝").unwrap();
+}
+
+/// Phase 9 world screen: the seeded pantheon canon + this career's emergent rival.
+/// Pure renderer — all data comes from `goat_world` functions; no sim logic here.
+fn render_world_screen(out: &mut impl Write, state: &WorldState) {
+    use goat_world::history::{backfill_history, great_nation_name};
+    use goat_world::rival::{crystallise_rival, RivalVerdict};
+    let seed = state.world_seed;
+
+    writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
+    writeln!(out, "║  THE WORLD — Pantheon & Your Generation      ║").unwrap();
+    writeln!(out, "╚══════════════════════════════════════════════╝").unwrap();
+
+    // Backfilled canon of past greats (pure-derivable from the world seed).
+    let hist = backfill_history(seed, 30);
+    writeln!(out, "\n  PANTHEON — past greats of this universe").unwrap();
+    writeln!(
+        out,
+        "  {:<20} {:<9} {:>4} {:>4}",
+        "Name", "Nation", "BdOr", "Peak"
+    )
+    .unwrap();
+    writeln!(out, "  {}", "─".repeat(42)).unwrap();
+    for g in hist.canon_ranked().iter().take(6) {
+        writeln!(
+            out,
+            "  {:<20} {:<9} {:>4} {:>4}",
+            g.name,
+            great_nation_name(g.nationality),
+            g.ballon_dors,
+            g.peak_ovr
+        )
+        .unwrap();
+    }
+
+    // Your generation: batch-tick the cohort up to now, then crystallise.
+    let mut pop = goat_world::population::genesis(seed);
+    let seasons = state.season_number.max(1);
+    for s in 1..=seasons {
+        goat_world::batch_tick::batch_tick_season(&mut pop, seed, s, s * 52);
+    }
+    writeln!(out, "\n  YOUR GENERATION").unwrap();
+    match crystallise_rival(&pop, 16 * 52, state.pc_career_goals, state.pc_league_titles) {
+        RivalVerdict::Rival {
+            name,
+            peer_goals,
+            peer_titles,
+            ..
+        } => writeln!(
+            out,
+            "  Rival: {name} — {peer_goals} goals, {peer_titles} titles. The media frames it.",
+        )
+        .unwrap(),
+        RivalVerdict::WeakEra => writeln!(
+            out,
+            "  No rival has kept pace — you reign alone (the weak-era asterisk looms).",
+        )
+        .unwrap(),
+    }
+}
+
+fn display_flashpoints(
+    out: &mut impl Write,
+    flashpoints: &[goat_core::calendar_loop::CalendarFlashpoint],
+) {
+    use goat_calendar::WindowKind;
+    for f in flashpoints {
+        let (icon, label) = match f.window {
+            WindowKind::TransferSummer => ("⇄", "The summer transfer window is open."),
+            WindowKind::TransferWinter => ("⇄", "The winter transfer window is open."),
+            WindowKind::InternationalBreak => ("✈", "International break — call-ups announced."),
+            WindowKind::OffSeason => ("☼", "The off-season has begun."),
+        };
+        writeln!(out, "  {icon}  CALENDAR: {label}").unwrap();
+    }
 }
 
 fn display_events(out: &mut impl Write, events: &[DevelopmentEvent]) {
