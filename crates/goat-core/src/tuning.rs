@@ -217,3 +217,67 @@ pub const FACILITIES_MULTS: [Fixed; 5] = [
     Fixed::raw(1_100), // Hillside Athletic 1.100
     Fixed::raw(1_200), // Valley Rangers    1.200
 ];
+
+// ── Phase 10 — economy (TASK-10B.1) ────────────────────────────────────────────
+// Money in thousands. Advantages are ceiling-capped (§2.4): a dev multiplier speeds
+// growth but never lifts a current attribute above its potential.
+
+/// Annual lifestyle upkeep by lifestyle (0=Professional,1=Balanced,2=Flashy), in £k.
+/// A flashy lifestyle burns cash; a professional one is frugal.
+pub const UPKEEP_BY_LIFESTYLE: [i64; 3] = [40, 80, 200];
+/// Annual business/investment return, in tenths of a percent of business value.
+pub const INVEST_RETURN_PER_1000: i64 = 70; // ~7%/yr baseline
+/// Business return variance band (± this many tenths-of-percent), rolled each season.
+pub const INVEST_VARIANCE_PER_1000: i64 = 120; // swings -5%..+19% around baseline
+/// Savings (thousands) below which the player is bankrupt.
+pub const BANKRUPTCY_FLOOR: i64 = -500;
+/// Ceiling-capped development multiplier by invest level 0–3. Level 0 is neutral (×1.0)
+/// so the no-spend path stays byte-identical to existing goldens.
+pub const DEV_INVEST_MULT: [Fixed; 4] = [
+    Fixed::raw(1_000), // 0 — none (neutral)
+    Fixed::raw(1_060), // 1 — nutrition
+    Fixed::raw(1_120), // 2 — + private trainer
+    Fixed::raw(1_180), // 3 — + full performance team
+];
+/// Annual cost of each development-investment level, in £k.
+pub const DEV_INVEST_COST: [i64; 4] = [0, 60, 160, 320];
+
+// ── Phase 10 — sponsors + marketability (TASK-10B.2) ───────────────────────────
+
+/// Marketability thresholds: index 0 = min for Local tier, 1 = National, 2 = Global.
+pub const SPONSOR_TIER_THRESHOLDS: [i32; 3] = [25, 50, 75];
+/// Annual sponsor income by tier (0=none,1=local,2=national,3=global), in £k.
+pub const SPONSOR_INCOME: [i64; 4] = [0, 150, 600, 2_000];
+/// Weekly energy cost of sponsor obligations by tier (the same resource training needs).
+/// Tier 0 is 0.0 so the no-sponsor path is byte-identical to existing goldens.
+pub const SPONSOR_ENERGY_COST: [Fixed; 4] = [
+    Fixed::raw(0),     // none
+    Fixed::raw(1_000), // local      1.0/wk
+    Fixed::raw(2_500), // national   2.5/wk
+    Fixed::raw(5_000), // global     5.0/wk
+];
+/// Reputation hit for over-commercialising: signing a tier your sporting merit doesn't
+/// justify (tier outranks sporting-rep band) dents Sporting rep by this much.
+pub const OVERCOMMERCIAL_REP_PENALTY: i32 = 8;
+
+// ── Phase 10 — relationships, scandals, media (TASK-10B.3) ─────────────────────
+
+/// A relationship thread below this stability ruptures (triggers a scandal).
+pub const RELATIONSHIP_RUPTURE_THRESHOLD: i32 = 25;
+/// Character-rep hit when a relationship ruptures into a scandal.
+pub const SCANDAL_CHARACTER_HIT: i32 = 15;
+/// Scandals also dent marketability (sponsors get nervous).
+pub const SCANDAL_MARKETABILITY_HIT: i32 = 10;
+/// Media flashpoint — CONTRITE response: (Character delta, Sporting delta). Looks humble:
+/// rebuilds Character, costs a little Sporting standing.
+pub const MEDIA_CONTRITE: (i32, i32) = (12, -5);
+/// Media flashpoint — DEFIANT response: (Character delta, Sporting delta). Fans love the
+/// fire (Sporting up) but it reads as arrogant (Character down).
+pub const MEDIA_DEFIANT: (i32, i32) = (-8, 10);
+
+// ── Phase 10 — retirement trigger (TASK-10B.4) ─────────────────────────────────
+
+/// Soft retirement age: past it, a player with no contract is expected to retire.
+pub const RETIRE_AGE_SOFT: u32 = 34;
+/// Hard retirement age: nobody plays on past it.
+pub const RETIRE_AGE_HARD: u32 = 40;

@@ -1294,7 +1294,15 @@ fn find_rival_candidate(state: &WorldState) -> Option<usize> {
 fn render_retirement_screen(out: &mut impl Write, state: &WorldState, view: &PlayerView) {
     let age = view.age_weeks / 52;
     let ev = build_legacy_evidence(state);
-    let axes = compute_axes(&ev);
+    let mut axes = compute_axes(&ev);
+    // Phase 10: the off-pitch career (fame, character, money) feeds the Icon axis so the
+    // schools' verdict reflects the whole person, not just the football.
+    axes.icon = goat_meta::icon_axis(
+        state.pc_marketability,
+        state.pc_character_rep,
+        state.pc_sponsor_tier,
+        state.pc_bankrupt,
+    );
     let rankings = all_rankings(&axes);
     let rep = compute_reputation(
         state.pc_sporting_rep,

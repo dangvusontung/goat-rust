@@ -12,7 +12,7 @@ pub mod pundits;
 pub mod reputation;
 
 pub use awards::{compute_golden_boot, compute_player_of_year, AwardResult};
-pub use legacy::{compute_axes, LegacyAxes, LegacyEvidence, AXIS_NAMES};
+pub use legacy::{compute_axes, icon_axis, LegacyAxes, LegacyEvidence, AXIS_NAMES};
 pub use pantheon::{
     all_rankings, rank_in_canon, PastGreat, School, CANON, NUM_CANON, NUM_SCHOOLS, SCHOOLS,
 };

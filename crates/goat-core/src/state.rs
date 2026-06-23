@@ -85,6 +85,27 @@ pub struct WorldState {
     pub pc_power_ladder: u8,
     /// Total career savings in thousands (wages minus notional spend).
     pub pc_savings: i64,
+    // ── Phase 10 — economy (TASK-10B.1) ──────────────────────────────────────
+    /// Capital currently tied up in the player's business/investments (thousands).
+    pub pc_business_value: i64,
+    /// True once the player has gone bankrupt (savings below the floor). Sticky for the
+    /// season; an Icon-axis black mark.
+    pub pc_bankrupt: bool,
+    /// Development-investment level 0–3 (private trainers/nutrition). 0 = none (neutral,
+    /// goldens unmoved); higher buys a ceiling-capped growth multiplier — never past
+    /// potential (pillar §2.4).
+    pub pc_dev_invest_level: u8,
+    /// Marketability 0–100 — drives which sponsor tiers are reachable (Icon axis).
+    pub pc_marketability: i32,
+    /// Active sponsor tier: 0=none, 1=local, 2=national, 3=global. 0 = neutral (no income,
+    /// no obligation energy cost → goldens unmoved).
+    pub pc_sponsor_tier: u8,
+    /// Relationship-thread stability 0–100: [partner, family, close friend]. A thread
+    /// dropping below the rupture threshold triggers a scandal. Few threads by design —
+    /// the deeper relationship web is parked (§11).
+    pub pc_relationships: [i32; 3],
+    /// Character reputation 0–100 (the off-pitch facet scandals hit; 50 = neutral).
+    pub pc_character_rep: i32,
     // ── Phase 9 — peer cohort + rival ────────────────────────────────────────
     /// 8 career-start peers: packed as (seed:u64, goals:u32, matches:u32, avg_output:u8)
     /// per peer, stored flat. Length always 0 or exactly 8*17 bytes when serialised.
@@ -169,6 +190,13 @@ impl WorldState {
             pc_wage_annual: 20, // £20k/yr at start
             pc_power_ladder: 0,
             pc_savings: 0,
+            pc_business_value: 0,
+            pc_bankrupt: false,
+            pc_dev_invest_level: 0,
+            pc_marketability: 50,
+            pc_sponsor_tier: 0,
+            pc_relationships: [70, 70, 70],
+            pc_character_rep: 50,
             pc_peers: Vec::new(),
             pc_rival_idx: None,
             pc_rival_declared_season: None,
@@ -280,6 +308,25 @@ pub enum Intent {
     // ── Phase 10 intents ──────────────────────────────────────────────────────
     /// Set the lifestyle (0=Professional,1=Balanced,2=Flashy). Done once at career start.
     SetLifestyle { lifestyle: u8 },
+    /// Set the development-investment level 0–3 (ceiling-capped growth multiplier).
+    SetDevInvestment { level: u8 },
+    /// Move savings into the business/investment portfolio (thousands).
+    InvestInBusiness { amount: i64 },
+    /// End-of-season economy settlement: wage + bonus in, upkeep + dev-cost out, business
+    /// return applied, bankruptcy checked. `rng` drives the investment-return variance.
+    SettleSeasonEconomy { season_bonus: i64 },
+    /// Set marketability 0–100 (driven by output/icon at season end).
+    SetMarketability { value: i32 },
+    /// Sign a sponsor at a tier (0=drop, 1=local, 2=national, 3=global). Gated by
+    /// marketability; signing above your sporting merit dents Sporting reputation.
+    SignSponsor { tier: u8 },
+    /// Apply a life event to a relationship thread (0=partner,1=family,2=friend); `delta`
+    /// strains (−) or strengthens (+) it. A thread falling below the rupture threshold
+    /// triggers a scandal (Character + marketability hit).
+    ApplyLifeEvent { thread: u8, delta: i32 },
+    /// Respond to a media flashpoint (after a red card / scandal). `contrite` rebuilds
+    /// Character at a Sporting cost; defiant does the reverse — a real trade-off.
+    RespondToMedia { contrite: bool },
     /// Retire the player. Triggers the final-verdict flow in the TUI.
     Retire,
 
@@ -519,6 +566,101 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state
         }
 
+        Intent::SetDevInvestment { level } => {
+            state.pc_dev_invest_level = level.min(3);
+            state
+        }
+
+        Intent::SetMarketability { value } => {
+            state.pc_marketability = value.clamp(0, 100);
+            state
+        }
+
+        Intent::ApplyLifeEvent { thread, delta } => {
+            use crate::tuning::{
+                RELATIONSHIP_RUPTURE_THRESHOLD, SCANDAL_CHARACTER_HIT, SCANDAL_MARKETABILITY_HIT,
+            };
+            let t = (thread as usize).min(2);
+            let before = state.pc_relationships[t];
+            let after = (before + delta).clamp(0, 100);
+            state.pc_relationships[t] = after;
+            // Crossing into rupture territory triggers a scandal (once, on the way down).
+            if before >= RELATIONSHIP_RUPTURE_THRESHOLD && after < RELATIONSHIP_RUPTURE_THRESHOLD {
+                state.pc_character_rep = (state.pc_character_rep - SCANDAL_CHARACTER_HIT).max(0);
+                state.pc_marketability =
+                    (state.pc_marketability - SCANDAL_MARKETABILITY_HIT).max(0);
+            }
+            state
+        }
+
+        Intent::RespondToMedia { contrite } => {
+            use crate::tuning::{MEDIA_CONTRITE, MEDIA_DEFIANT};
+            let (dc, ds) = if contrite {
+                MEDIA_CONTRITE
+            } else {
+                MEDIA_DEFIANT
+            };
+            state.pc_character_rep = (state.pc_character_rep + dc).clamp(0, 100);
+            state.pc_sporting_rep = (state.pc_sporting_rep + ds).clamp(0, 100);
+            state
+        }
+
+        Intent::SignSponsor { tier } => {
+            use crate::tuning::{OVERCOMMERCIAL_REP_PENALTY, SPONSOR_TIER_THRESHOLDS};
+            let tier = tier.min(3);
+            if tier == 0 {
+                state.pc_sponsor_tier = 0;
+                return state;
+            }
+            let needed = SPONSOR_TIER_THRESHOLDS[(tier - 1) as usize];
+            // Marketability gates eligibility; below it, you simply can't land the deal.
+            if state.pc_marketability >= needed {
+                state.pc_sponsor_tier = tier;
+                // Over-commercialising: cashing in beyond your sporting merit dents image.
+                if state.pc_sporting_rep < needed {
+                    state.pc_sporting_rep -= OVERCOMMERCIAL_REP_PENALTY;
+                }
+            }
+            state
+        }
+
+        Intent::InvestInBusiness { amount } => {
+            // Move capital from savings into the business (can't invest what you don't have).
+            let moved = amount.clamp(0, state.pc_savings.max(0));
+            state.pc_savings -= moved;
+            state.pc_business_value += moved;
+            state
+        }
+
+        Intent::SettleSeasonEconomy { season_bonus } => {
+            use crate::tuning::{
+                BANKRUPTCY_FLOOR, DEV_INVEST_COST, INVEST_RETURN_PER_1000,
+                INVEST_VARIANCE_PER_1000, SPONSOR_INCOME, UPKEEP_BY_LIFESTYLE,
+            };
+            // Income: wage + performance bonus + sponsor income.
+            state.pc_savings += state.pc_wage_annual
+                + season_bonus
+                + SPONSOR_INCOME[(state.pc_sponsor_tier as usize).min(3)];
+            // Outgoings: lifestyle upkeep + the cost of the dev-investment tier.
+            let upkeep = UPKEEP_BY_LIFESTYLE[(state.pc_lifestyle as usize).min(2)];
+            state.pc_savings -=
+                upkeep + DEV_INVEST_COST[(state.pc_dev_invest_level as usize).min(3)];
+            // Business return: baseline ± a season-specific swing (deterministic via rng).
+            if state.pc_business_value > 0 {
+                let swing = rng.next_range_u64(0, (INVEST_VARIANCE_PER_1000 * 2) as u64) as i64
+                    - INVEST_VARIANCE_PER_1000;
+                let rate = INVEST_RETURN_PER_1000 + swing; // tenths of a percent
+                state.pc_business_value += state.pc_business_value * rate / 1000;
+                state.pc_business_value = state.pc_business_value.max(0);
+            }
+            // Bankruptcy: deep enough in the red wipes the business and flags the career.
+            if state.pc_savings < BANKRUPTCY_FLOOR {
+                state.pc_bankrupt = true;
+                state.pc_business_value = 0;
+            }
+            state
+        }
+
         // ── Phase 9 handlers ─────────────────────────────────────────────────────
         Intent::InitPeers { peers } => {
             state.pc_peers = peers;
@@ -695,7 +837,10 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
         2 => Fixed::raw(900),   // Flashy
         _ => Fixed::ONE,        // Balanced
     };
-    let effective_mult = state.pc_facilities_mult * lifestyle_mult;
+    // Money buys a development edge — but growth still clamps to potential (§2.4), and
+    // level 0 is ×1.0 so the no-spend path is byte-identical to existing goldens.
+    let dev_mult = crate::tuning::DEV_INVEST_MULT[(state.pc_dev_invest_level as usize).min(3)];
+    let effective_mult = state.pc_facilities_mult * lifestyle_mult * dev_mult;
 
     let events = advance_week(
         &mut state.players,
@@ -712,6 +857,17 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
 
     state.last_week_events = events;
 
+    // Sponsor obligations drain energy (the same resource training needs). Tier 0 costs
+    // 0.0, so the no-sponsor path is byte-identical to existing goldens.
+    let sponsor_cost = crate::tuning::SPONSOR_ENERGY_COST[(state.pc_sponsor_tier as usize).min(3)];
+    if sponsor_cost > Fixed::ZERO {
+        let e = state.players.get_energy(pc_id);
+        state.players.set_energy(
+            pc_id,
+            (e - sponsor_cost).clamp(Fixed::ZERO, crate::tuning::ENERGY_MAX),
+        );
+    }
+
     // ── Live calendar tick (golden-safe) ─────────────────────────────────────
     // Advance the CalendarEngine 7 days on its OWN RNG stream (seeded from
     // world_seed) — independent of the growth RNG above, so attribute goldens are
@@ -721,6 +877,19 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
     state.last_week_flashpoints = flashpoints;
 
     state
+}
+
+/// Whether the player should retire now (bible §8.6): nobody plays past the hard age,
+/// and past the soft age a player whose contract has run out (offers drying up) hangs up
+/// the boots. The player may always choose to retire earlier (the `Retire` intent).
+pub fn should_retire(state: &WorldState) -> bool {
+    use crate::tuning::{RETIRE_AGE_HARD, RETIRE_AGE_SOFT};
+    let age_years = match state.pc_player_id {
+        Some(id) => state.players.get_age_weeks(id) / 52,
+        None => return false,
+    };
+    age_years >= RETIRE_AGE_HARD
+        || (age_years >= RETIRE_AGE_SOFT && state.pc_contract_seasons_left == 0)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

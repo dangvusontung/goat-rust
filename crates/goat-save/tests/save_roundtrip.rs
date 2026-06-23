@@ -165,3 +165,32 @@ fn save_load_restores_age_and_energy() {
         "energy"
     );
 }
+
+#[test]
+fn save_load_restores_phase10_economy_and_life() {
+    // Exercises the full byte path for the v7 economy/life fields.
+    let mut state = setup_state();
+    state.pc_business_value = 4_200;
+    state.pc_bankrupt = true;
+    state.pc_dev_invest_level = 3;
+    state.pc_marketability = 88;
+    state.pc_sponsor_tier = 2;
+    state.pc_relationships = [40, 95, 12];
+    state.pc_character_rep = 37;
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join("goat_save_phase10_roundtrip.gsav");
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(restored.pc_business_value, 4_200);
+    assert!(restored.pc_bankrupt);
+    assert_eq!(restored.pc_dev_invest_level, 3);
+    assert_eq!(restored.pc_marketability, 88);
+    assert_eq!(restored.pc_sponsor_tier, 2);
+    assert_eq!(restored.pc_relationships, [40, 95, 12]);
+    assert_eq!(restored.pc_character_rep, 37);
+}

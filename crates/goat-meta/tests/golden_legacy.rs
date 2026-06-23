@@ -171,3 +171,21 @@ fn early_career_ranks_low() {
         );
     }
 }
+
+// ── Phase 10: Icon axis from off-pitch life (TASK-10B.4) ───────────────────────
+
+#[test]
+fn icon_axis_neutral_career_matches_stub() {
+    // A neutral off-pitch career (marketability 50, character 50, no sponsor, solvent)
+    // must equal the old STUB_50 (50.0), so compute_axes callers stay unaffected.
+    assert_eq!(goat_meta::icon_axis(50, 50, 0, false).to_int(), 50);
+}
+
+#[test]
+fn icon_axis_reflects_fame_and_scandal() {
+    let neutral = goat_meta::icon_axis(50, 50, 0, false).to_int();
+    // A marketable, well-liked global icon rates far higher.
+    assert!(goat_meta::icon_axis(95, 90, 3, false).to_int() > neutral);
+    // A bankrupt, scandal-hit ex-star rates far lower.
+    assert!(goat_meta::icon_axis(20, 15, 0, true).to_int() < neutral);
+}
