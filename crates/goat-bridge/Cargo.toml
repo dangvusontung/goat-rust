@@ -1,0 +1,19 @@
+[package]
+name = "goat-bridge"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+name = "goat_bridge"
+
+[dependencies]
+flutter_rust_bridge = "=2.12.0"
+goat-core   = { path = "../goat-core"   }
+goat-match  = { path = "../goat-match"  }
+goat-world  = { path = "../goat-world"  }
+goat-meta   = { path = "../goat-meta"   }
+goat-save   = { path = "../goat-save"   }
+goat-rng    = { path = "../goat-rng"    }
+goat-fixed  = { path = "../goat-fixed"  }
+goat-traits = { path = "../goat-traits" }

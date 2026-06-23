@@ -1,0 +1,10 @@
+[package]
+name = "goat-training"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+goat-rng      = { path = "../goat-rng" }
+goat-fixed    = { path = "../goat-fixed" }
+goat-core     = { path = "../goat-core" }
+goat-calendar = { path = "../goat-calendar" }

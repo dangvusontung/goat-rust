@@ -1,0 +1,125 @@
+{
+  "_comment": "TEST beats.json — swap in place of beats.json to verify the whole app. Every label is unique and readable. Swap back to beats.json for real play.",
+
+  "situations": [
+    {
+      "id": "sit_early_1",
+      "phase": "attack",
+      "bias": [5, 0, 0],
+      "setup": "[EARLY-A] Attack situation. Pick easy (guarantee success) or hard (guarantee fail).",
+      "tags": ["attack"]
+    },
+    {
+      "id": "sit_early_2",
+      "phase": "attack",
+      "bias": [5, 0, 0],
+      "setup": "[EARLY-B] Second attack situation. Same choices.",
+      "tags": ["attack"]
+    },
+    {
+      "id": "sit_mid_1",
+      "phase": "defend",
+      "bias": [0, 5, 0],
+      "setup": "[MID-A] Defend situation. Pick easy or hard.",
+      "tags": ["defend"]
+    },
+    {
+      "id": "sit_mid_2",
+      "phase": "defend",
+      "bias": [0, 5, 0],
+      "setup": "[MID-B] Second defend situation.",
+      "tags": ["defend"]
+    },
+    {
+      "id": "sit_late_1",
+      "phase": "attack",
+      "bias": [0, 0, 5],
+      "setup": "[LATE-A] Late attack. This choice SCORES on success.",
+      "tags": ["attack", "shooting"]
+    },
+    {
+      "id": "sit_late_2",
+      "phase": "attack",
+      "bias": [0, 0, 5],
+      "setup": "[LATE-B] Late attack. This choice CONCEDES on failure.",
+      "tags": ["attack", "defend"]
+    },
+    {
+      "id": "sit_key",
+      "phase": "key",
+      "bias": [0, 0, 5],
+      "setup": "[KEY] Last-minute moment. Easy choice scores. Hard choice fails.",
+      "tags": ["key", "attack"]
+    }
+  ],
+
+  "choices": [
+    {
+      "id": "c_easy",
+      "text": "EASY — almost always succeeds (diff 1)",
+      "attr": "Finishing",
+      "difficulty": 1,
+      "tags": ["attack", "shooting", "key"]
+    },
+    {
+      "id": "c_hard",
+      "text": "HARD — almost always fails (diff 99)",
+      "attr": "LongShots",
+      "difficulty": 99,
+      "tags": ["attack", "shooting", "key"]
+    },
+    {
+      "id": "c_mid_easy",
+      "text": "EASY DEFEND — almost always succeeds (diff 1)",
+      "attr": "Tackling",
+      "difficulty": 1,
+      "tags": ["defend"]
+    },
+    {
+      "id": "c_mid_hard",
+      "text": "HARD DEFEND — almost always fails (diff 99)",
+      "attr": "Marking",
+      "difficulty": 99,
+      "tags": ["defend"]
+    }
+  ],
+
+  "outcomes": [
+    {
+      "id": "o_success_plain",
+      "text": "[SUCCESS] No goal. Output +10.",
+      "output_delta": 10,
+      "confidence": 5, "frustration": -3, "flow": 5,
+      "score_event": null,
+      "stamina_cost": 2,
+      "polarity": "success"
+    },
+    {
+      "id": "o_success_goal",
+      "text": "[SUCCESS + GOAL] Output +15. Team scores.",
+      "output_delta": 15,
+      "confidence": 10, "frustration": -5, "flow": 10,
+      "score_event": "goal_for",
+      "stamina_cost": 2,
+      "polarity": "success"
+    },
+    {
+      "id": "o_failure_plain",
+      "text": "[FAILURE] No goal. Output -10.",
+      "output_delta": -10,
+      "confidence": -5, "frustration": 5, "flow": -5,
+      "score_event": null,
+      "stamina_cost": 4,
+      "polarity": "failure"
+    },
+    {
+      "id": "o_failure_concede",
+      "text": "[FAILURE + CONCEDE] Output -15. They score.",
+      "output_delta": -15,
+      "confidence": -8, "frustration": 10, "flow": -8,
+      "score_event": "goal_against",
+      "stamina_cost": 4,
+      "polarity": "failure"
+    }
+  ]
+}

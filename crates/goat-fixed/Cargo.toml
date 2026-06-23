@@ -1,0 +1,4 @@
+[package]
+name = "goat-fixed"
+version.workspace = true
+edition.workspace = true

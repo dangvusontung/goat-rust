@@ -1,0 +1,12 @@
+[package]
+name = "goat-match"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+goat-rng    = { path = "../goat-rng"    }
+goat-fixed  = { path = "../goat-fixed"  }
+goat-core   = { path = "../goat-core"   }
+goat-traits = { path = "../goat-traits" }
+serde       = { workspace = true }
+serde_json  = { workspace = true }

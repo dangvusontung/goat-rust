@@ -1,0 +1,8 @@
+[package]
+name = "goat-calendar"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+goat-rng   = { path = "../goat-rng" }
+goat-fixed = { path = "../goat-fixed" }

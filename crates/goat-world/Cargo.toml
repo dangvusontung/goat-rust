@@ -1,0 +1,9 @@
+[package]
+name = "goat-world"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+goat-rng   = { path = "../goat-rng"   }
+goat-fixed = { path = "../goat-fixed" }
+goat-core  = { path = "../goat-core"  }

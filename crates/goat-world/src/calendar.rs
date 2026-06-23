@@ -1,0 +1,265 @@
+//! Season calendar — maps league rounds to calendar weeks and real dates.
+//!
+//! The season runs 38 calendar weeks starting 15 August.
+//! Each week has 0, 1, or 2 league matches; 0-match weeks are breaks.
+//! All data is static — nothing is stored, everything is recomputed.
+
+use crate::fixtures::ROUNDS_PER_SEASON;
+
+/// Total calendar weeks spanned by one season.
+pub const SEASON_CALENDAR_WEEKS: usize = 38;
+
+/// Career base year — season 1 starts in this year.
+pub const BASE_CAREER_YEAR: u32 = 2025;
+
+/// Number of league matches per calendar week (0 = break / rest).
+/// Must sum to exactly ROUNDS_PER_SEASON (30).
+///
+/// Layout:
+///   wk 0–3  : Aug  (opener, early busy period)
+///   wk 4    : Sep  break (international)
+///   wk 5–7  : Sep  (midweek + weekend run)
+///   wk 8    : Oct  break
+///   wk 9–12 : Oct–Nov (steady run)
+///   wk 13   : Nov  break
+///   wk 14–20: Nov–Jan (Christmas/NY congestion)
+///   wk 21–22: Jan  winter break
+///   wk 23   : Jan  catch-up double-header
+///   wk 24–25: Feb  (single weekly)
+///   wk 26   : Feb  break
+///   wk 27–29: Mar  (single weekly)
+///   wk 30   : Mar  break
+///   wk 31   : Mar  (single)
+///   wk 32   : Apr  break
+///   wk 33–34: Apr  (run-in)
+///   wk 35–37: Apr–May (season tail / rest)
+pub const WEEK_MATCH_COUNTS: [u8; SEASON_CALENDAR_WEEKS] = [
+    1, 2, 1, 1, 0, 1, 2, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 2, 1, 1, 0, 1, 1, 1, 0, 1,
+    0, 1, 1, 0, 0, 0,
+];
+
+// Compile-time assertion: WEEK_MATCH_COUNTS must sum to ROUNDS_PER_SEASON.
+const _CALENDAR_SUM_CHECK: () = {
+    let mut sum = 0usize;
+    let mut i = 0;
+    while i < SEASON_CALENDAR_WEEKS {
+        sum += WEEK_MATCH_COUNTS[i] as usize;
+        i += 1;
+    }
+    assert!(
+        sum == ROUNDS_PER_SEASON,
+        "WEEK_MATCH_COUNTS must sum to ROUNDS_PER_SEASON"
+    );
+};
+
+/// Day-of-week offset from Monday for each match slot within a week.
+/// Index by match_count then slot index.
+///   1 match  → [5]        Saturday only
+///   2 matches→ [1, 5]     Tuesday + Saturday
+const MATCH_DAY_OFFSETS: [[u8; 2]; 3] = [
+    [0, 0], // 0 matches — unused
+    [5, 0], // 1 match : Saturday
+    [1, 5], // 2 matches: Tuesday + Saturday
+];
+
+// ── Navigation helpers ────────────────────────────────────────────────────────
+
+/// Returns the calendar week (0-indexed) that contains the given round index.
+pub fn round_to_week(round: usize) -> usize {
+    let mut cumulative: usize = 0;
+    for (w, &count) in WEEK_MATCH_COUNTS.iter().enumerate() {
+        cumulative += count as usize;
+        if cumulative > round {
+            return w;
+        }
+    }
+    SEASON_CALENDAR_WEEKS.saturating_sub(1)
+}
+
+/// Returns the half-open range of round indices that fall in `week`.
+pub fn week_to_rounds(week: usize) -> std::ops::Range<usize> {
+    let start: usize = WEEK_MATCH_COUNTS[..week].iter().map(|&c| c as usize).sum();
+    let count = WEEK_MATCH_COUNTS.get(week).copied().unwrap_or(0) as usize;
+    start..start + count
+}
+
+/// True if `week` has no matches (break / rest week).
+pub fn is_break_week(week: usize) -> bool {
+    WEEK_MATCH_COUNTS.get(week).copied().unwrap_or(0) == 0
+}
+
+// ── Date helpers ──────────────────────────────────────────────────────────────
+
+/// Compute the real calendar date for a match.
+///
+/// `season_year`      — the year the season starts (e.g. 2025 for 2025/26).
+/// `week_offset`      — 0-indexed calendar week within the season.
+/// `slot`             — which match within the week (0 or 1).
+pub fn match_date(season_year: u32, week_offset: usize, slot: usize) -> (u32, u32, u32) {
+    let count = WEEK_MATCH_COUNTS.get(week_offset).copied().unwrap_or(0) as usize;
+    let day_offset = MATCH_DAY_OFFSETS[count.min(2)][slot.min(1)];
+    let total_days = week_offset as u32 * 7 + day_offset as u32;
+    advance_from_aug15(season_year, total_days)
+}
+
+/// Format a date as "Sat 15 Aug 2025".
+pub fn format_match_date(season_year: u32, week_offset: usize, slot: usize) -> String {
+    let (year, month, day) = match_date(season_year, week_offset, slot);
+    // Day of week: compute from absolute offset (week_offset*7 + day_offset).
+    let count = WEEK_MATCH_COUNTS.get(week_offset).copied().unwrap_or(0) as usize;
+    let day_offset = MATCH_DAY_OFFSETS[count.min(2)][slot.min(1)];
+    // Aug 15, 2025 is a Friday (weekday index 4, Mon=0).
+    // Compute the base weekday for Aug 15 of season_year, then add offsets.
+    let base_weekday = weekday_of_aug15(season_year);
+    let weekday = (base_weekday + week_offset * 7 + day_offset as usize) % 7;
+    let day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    let month_names = [
+        "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    format!(
+        "{} {} {} {}",
+        day_names[weekday],
+        day,
+        month_names.get(month as usize).unwrap_or(&""),
+        year
+    )
+}
+
+/// Format a week label for the header: "Game Week 5 · Aug 2025".
+pub fn format_week_header(season_year: u32, week_offset: usize) -> String {
+    let (year, month, _) = advance_from_aug15(season_year, week_offset as u32 * 7);
+    let month_names = [
+        "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    format!(
+        "Game Week {} · {} {}",
+        week_offset + 1,
+        month_names.get(month as usize).unwrap_or(&""),
+        year
+    )
+}
+
+// ── Internal date arithmetic ──────────────────────────────────────────────────
+
+fn advance_from_aug15(start_year: u32, offset_days: u32) -> (u32, u32, u32) {
+    let mut year = start_year;
+    let mut month = 8u32;
+    let mut day = 15u32;
+    let mut remaining = offset_days;
+    while remaining > 0 {
+        let in_month = days_in_month(year, month);
+        let left = in_month - day;
+        if remaining <= left {
+            day += remaining;
+            break;
+        }
+        remaining -= left + 1;
+        day = 1;
+        month += 1;
+        if month > 12 {
+            month = 1;
+            year += 1;
+        }
+    }
+    (year, month, day)
+}
+
+fn days_in_month(year: u32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
+        _ => 30,
+    }
+}
+
+fn is_leap_year(year: u32) -> bool {
+    (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+/// Returns the weekday of Aug 15 for a given year (0=Mon … 6=Sun).
+/// Uses Tomohiko Sakamoto's algorithm (adjusted for Mon-origin).
+fn weekday_of_aug15(year: u32) -> usize {
+    // Standard algorithm gives 0=Sun…6=Sat; adjust to Mon=0.
+    let dow_sun_origin = {
+        let t = [0u32, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+        let y = year; // month 8 >= 3, no year adjustment needed
+        (y + y / 4 - y / 100 + y / 400 + t[7] + 15) % 7
+    };
+    // Convert Sun=0 → Mon=0: Sun becomes 6, Mon stays 0, Tue=1, …
+    ((dow_sun_origin + 6) % 7) as usize
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn counts_sum_to_rounds_per_season() {
+        let sum: usize = WEEK_MATCH_COUNTS.iter().map(|&c| c as usize).sum();
+        assert_eq!(sum, ROUNDS_PER_SEASON);
+    }
+
+    #[test]
+    fn round_to_week_first_round() {
+        assert_eq!(round_to_week(0), 0); // first round is in week 0
+    }
+
+    #[test]
+    fn round_to_week_week1_rounds() {
+        // Week 1 has 2 matches: rounds 1 and 2 (after week 0's 1 match)
+        assert_eq!(round_to_week(1), 1);
+        assert_eq!(round_to_week(2), 1);
+    }
+
+    #[test]
+    fn week_to_rounds_week0() {
+        assert_eq!(week_to_rounds(0), 0..1);
+    }
+
+    #[test]
+    fn week_to_rounds_week1() {
+        assert_eq!(week_to_rounds(1), 1..3);
+    }
+
+    #[test]
+    fn break_week_has_no_rounds() {
+        assert!(is_break_week(4)); // week 4 is a break
+        assert_eq!(week_to_rounds(4), 5..5); // empty range
+    }
+
+    #[test]
+    fn season_opener_date() {
+        // Week 0, 1 match → Saturday. Aug 15 + 5 days = Aug 20.
+        let (y, m, d) = match_date(2025, 0, 0);
+        assert_eq!(y, 2025);
+        assert_eq!(m, 8);
+        assert_eq!(d, 20); // Aug 15 + 5 = Aug 20
+    }
+
+    #[test]
+    fn two_match_week_dates() {
+        // Week 1 has 2 matches: Tuesday (offset 1) and Saturday (offset 5).
+        // Week 1 starts at day 7 from Aug 15 = Aug 22.
+        // Tuesday = Aug 22 + 1 = Aug 23. Saturday = Aug 22 + 5 = Aug 27.
+        let (_, m1, d1) = match_date(2025, 1, 0); // Tuesday
+        let (_, m2, d2) = match_date(2025, 1, 1); // Saturday
+        assert_eq!((m1, d1), (8, 23));
+        assert_eq!((m2, d2), (8, 27));
+    }
+
+    #[test]
+    fn date_crosses_year_boundary() {
+        // Find a week that falls in January.
+        // Aug 15 + 20 weeks = Aug 15 + 140 days = Jan 2 (approx).
+        let (y, m, _) = advance_from_aug15(2025, 140);
+        assert_eq!(y, 2026);
+        assert_eq!(m, 1);
+    }
+}

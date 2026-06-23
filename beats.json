@@ -1,0 +1,719 @@
+{
+  "situations": [
+    {
+      "id": "flank_receive",
+      "phase": "attack",
+      "bias": [3, 3, 2],
+      "setup": "Ball reaches you on the wing with a yard of space. A defender closes fast.",
+      "tags": ["attack", "wide"]
+    },
+    {
+      "id": "dribble_challenge",
+      "phase": "attack",
+      "bias": [3, 2, 3],
+      "setup": "You've beaten your marker and a second defender rushes to cover.",
+      "tags": ["attack", "dribble"]
+    },
+    {
+      "id": "cross_opportunity",
+      "phase": "attack",
+      "bias": [2, 3, 3],
+      "setup": "You're at the byline with space to deliver. Two teammates arrive in the box.",
+      "tags": ["attack", "wide", "delivery"]
+    },
+    {
+      "id": "through_ball",
+      "phase": "attack",
+      "bias": [3, 3, 2],
+      "setup": "A gap opens between the two centre-backs. A runner is making the move.",
+      "tags": ["attack", "passing"]
+    },
+    {
+      "id": "shot_setup",
+      "phase": "attack",
+      "bias": [2, 3, 4],
+      "setup": "Ball falls to you on the edge of the box. You have a half-second before the block.",
+      "tags": ["attack", "shooting"]
+    },
+    {
+      "id": "box_entry",
+      "phase": "attack",
+      "bias": [2, 3, 4],
+      "setup": "You receive with your back to goal inside the area. A defender pins you tight.",
+      "tags": ["attack", "shooting", "physical"]
+    },
+    {
+      "id": "one_on_one",
+      "phase": "attack",
+      "bias": [1, 3, 4],
+      "setup": "The offside trap is beaten. It's you against the goalkeeper.",
+      "tags": ["attack", "shooting", "key"]
+    },
+    {
+      "id": "one_on_one_wide",
+      "phase": "attack",
+      "bias": [1, 2, 3],
+      "setup": "You burst into the channel and leave your marker behind. The keeper advances.",
+      "tags": ["attack", "wide", "key"]
+    },
+    {
+      "id": "support_run",
+      "phase": "attack",
+      "bias": [3, 3, 2],
+      "setup": "Your team has possession and you find space. Make the right run.",
+      "tags": ["attack", "positioning"]
+    },
+    {
+      "id": "press_trigger",
+      "phase": "defend",
+      "bias": [3, 3, 1],
+      "setup": "Their centre-back is on the ball under no pressure. You can trigger the press.",
+      "tags": ["defend", "pressing"]
+    },
+    {
+      "id": "track_runner",
+      "phase": "defend",
+      "bias": [3, 3, 2],
+      "setup": "Their winger makes a sharp run behind you. Stay or go?",
+      "tags": ["defend", "positioning"]
+    },
+    {
+      "id": "defensive_tackle",
+      "phase": "defend",
+      "bias": [2, 3, 3],
+      "setup": "Their striker receives and turns. He's running at goal. You must stop him.",
+      "tags": ["defend", "tackle"]
+    },
+    {
+      "id": "aerial_duel",
+      "phase": "defend",
+      "bias": [2, 3, 2],
+      "setup": "A long ball is lofted in. You jump with their striker — first contact is everything.",
+      "tags": ["defend", "aerial", "physical"]
+    },
+    {
+      "id": "intercept_attempt",
+      "phase": "defend",
+      "bias": [3, 2, 2],
+      "setup": "They're playing it square across your defensive line. You can step and intercept.",
+      "tags": ["defend", "reading"]
+    },
+    {
+      "id": "hold_shape",
+      "phase": "defend",
+      "bias": [2, 3, 1],
+      "setup": "They circulate the ball patiently. Your line is shifting. Stay tight or squeeze?",
+      "tags": ["defend", "positioning", "discipline"]
+    },
+    {
+      "id": "crucial_tackle",
+      "phase": "defend",
+      "bias": [1, 2, 4],
+      "setup": "Their man is through with only your last-ditch tackle to stop him. Everything's at stake.",
+      "tags": ["defend", "tackle", "key"]
+    },
+    {
+      "id": "free_kick_direct",
+      "phase": "setpiece",
+      "bias": [1, 2, 2],
+      "setup": "Free kick 22 yards out, central. The wall is set. Silence from the crowd.",
+      "tags": ["setpiece", "delivery", "shooting"]
+    },
+    {
+      "id": "free_kick_cross",
+      "phase": "setpiece",
+      "bias": [1, 2, 2],
+      "setup": "Free kick from wide right. Runners are making their move in the box.",
+      "tags": ["setpiece", "delivery", "wide"]
+    },
+    {
+      "id": "corner_attack",
+      "phase": "setpiece",
+      "bias": [2, 2, 2],
+      "setup": "Corner awarded. You're on delivery duty. The box is packed.",
+      "tags": ["setpiece", "delivery", "wide"]
+    },
+    {
+      "id": "corner_defend",
+      "phase": "setpiece",
+      "bias": [2, 2, 2],
+      "setup": "They've won a corner. You must pick up your man and hold position.",
+      "tags": ["setpiece", "defend", "aerial", "positioning"]
+    },
+    {
+      "id": "penalty",
+      "phase": "key",
+      "bias": [0, 1, 2],
+      "setup": "Penalty. You step up. The stadium holds its breath.",
+      "tags": ["key", "shooting", "setpiece"]
+    },
+    {
+      "id": "find_space",
+      "phase": "positioning",
+      "bias": [3, 3, 2],
+      "setup": "Your team is building slowly. You need to find the pocket and offer an option.",
+      "tags": ["positioning", "attack"]
+    },
+    {
+      "id": "last_minute_chance",
+      "phase": "key",
+      "bias": [0, 0, 5],
+      "setup": "Injury time. Everything still to play for. One last chance drops to you.",
+      "tags": ["key", "shooting", "attack"]
+    },
+    {
+      "id": "comeback_moment",
+      "phase": "key",
+      "bias": [0, 1, 4],
+      "setup": "Ten minutes left and it all comes down to this. A cross comes in — the moment you've been waiting for.",
+      "tags": ["key", "shooting", "aerial", "attack"]
+    },
+    {
+      "id": "wonder_strike",
+      "phase": "key",
+      "bias": [0, 1, 2],
+      "setup": "Ball drops to you 30 yards out. Keeper off his line. The outrageous option is on.",
+      "tags": ["key", "shooting"]
+    }
+  ],
+
+  "choices": [
+    {
+      "id": "drive_at_defender",
+      "text": "Drive at him — take him on",
+      "attr": "Dribbling",
+      "difficulty": 55,
+      "tags": ["attack", "wide", "dribble", "aggressive"]
+    },
+    {
+      "id": "lay_off_simple",
+      "text": "Lay it off — keep it simple",
+      "attr": "ShortPassing",
+      "difficulty": 35,
+      "tags": ["attack", "passing", "positioning", "safe"]
+    },
+    {
+      "id": "hit_early_cross",
+      "text": "Hit a low cross first time",
+      "attr": "Crossing",
+      "difficulty": 60,
+      "tags": ["attack", "wide", "delivery"]
+    },
+    {
+      "id": "cut_inside_shoot",
+      "text": "Cut inside and shoot",
+      "attr": "LongShots",
+      "difficulty": 65,
+      "tags": ["attack", "wide", "shooting", "aggressive"]
+    },
+    {
+      "id": "through_ball_pass",
+      "text": "Thread the through ball",
+      "attr": "Vision",
+      "difficulty": 70,
+      "tags": ["attack", "passing", "key"]
+    },
+    {
+      "id": "hold_and_wait",
+      "text": "Hold it up and wait for support",
+      "attr": "Strength",
+      "difficulty": 45,
+      "tags": ["attack", "physical", "safe"]
+    },
+    {
+      "id": "shoot_early",
+      "text": "Shoot first time",
+      "attr": "Finishing",
+      "difficulty": 62,
+      "tags": ["attack", "shooting"]
+    },
+    {
+      "id": "place_corner",
+      "text": "Place it near post",
+      "attr": "Finishing",
+      "difficulty": 55,
+      "tags": ["attack", "shooting", "key"]
+    },
+    {
+      "id": "chip_keeper",
+      "text": "Chip the goalkeeper",
+      "attr": "BallControl",
+      "difficulty": 72,
+      "tags": ["attack", "shooting", "key", "aggressive"]
+    },
+    {
+      "id": "power_shot",
+      "text": "Hit it with everything",
+      "attr": "LongShots",
+      "difficulty": 58,
+      "tags": ["attack", "shooting", "aggressive"]
+    },
+    {
+      "id": "composed_finish",
+      "text": "Stay composed — side-foot it",
+      "attr": "Composure",
+      "difficulty": 48,
+      "tags": ["attack", "shooting", "key", "safe"]
+    },
+    {
+      "id": "whipped_cross",
+      "text": "Whip it to the far post",
+      "attr": "Crossing",
+      "difficulty": 65,
+      "tags": ["delivery", "wide", "setpiece"]
+    },
+    {
+      "id": "low_driven_cross",
+      "text": "Drive it across the six-yard box",
+      "attr": "Crossing",
+      "difficulty": 58,
+      "tags": ["delivery", "wide", "setpiece"]
+    },
+    {
+      "id": "loft_to_back_post",
+      "text": "Loft it to the back post",
+      "attr": "Vision",
+      "difficulty": 55,
+      "tags": ["delivery", "wide", "setpiece", "aerial"]
+    },
+    {
+      "id": "curl_freekick",
+      "text": "Curl it over the wall",
+      "attr": "BallControl",
+      "difficulty": 70,
+      "tags": ["setpiece", "shooting", "delivery"]
+    },
+    {
+      "id": "power_freekick",
+      "text": "Drive it low and hard",
+      "attr": "LongShots",
+      "difficulty": 65,
+      "tags": ["setpiece", "shooting", "delivery"]
+    },
+    {
+      "id": "short_freekick",
+      "text": "Play it short — catch them off guard",
+      "attr": "ShortPassing",
+      "difficulty": 42,
+      "tags": ["setpiece", "passing", "safe"]
+    },
+    {
+      "id": "timed_run",
+      "text": "Make a timed run to the near post",
+      "attr": "SprintSpeed",
+      "difficulty": 55,
+      "tags": ["attack", "positioning", "aerial"]
+    },
+    {
+      "id": "block_runner",
+      "text": "Get tight and track the runner",
+      "attr": "Marking",
+      "difficulty": 50,
+      "tags": ["defend", "positioning"]
+    },
+    {
+      "id": "step_and_intercept",
+      "text": "Step up and intercept",
+      "attr": "Reactions",
+      "difficulty": 60,
+      "tags": ["defend", "reading", "aggressive"]
+    },
+    {
+      "id": "jockey_and_delay",
+      "text": "Jockey him — delay and hold",
+      "attr": "Marking",
+      "difficulty": 42,
+      "tags": ["defend", "positioning", "safe"]
+    },
+    {
+      "id": "sliding_tackle",
+      "text": "Go to ground — win it clean",
+      "attr": "Tackling",
+      "difficulty": 62,
+      "tags": ["defend", "tackle", "aggressive"]
+    },
+    {
+      "id": "shoulder_charge",
+      "text": "Use your body — muscle him off",
+      "attr": "Strength",
+      "difficulty": 55,
+      "tags": ["defend", "physical", "aerial", "tackle"]
+    },
+    {
+      "id": "hold_line",
+      "text": "Hold the line — trust the trap",
+      "attr": "Positioning",
+      "difficulty": 50,
+      "tags": ["defend", "positioning", "discipline"]
+    },
+    {
+      "id": "drop_off",
+      "text": "Drop deeper — protect the space",
+      "attr": "Positioning",
+      "difficulty": 38,
+      "tags": ["defend", "positioning", "safe"]
+    },
+    {
+      "id": "header_clear",
+      "text": "Attack the ball — head it clear",
+      "attr": "Heading",
+      "difficulty": 55,
+      "tags": ["defend", "aerial", "setpiece", "physical"]
+    },
+    {
+      "id": "flick_on_header",
+      "text": "Flick it on at the near post",
+      "attr": "Heading",
+      "difficulty": 60,
+      "tags": ["attack", "aerial", "setpiece"]
+    },
+    {
+      "id": "penalty_placed",
+      "text": "Place it — pick your spot",
+      "attr": "Composure",
+      "difficulty": 52,
+      "tags": ["key", "shooting", "setpiece", "safe"]
+    },
+    {
+      "id": "penalty_power",
+      "text": "Hit it as hard as you can",
+      "attr": "LongShots",
+      "difficulty": 60,
+      "tags": ["key", "shooting", "setpiece", "aggressive"]
+    },
+    {
+      "id": "press_hard",
+      "text": "Press hard — close him down immediately",
+      "attr": "SprintSpeed",
+      "difficulty": 50,
+      "tags": ["defend", "pressing", "aggressive"]
+    },
+    {
+      "id": "fake_press",
+      "text": "Feint the press — lure him into a mistake",
+      "attr": "Reactions",
+      "difficulty": 58,
+      "tags": ["defend", "pressing"]
+    },
+    {
+      "id": "long_ball_switch",
+      "text": "Switch it — long ball to the opposite flank",
+      "attr": "LongPassing",
+      "difficulty": 62,
+      "tags": ["attack", "passing", "wide"]
+    },
+    {
+      "id": "dummy_and_turn",
+      "text": "Dummy and spin — buy space",
+      "attr": "Agility",
+      "difficulty": 60,
+      "tags": ["attack", "dribble", "physical"]
+    },
+    {
+      "id": "burst_channel",
+      "text": "Burst into the channel",
+      "attr": "SprintSpeed",
+      "difficulty": 55,
+      "tags": ["attack", "wide", "key"]
+    }
+  ],
+
+  "outcomes": [
+    {
+      "id": "glide_past",
+      "text": "You glide past, opening up the flank.",
+      "output_delta": 8,
+      "confidence": 5, "frustration": -2, "flow": 5,
+      "score_event": null, "stamina_cost": 5,
+      "polarity": "success"
+    },
+    {
+      "id": "shepherded_wide",
+      "text": "He shepherds you wide and wins it back.",
+      "output_delta": -4,
+      "confidence": -3, "frustration": 5, "flow": -3,
+      "score_event": null, "stamina_cost": 3,
+      "polarity": "failure"
+    },
+    {
+      "id": "smart_recycle",
+      "text": "You recycle it smartly, maintaining possession.",
+      "output_delta": 2,
+      "confidence": 1, "frustration": 0, "flow": 0,
+      "score_event": null, "stamina_cost": 1,
+      "polarity": "success"
+    },
+    {
+      "id": "misplaced_pass",
+      "text": "Your pass is misplaced under pressure.",
+      "output_delta": -5,
+      "confidence": -2, "frustration": 4, "flow": -2,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "failure"
+    },
+    {
+      "id": "early_cross_delivered",
+      "text": "Your early cross whips across the six-yard box — dangerous.",
+      "output_delta": 6,
+      "confidence": 3, "frustration": -1, "flow": 3,
+      "score_event": null, "stamina_cost": 3,
+      "polarity": "success"
+    },
+    {
+      "id": "cross_behind",
+      "text": "The ball goes behind for a goal kick.",
+      "output_delta": -2,
+      "confidence": -1, "frustration": 2, "flow": -1,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "failure"
+    },
+    {
+      "id": "goal_scored",
+      "text": "The ball hits the back of the net. Get in!",
+      "output_delta": 18,
+      "confidence": 15, "frustration": -10, "flow": 10,
+      "score_event": "goal_for", "stamina_cost": 2,
+      "polarity": "success"
+    },
+    {
+      "id": "goal_saved",
+      "text": "Great save — he tips it round the post.",
+      "output_delta": 5,
+      "confidence": -2, "frustration": 6, "flow": 2,
+      "score_event": null, "stamina_cost": 3,
+      "polarity": "failure"
+    },
+    {
+      "id": "shot_blazed",
+      "text": "You blaze it over the bar.",
+      "output_delta": -6,
+      "confidence": -4, "frustration": 8, "flow": -3,
+      "score_event": null, "stamina_cost": 3,
+      "polarity": "failure"
+    },
+    {
+      "id": "tackle_won",
+      "text": "Perfectly timed — you win it clean and start the counter.",
+      "output_delta": 8,
+      "confidence": 5, "frustration": -3, "flow": 4,
+      "score_event": null, "stamina_cost": 4,
+      "polarity": "success"
+    },
+    {
+      "id": "tackle_missed",
+      "text": "You dive in and he skips past you easily.",
+      "output_delta": -7,
+      "confidence": -5, "frustration": 8, "flow": -4,
+      "score_event": null, "stamina_cost": 5,
+      "polarity": "failure"
+    },
+    {
+      "id": "goal_conceded_defensive",
+      "text": "He's through and makes no mistake. A defensive error.",
+      "output_delta": -12,
+      "confidence": -8, "frustration": 12, "flow": -6,
+      "score_event": "goal_against", "stamina_cost": 2,
+      "polarity": "failure"
+    },
+    {
+      "id": "header_clear_good",
+      "text": "Powerful header — you thump it into the stands.",
+      "output_delta": 6,
+      "confidence": 3, "frustration": -2, "flow": 3,
+      "score_event": null, "stamina_cost": 4,
+      "polarity": "success"
+    },
+    {
+      "id": "header_flick",
+      "text": "You flick it on to a teammate who controls it perfectly.",
+      "output_delta": 7,
+      "confidence": 4, "frustration": -2, "flow": 5,
+      "score_event": null, "stamina_cost": 3,
+      "polarity": "success"
+    },
+    {
+      "id": "aerial_beaten",
+      "text": "He gets above you and glances it toward goal.",
+      "output_delta": -6,
+      "confidence": -4, "frustration": 6, "flow": -3,
+      "score_event": null, "stamina_cost": 4,
+      "polarity": "failure"
+    },
+    {
+      "id": "interception_clean",
+      "text": "You read it perfectly — a clean interception breaks up the play.",
+      "output_delta": 7,
+      "confidence": 4, "frustration": -2, "flow": 4,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "success"
+    },
+    {
+      "id": "step_too_early",
+      "text": "You step too early and they slide the ball through the gap.",
+      "output_delta": -5,
+      "confidence": -3, "frustration": 7, "flow": -3,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "failure"
+    },
+    {
+      "id": "through_ball_on",
+      "text": "Your pass splits the defence — the striker is clean through.",
+      "output_delta": 12,
+      "confidence": 8, "frustration": -4, "flow": 8,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "success"
+    },
+    {
+      "id": "through_ball_cut_out",
+      "text": "The last defender reads it and cuts it out.",
+      "output_delta": -4,
+      "confidence": -2, "frustration": 5, "flow": -2,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "failure"
+    },
+    {
+      "id": "wonder_goal",
+      "text": "Unstoppable. Top corner from 30 yards. The crowd erupts.",
+      "output_delta": 20,
+      "confidence": 18, "frustration": -12, "flow": 15,
+      "score_event": "goal_for", "stamina_cost": 3,
+      "polarity": "success"
+    },
+    {
+      "id": "speculative_wide",
+      "text": "It drifts wide — a speculative effort that never troubled the keeper.",
+      "output_delta": -3,
+      "confidence": -2, "frustration": 4, "flow": -2,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "failure"
+    },
+    {
+      "id": "penalty_scored",
+      "text": "Coolly dispatched. The keeper doesn't move.",
+      "output_delta": 15,
+      "confidence": 12, "frustration": -8, "flow": 10,
+      "score_event": "goal_for", "stamina_cost": 1,
+      "polarity": "success"
+    },
+    {
+      "id": "penalty_missed",
+      "text": "Your heart sinks. It rattles the post and stays out.",
+      "output_delta": -18,
+      "confidence": -15, "frustration": 18, "flow": -12,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "failure"
+    },
+    {
+      "id": "press_wins_ball",
+      "text": "Your press forces a mistake — you win it high up the pitch.",
+      "output_delta": 8,
+      "confidence": 5, "frustration": -3, "flow": 6,
+      "score_event": null, "stamina_cost": 6,
+      "polarity": "success"
+    },
+    {
+      "id": "press_bypassed",
+      "text": "He sees it coming — a quick give-and-go and they're through.",
+      "output_delta": -5,
+      "confidence": -3, "frustration": 6, "flow": -3,
+      "score_event": null, "stamina_cost": 5,
+      "polarity": "failure"
+    },
+    {
+      "id": "position_found_space",
+      "text": "You find the half-space perfectly — your team plays through you.",
+      "output_delta": 5,
+      "confidence": 3, "frustration": -1, "flow": 4,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "success"
+    },
+    {
+      "id": "position_lost",
+      "text": "You drift out of position and your team is forced backwards.",
+      "output_delta": -3,
+      "confidence": -2, "frustration": 3, "flow": -2,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "failure"
+    },
+    {
+      "id": "freekick_top_corner",
+      "text": "It bends over the wall and curls into the top corner. Stunning.",
+      "output_delta": 18,
+      "confidence": 14, "frustration": -10, "flow": 12,
+      "score_event": "goal_for", "stamina_cost": 2,
+      "polarity": "success"
+    },
+    {
+      "id": "freekick_wall",
+      "text": "It cannons straight into the wall.",
+      "output_delta": -3,
+      "confidence": -2, "frustration": 5, "flow": -2,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "failure"
+    },
+    {
+      "id": "muscle_off_clean",
+      "text": "You hold your ground and ride the challenge — ball's yours.",
+      "output_delta": 6,
+      "confidence": 4, "frustration": -2, "flow": 4,
+      "score_event": null, "stamina_cost": 5,
+      "polarity": "success"
+    },
+    {
+      "id": "bundled_off",
+      "text": "He's too strong — you're bundled off the ball.",
+      "output_delta": -5,
+      "confidence": -3, "frustration": 6, "flow": -3,
+      "score_event": null, "stamina_cost": 4,
+      "polarity": "failure"
+    },
+    {
+      "id": "last_ditch_saved",
+      "text": "Last-ditch block — just enough to divert it wide!",
+      "output_delta": 10,
+      "confidence": 6, "frustration": -4, "flow": 5,
+      "score_event": null, "stamina_cost": 7,
+      "polarity": "success"
+    },
+    {
+      "id": "last_ditch_failed",
+      "text": "He's past you. Goal. You couldn't stop it.",
+      "output_delta": -14,
+      "confidence": -10, "frustration": 15, "flow": -8,
+      "score_event": "goal_against", "stamina_cost": 5,
+      "polarity": "failure"
+    },
+    {
+      "id": "run_timed_perfectly",
+      "text": "Your run is timed to perfection — you arrive unmarked.",
+      "output_delta": 8,
+      "confidence": 5, "frustration": -2, "flow": 6,
+      "score_event": null, "stamina_cost": 6,
+      "polarity": "success"
+    },
+    {
+      "id": "run_caught_offside",
+      "text": "Flag goes up — you've timed it a fraction too early.",
+      "output_delta": -3,
+      "confidence": -2, "frustration": 5, "flow": -2,
+      "score_event": null, "stamina_cost": 3,
+      "polarity": "failure"
+    },
+    {
+      "id": "switch_found_space",
+      "text": "The switch finds your teammate in acres of space — the play opens up.",
+      "output_delta": 7,
+      "confidence": 4, "frustration": -2, "flow": 5,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "success"
+    },
+    {
+      "id": "switch_misplaced",
+      "text": "The ball drops short — they win it back easily.",
+      "output_delta": -4,
+      "confidence": -2, "frustration": 5, "flow": -2,
+      "score_event": null, "stamina_cost": 2,
+      "polarity": "failure"
+    }
+  ]
+}

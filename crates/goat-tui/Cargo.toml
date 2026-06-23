@@ -1,0 +1,22 @@
+[package]
+name = "goat-tui"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "goat-tui"
+path = "src/main.rs"
+
+[[bin]]
+name = "career-sim"
+path = "src/career_sim.rs"
+
+[dependencies]
+goat-core   = { path = "../goat-core"   }
+goat-match  = { path = "../goat-match"  }
+goat-rng    = { path = "../goat-rng"    }
+goat-fixed  = { path = "../goat-fixed"  }
+goat-world  = { path = "../goat-world"  }
+goat-meta   = { path = "../goat-meta"   }
+goat-save   = { path = "../goat-save"   }
+goat-traits = { path = "../goat-traits" }
