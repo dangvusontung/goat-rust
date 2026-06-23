@@ -10,11 +10,19 @@ use goat_core::{
     derive::ovr,
     generation::{generate_player, CreationChoices, Position},
     positions::POSITION_WEIGHT_TABLE,
+    roles::RoleId,
     state::{reduce, Intent, WorldState},
     week::{Intensity, Routine},
 };
 use goat_fixed::Fixed;
+use goat_match::{
+    discipline::RefPersonality,
+    sim::{auto_play_match, BeatLibrary, MatchSetup},
+};
 use goat_rng::{GoatRng, RngSource};
+use goat_traits::PlayerTraits;
+
+const BEATS_JSON: &str = include_str!("../../../beats.json");
 use goat_world::{
     fixture_for_round, round_fixtures, sim_team_match, Table, BASE_CAREER_YEAR, CLUBS, DIV_CLUBS,
     DIV_ENG_SEC, ROUNDS_PER_SEASON,
@@ -264,6 +272,122 @@ fn main() {
             _ => Intensity::High,
         })
         .unwrap_or(Intensity::High);
+
+    // --match-sim [N] [seed] — run N beat-engine matches and analyse output vs result.
+    if args.iter().any(|a| a == "--match-sim") {
+        let pos = args.iter().position(|a| a == "--match-sim").unwrap();
+        let n: u32 = args
+            .get(pos + 1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100);
+        let seed: u64 = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(7);
+
+        let lib = BeatLibrary::load(BEATS_JSON).expect("beats.json must parse");
+        let choices = CreationChoices {
+            name: "Striker".into(),
+            position: Position::Forward,
+            nationality: "Brazilian",
+            club: "Riverside Town",
+        };
+        let p = generate_player(seed, &choices);
+        let player_ovr = ovr(&p.current, p.primary_position).to_int();
+        let aggression = p.current[AttrId::Aggression as usize].to_int().clamp(1, 99) as u8;
+        let own_strength = 70u8;
+
+        // Accumulators.
+        let (mut sum_out, mut min_out, mut max_out) = (0i64, 100i32, 0i32);
+        let mut buckets = [0u32; 4]; // <40, 40-59, 60-79, 80-100
+        let (mut w, mut d, mut l) = (0u32, 0u32, 0u32);
+        let (mut gf_sum, mut ga_sum, mut yellows, mut reds) = (0u64, 0u64, 0u64, 0u32);
+        let (mut out_w, mut out_d, mut out_l) = (0i64, 0i64, 0i64);
+        let (mut starred_in_defeat, mut carried_to_win) = (0u32, 0u32);
+
+        for i in 0..n {
+            let match_seed = seed ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let mut rng = GoatRng::new(match_seed);
+            // Opponents span the full strength spectrum so results vary.
+            let opp_strength = (45 + rng.next_range_u32(0, 45)) as u8;
+            let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+            let setup = MatchSetup {
+                player_role: RoleId::CompleteForward,
+                player_attrs: p.current,
+                player_familiarity: p.familiarity,
+                own_strength,
+                opp_strength,
+                opp_name: "Rivals FC",
+                form: Fixed::from_int(60),
+                player_aggression: aggression,
+                ref_personality: RefPersonality::from_rng(&mut rp_rng),
+                dirty_rep: 50,
+                player_traits: PlayerTraits::default(),
+            };
+            let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
+
+            let out = r.player_output;
+            sum_out += out as i64;
+            min_out = min_out.min(out);
+            max_out = max_out.max(out);
+            buckets[match out {
+                o if o < 40 => 0,
+                o if o < 60 => 1,
+                o if o < 80 => 2,
+                _ => 3,
+            }] += 1;
+            gf_sum += r.goals_for as u64;
+            ga_sum += r.goals_against as u64;
+            yellows += r.yellow_cards as u64;
+            reds += u32::from(r.red_card);
+
+            match r.goals_for.cmp(&r.goals_against) {
+                std::cmp::Ordering::Greater => {
+                    w += 1;
+                    out_w += out as i64;
+                    if out <= 45 {
+                        carried_to_win += 1;
+                    }
+                }
+                std::cmp::Ordering::Equal => {
+                    d += 1;
+                    out_d += out as i64;
+                }
+                std::cmp::Ordering::Less => {
+                    l += 1;
+                    out_l += out as i64;
+                    if out >= 70 {
+                        starred_in_defeat += 1;
+                    }
+                }
+            }
+        }
+
+        let nf = n as i64;
+        let avg = |s: i64, c: u32| if c > 0 { s / c as i64 } else { 0 };
+        println!("MATCHSIM player_ovr={player_ovr} matches={n} own_str={own_strength}");
+        println!(
+            "OUTPUT min={min_out} max={max_out} avg={}  buckets <40={} 40-59={} 60-79={} 80+={}",
+            sum_out / nf,
+            buckets[0],
+            buckets[1],
+            buckets[2],
+            buckets[3]
+        );
+        println!("RESULTS W={w} D={d} L={l}");
+        println!(
+            "TEAMGOALS avg_for={} avg_against={}  cards yellow={yellows} red={reds}",
+            gf_sum / n as u64,
+            ga_sum / n as u64
+        );
+        println!(
+            "OUTPUT_BY_RESULT W={} D={} L={}",
+            avg(out_w, w),
+            avg(out_d, d),
+            avg(out_l, l)
+        );
+        println!(
+            "DECOUPLING starred_in_defeat(out>=70 & L)={starred_in_defeat}  carried_to_win(out<=45 & W)={carried_to_win}"
+        );
+        return;
+    }
 
     // --genesis [seed] — dump the SoA population fingerprint (Phase 9 Slice 9A.1 gate).
     if args.iter().any(|a| a == "--genesis") {
