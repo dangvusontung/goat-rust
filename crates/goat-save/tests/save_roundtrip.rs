@@ -11,7 +11,7 @@ use goat_core::{
     week::{Intensity, Routine},
 };
 use goat_rng::GoatRng;
-use goat_save::save::{from_world_state, to_world_state};
+use goat_save::save::{from_world_state, load_from_file, save_to_file, to_world_state};
 use goat_world::world::{CLUBS, DIV_CLUBS, DIV_ENG_SEC};
 
 fn setup_state() -> WorldState {
@@ -108,6 +108,28 @@ fn save_load_restores_season_state() {
 }
 
 #[test]
+fn save_load_restores_epoch_day_through_bytes() {
+    // Exercises the full byte path (save_to_file → load_from_file), not just the
+    // in-memory SaveData conversion — covers the v6 pc_epoch_day field.
+    let mut state = setup_state();
+    state.pc_epoch_day = 287; // non-trivial calendar position
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join("goat_save_epoch_roundtrip.gsav");
+    save_to_file(&data, &path).unwrap();
+    let loaded = load_from_file(&path).unwrap();
+    let restored = to_world_state(&loaded);
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(
+        restored.pc_epoch_day, 287,
+        "pc_epoch_day must survive a full byte round-trip"
+    );
+}
+
+#[test]
 fn save_load_restores_familiarity() {
     let state = setup_state();
     let pc_id = state.pc_player_id.unwrap();
@@ -142,4 +164,33 @@ fn save_load_restores_age_and_energy() {
         restored.players.get_energy(r_id),
         "energy"
     );
+}
+
+#[test]
+fn save_load_restores_phase10_economy_and_life() {
+    // Exercises the full byte path for the v7 economy/life fields.
+    let mut state = setup_state();
+    state.pc_business_value = 4_200;
+    state.pc_bankrupt = true;
+    state.pc_dev_invest_level = 3;
+    state.pc_marketability = 88;
+    state.pc_sponsor_tier = 2;
+    state.pc_relationships = [40, 95, 12];
+    state.pc_character_rep = 37;
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join("goat_save_phase10_roundtrip.gsav");
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(restored.pc_business_value, 4_200);
+    assert!(restored.pc_bankrupt);
+    assert_eq!(restored.pc_dev_invest_level, 3);
+    assert_eq!(restored.pc_marketability, 88);
+    assert_eq!(restored.pc_sponsor_tier, 2);
+    assert_eq!(restored.pc_relationships, [40, 95, 12]);
+    assert_eq!(restored.pc_character_rep, 37);
 }

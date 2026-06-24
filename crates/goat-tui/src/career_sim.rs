@@ -10,11 +10,19 @@ use goat_core::{
     derive::ovr,
     generation::{generate_player, CreationChoices, Position},
     positions::POSITION_WEIGHT_TABLE,
+    roles::RoleId,
     state::{reduce, Intent, WorldState},
     week::{Intensity, Routine},
 };
 use goat_fixed::Fixed;
+use goat_match::{
+    discipline::RefPersonality,
+    sim::{auto_play_match, BeatLibrary, MatchSetup},
+};
 use goat_rng::{GoatRng, RngSource};
+use goat_traits::PlayerTraits;
+
+const BEATS_JSON: &str = include_str!("../../../beats.json");
 use goat_world::{
     fixture_for_round, round_fixtures, sim_team_match, Table, BASE_CAREER_YEAR, CLUBS, DIV_CLUBS,
     DIV_ENG_SEC, ROUNDS_PER_SEASON,
@@ -241,6 +249,586 @@ fn main() {
 
     let display_attrs = sim_pos.display_attrs();
 
+    // --lifestyle <professional|balanced|flashy> (default: balanced=1)
+    let lifestyle: u8 = args
+        .iter()
+        .position(|a| a == "--lifestyle")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| match s.to_lowercase().as_str() {
+            "professional" | "pro" | "0" => 0,
+            "flashy" | "toxic" | "2" => 2,
+            _ => 1,
+        })
+        .unwrap_or(1);
+
+    // --intensity <low|medium|high> (default: high)
+    let cli_intensity: Intensity = args
+        .iter()
+        .position(|a| a == "--intensity")
+        .and_then(|i| args.get(i + 1))
+        .map(|s| match s.to_lowercase().as_str() {
+            "low" => Intensity::Low,
+            "medium" | "med" => Intensity::Medium,
+            _ => Intensity::High,
+        })
+        .unwrap_or(Intensity::High);
+
+    // --match-beats [seed] [opp_str] — play ONE match and print the beat-by-beat narrative.
+    if args.iter().any(|a| a == "--match-beats") {
+        let p = args.iter().position(|a| a == "--match-beats").unwrap();
+        let seed: u64 = args.get(p + 1).and_then(|s| s.parse().ok()).unwrap_or(7);
+        let opp_str: u8 = args.get(p + 2).and_then(|s| s.parse().ok()).unwrap_or(78);
+        use goat_match::beats::ScoreEvent;
+
+        let lib = BeatLibrary::load(BEATS_JSON).expect("beats.json must parse");
+        let choices = CreationChoices {
+            name: "Striker".into(),
+            position: Position::Forward,
+            nationality: "Brazilian",
+            club: "Riverside Town",
+        };
+        let pl = generate_player(seed, &choices);
+        let aggression = pl.current[AttrId::Aggression as usize]
+            .to_int()
+            .clamp(1, 99) as u8;
+        let match_seed = seed ^ 0xc0ffee;
+        let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+        let setup = MatchSetup {
+            player_role: RoleId::CompleteForward,
+            player_attrs: pl.current,
+            player_familiarity: pl.familiarity,
+            own_strength: 75,
+            opp_strength: opp_str,
+            opp_name: "Rivals FC",
+            form: Fixed::from_int(65),
+            player_aggression: aggression,
+            ref_personality: RefPersonality::from_rng(&mut rp_rng),
+            dirty_rep: 50,
+            player_traits: PlayerTraits::default(),
+        };
+        let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
+
+        println!(
+            "MATCH — Striker (OVR {}) vs Rivals FC (str {opp_str})   seed {seed}\n",
+            ovr(&pl.current, pl.primary_position).to_int()
+        );
+        for m in &r.moments {
+            let tag = match m.goal_event {
+                Some(ScoreEvent::GoalFor) => " ⚽ GOAL!",
+                Some(ScoreEvent::GoalAgainst) => " (they score)",
+                _ if m.success => " ✓",
+                _ => " ✗",
+            };
+            println!("  {:>2}'  {}", m.minute, m.setup_text);
+            println!("        → {}{}", m.outcome_text, tag);
+            println!();
+        }
+        let res = match r.goals_for.cmp(&r.goals_against) {
+            std::cmp::Ordering::Greater => "WIN",
+            std::cmp::Ordering::Less => "LOSS",
+            std::cmp::Ordering::Equal => "DRAW",
+        };
+        let cards = if r.red_card {
+            format!("{}Y + RED", r.yellow_cards)
+        } else {
+            format!("{}Y", r.yellow_cards)
+        };
+        let player_goals = r
+            .moments
+            .iter()
+            .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+            .count();
+        println!("  {}", "─".repeat(52));
+        println!(
+            "  FULL TIME  {}-{}  {res}   |   your rating {}   goals {player_goals}   cards {cards}",
+            r.goals_for, r.goals_against, r.player_output
+        );
+        return;
+    }
+
+    // --season-beats [seed] — simulate ONE full season where the PC's matches are played
+    // through the beat engine (not the team-strength shortcut). Match-by-match log.
+    if args.iter().any(|a| a == "--season-beats") {
+        let p = args.iter().position(|a| a == "--season-beats").unwrap();
+        let seed: u64 = args.get(p + 1).and_then(|s| s.parse().ok()).unwrap_or(7);
+        use goat_match::beats::ScoreEvent;
+        use goat_world::DIV_ENG_SEC;
+
+        let lib = BeatLibrary::load(BEATS_JSON).expect("beats.json must parse");
+        let pc_club_id = DIV_CLUBS[DIV_ENG_SEC][0];
+        let div_idx = DIV_ENG_SEC;
+        let div_clubs = DIV_CLUBS[div_idx];
+        let choices = CreationChoices {
+            name: "Tung".into(),
+            position: Position::Forward,
+            nationality: "England",
+            club: CLUBS[pc_club_id].name,
+        };
+
+        let mut state = WorldState::new();
+        state = reduce(
+            state,
+            Intent::CreatePlayer { seed, choices },
+            &mut GoatRng::new(0),
+        );
+        state = reduce(
+            state,
+            Intent::InitWorld {
+                world_seed: seed,
+                pc_club_idx: pc_club_id as u16,
+                pc_div_idx: div_idx as u8,
+                facilities_mult: CLUBS[pc_club_id].facilities_mult(),
+                initial_table: Box::new([0u32; 80]),
+            },
+            &mut GoatRng::new(0),
+        );
+        let routine = Routine {
+            focus_attrs: SimPos::Forward.focus_attrs(),
+            intensity: Intensity::High,
+        };
+        state = reduce(state, Intent::SetRoutine { routine }, &mut GoatRng::new(0));
+        state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+        let pc_id = state.pc_player_id.unwrap();
+
+        println!("BEAT SEASON — {} (seed {seed})\n", CLUBS[pc_club_id].name);
+        println!("  Rd  Opponent           Score  Res  Out  Gls  Cards");
+        println!("  {}", "─".repeat(52));
+
+        let (mut tot_out, mut tot_goals, mut min_o, mut max_o) = (0i64, 0u32, 100i32, 0i32);
+        let (mut w, mut d, mut l, mut yel, mut red, mut played) = (0, 0, 0, 0u32, 0u32, 0u32);
+
+        for round in 0..ROUNDS_PER_SEASON {
+            for t in 0u64..2 {
+                let age = state.players.get_age_weeks(pc_id);
+                let rng_seed = age as u64 ^ (round as u64 * 7) ^ t;
+                state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(rng_seed));
+            }
+
+            let all_fixtures = round_fixtures(seed, 1, div_idx, round);
+            let pc_fix = all_fixtures
+                .iter()
+                .find(|f| f.home == pc_club_id || f.away == pc_club_id);
+            let Some(fx) = pc_fix else { continue };
+            let opp = if fx.home == pc_club_id {
+                fx.away
+            } else {
+                fx.home
+            };
+
+            let view = state.players.snapshot(pc_id);
+            let aggression = view.current[AttrId::Aggression as usize]
+                .to_int()
+                .clamp(1, 99) as u8;
+            let match_seed = seed ^ ((round as u64) << 16) ^ 0xc0ffee;
+            let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+            let setup = MatchSetup {
+                player_role: RoleId::CompleteForward,
+                player_attrs: view.current,
+                player_familiarity: view.familiarity,
+                own_strength: CLUBS[pc_club_id].strength,
+                opp_strength: CLUBS[opp].strength,
+                opp_name: CLUBS[opp].name,
+                form: state.pc_form,
+                player_aggression: aggression,
+                ref_personality: RefPersonality::from_rng(&mut rp_rng),
+                dirty_rep: state.pc_discipline_rep,
+                player_traits: PlayerTraits::default(),
+            };
+            let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
+
+            state = reduce(
+                state,
+                Intent::ApplyMatchResult {
+                    familiarity_xp: r.familiarity_xp,
+                    energy_cost: Fixed::from_int(25),
+                    injury_weeks: None,
+                },
+                &mut GoatRng::new(0),
+            );
+            if r.yellow_cards > 0 || r.red_card {
+                state = reduce(
+                    state,
+                    Intent::ApplyCardResult {
+                        yellow_cards: r.yellow_cards as u32,
+                        red_card: r.red_card,
+                    },
+                    &mut GoatRng::new(0),
+                );
+            }
+
+            let goals = r
+                .moments
+                .iter()
+                .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+                .count() as u32;
+            let (gf, ga) = (r.goals_for, r.goals_against);
+            let res_int: i8 = match gf.cmp(&ga) {
+                std::cmp::Ordering::Greater => 1,
+                std::cmp::Ordering::Less => -1,
+                std::cmp::Ordering::Equal => 0,
+            };
+            let res = match res_int {
+                1 => {
+                    w += 1;
+                    "W"
+                }
+                -1 => {
+                    l += 1;
+                    "L"
+                }
+                _ => {
+                    d += 1;
+                    "D"
+                }
+            };
+
+            // Feed the league table: PC's real result + the rest sim'd by strength.
+            let mut sim_rng = GoatRng::new(seed ^ (round as u64) ^ 0xfeed);
+            let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
+            for f in &all_fixtures {
+                let (rgf, rga) = if f.home == pc_club_id {
+                    (gf, ga)
+                } else if f.away == pc_club_id {
+                    (ga, gf)
+                } else {
+                    sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng)
+                };
+                let h = div_clubs.iter().position(|&c| c == f.home).unwrap() as u8;
+                let a = div_clubs.iter().position(|&c| c == f.away).unwrap() as u8;
+                round_results.push((h, a, rgf, rga));
+            }
+            state = reduce(
+                state,
+                Intent::ApplyRoundResult {
+                    pc_goals: goals,
+                    pc_output: r.player_output,
+                    pc_result: res_int,
+                    round_results,
+                },
+                &mut GoatRng::new(0),
+            );
+
+            let cards = if r.red_card {
+                format!("{}Y 🟥", r.yellow_cards)
+            } else if r.yellow_cards > 0 {
+                format!("{}Y", r.yellow_cards)
+            } else {
+                "—".into()
+            };
+            println!(
+                "  {:>2}  {:<18} {:>2}-{:<2}  {:^3}  {:>3}  {:>3}  {}",
+                round + 1,
+                CLUBS[opp].name,
+                gf,
+                ga,
+                res,
+                r.player_output,
+                goals,
+                cards
+            );
+
+            played += 1;
+            tot_out += r.player_output as i64;
+            tot_goals += goals;
+            min_o = min_o.min(r.player_output);
+            max_o = max_o.max(r.player_output);
+            yel += r.yellow_cards as u32;
+            red += u32::from(r.red_card);
+        }
+
+        let table = Table::from_raw(&state.table_raw, &div_clubs);
+        let pos = table.position_of(pc_club_id);
+        let avg = if played > 0 {
+            tot_out / played as i64
+        } else {
+            0
+        };
+        println!("  {}", "─".repeat(52));
+        println!("\n  SEASON SUMMARY");
+        println!(
+            "  Played {played}  W{w} D{d} L{l}  |  Goals {tot_goals}  |  League position {pos}/16"
+        );
+        println!("  Output: avg {avg}  min {min_o}  max {max_o}   Cards: {yel}Y {red}R");
+
+        // ── Final league table (the record table) ────────────────────────────
+        println!("\n  FINAL TABLE — England, Championship");
+        println!(
+            "  {:<3} {:<18} {:>2} {:>2} {:>2} {:>2} {:>3} {:>3} {:>4} {:>3}",
+            "#", "Club", "P", "W", "D", "L", "GF", "GA", "GD", "Pts"
+        );
+        println!("  {}", "─".repeat(54));
+        for (i, e) in table.sorted().iter().enumerate() {
+            let mark = if e.club_id == pc_club_id { "▶" } else { " " };
+            println!(
+                "{}{:>2} {:<18} {:>2} {:>2} {:>2} {:>2} {:>3} {:>3} {:>+4} {:>3}",
+                mark,
+                i + 1,
+                CLUBS[e.club_id].name,
+                e.played(),
+                e.w,
+                e.d,
+                e.l,
+                e.gf,
+                e.ga,
+                e.goal_diff(),
+                e.points()
+            );
+        }
+        println!(
+            "\n  (matches played beat-by-beat through the engine; output is the player's own\n   game, the scoreline is the team's — they can diverge.)"
+        );
+        return;
+    }
+
+    // --match-sim [N] [seed] — run N beat-engine matches and analyse output vs result.
+    if args.iter().any(|a| a == "--match-sim") {
+        let pos = args.iter().position(|a| a == "--match-sim").unwrap();
+        let n: u32 = args
+            .get(pos + 1)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100);
+        let seed: u64 = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(7);
+
+        let lib = BeatLibrary::load(BEATS_JSON).expect("beats.json must parse");
+        let choices = CreationChoices {
+            name: "Striker".into(),
+            position: Position::Forward,
+            nationality: "Brazilian",
+            club: "Riverside Town",
+        };
+        let p = generate_player(seed, &choices);
+        let player_ovr = ovr(&p.current, p.primary_position).to_int();
+        let aggression = p.current[AttrId::Aggression as usize].to_int().clamp(1, 99) as u8;
+        let own_strength = 70u8;
+
+        // Accumulators.
+        let (mut sum_out, mut min_out, mut max_out) = (0i64, 100i32, 0i32);
+        let mut buckets = [0u32; 4]; // <40, 40-59, 60-79, 80-100
+        let (mut w, mut d, mut l) = (0u32, 0u32, 0u32);
+        let (mut gf_sum, mut ga_sum, mut yellows, mut reds) = (0u64, 0u64, 0u64, 0u32);
+        let (mut out_w, mut out_d, mut out_l) = (0i64, 0i64, 0i64);
+        let (mut starred_in_defeat, mut carried_to_win) = (0u32, 0u32);
+
+        for i in 0..n {
+            let match_seed = seed ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            let mut rng = GoatRng::new(match_seed);
+            // Opponents span the full strength spectrum so results vary.
+            let opp_strength = (45 + rng.next_range_u32(0, 45)) as u8;
+            let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+            let setup = MatchSetup {
+                player_role: RoleId::CompleteForward,
+                player_attrs: p.current,
+                player_familiarity: p.familiarity,
+                own_strength,
+                opp_strength,
+                opp_name: "Rivals FC",
+                form: Fixed::from_int(60),
+                player_aggression: aggression,
+                ref_personality: RefPersonality::from_rng(&mut rp_rng),
+                dirty_rep: 50,
+                player_traits: PlayerTraits::default(),
+            };
+            let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
+
+            let out = r.player_output;
+            sum_out += out as i64;
+            min_out = min_out.min(out);
+            max_out = max_out.max(out);
+            buckets[match out {
+                o if o < 40 => 0,
+                o if o < 60 => 1,
+                o if o < 80 => 2,
+                _ => 3,
+            }] += 1;
+            gf_sum += r.goals_for as u64;
+            ga_sum += r.goals_against as u64;
+            yellows += r.yellow_cards as u64;
+            reds += u32::from(r.red_card);
+
+            match r.goals_for.cmp(&r.goals_against) {
+                std::cmp::Ordering::Greater => {
+                    w += 1;
+                    out_w += out as i64;
+                    if out <= 45 {
+                        carried_to_win += 1;
+                    }
+                }
+                std::cmp::Ordering::Equal => {
+                    d += 1;
+                    out_d += out as i64;
+                }
+                std::cmp::Ordering::Less => {
+                    l += 1;
+                    out_l += out as i64;
+                    if out >= 70 {
+                        starred_in_defeat += 1;
+                    }
+                }
+            }
+        }
+
+        let nf = n as i64;
+        let avg = |s: i64, c: u32| if c > 0 { s / c as i64 } else { 0 };
+        println!("MATCHSIM player_ovr={player_ovr} matches={n} own_str={own_strength}");
+        println!(
+            "OUTPUT min={min_out} max={max_out} avg={}  buckets <40={} 40-59={} 60-79={} 80+={}",
+            sum_out / nf,
+            buckets[0],
+            buckets[1],
+            buckets[2],
+            buckets[3]
+        );
+        println!("RESULTS W={w} D={d} L={l}");
+        println!(
+            "TEAMGOALS avg_for={} avg_against={}  cards yellow={yellows} red={reds}",
+            gf_sum / n as u64,
+            ga_sum / n as u64
+        );
+        println!(
+            "OUTPUT_BY_RESULT W={} D={} L={}",
+            avg(out_w, w),
+            avg(out_d, d),
+            avg(out_l, l)
+        );
+        println!(
+            "DECOUPLING starred_in_defeat(out>=70 & L)={starred_in_defeat}  carried_to_win(out<=45 & W)={carried_to_win}"
+        );
+        return;
+    }
+
+    // --genesis [seed] — dump the SoA population fingerprint (Phase 9 Slice 9A.1 gate).
+    if args.iter().any(|a| a == "--genesis") {
+        let seed: u64 = args
+            .iter()
+            .position(|a| a == "--genesis")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(42);
+        let pop = goat_world::population::genesis(seed);
+        println!(
+            "GENESIS seed={seed}  players={}  fingerprint=0x{:016x}",
+            pop.len(),
+            pop.fingerprint()
+        );
+        return;
+    }
+
+    // --history [seed] — dump the seeded canon of past greats (Phase 9 Slice 9A.4 gate).
+    if args.iter().any(|a| a == "--history") {
+        let seed: u64 = args
+            .iter()
+            .position(|a| a == "--history")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(42);
+        let h = goat_world::history::backfill_history(seed, 30);
+        println!("PANTHEON CANON (seed {seed}, 30 backfilled seasons)");
+        println!(
+            "  {:<22} {:<10} {:>4}  {:>4}",
+            "Name", "Nation", "BdOr", "Peak"
+        );
+        println!("  {}", "─".repeat(46));
+        for g in h.canon_ranked().iter().take(8) {
+            println!(
+                "  {:<22} {:<10} {:>4}  {:>4}",
+                g.name,
+                goat_world::history::great_nation_name(g.nationality),
+                g.ballon_dors,
+                g.peak_ovr
+            );
+        }
+        return;
+    }
+
+    // --rival [seed] — crystallise the emergent rival vs a representative PC (Slice 9A.5).
+    if args.iter().any(|a| a == "--rival") {
+        let seed: u64 = args
+            .iter()
+            .position(|a| a == "--rival")
+            .and_then(|i| args.get(i + 1))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(42);
+        let mut pop = goat_world::population::genesis(seed);
+        for s in 1..=14u32 {
+            goat_world::batch_tick::batch_tick_season(&mut pop, seed, s, s * 52);
+        }
+        // A representative mid-tier PC career to set the bar.
+        match goat_world::rival::crystallise_rival(&pop, 16 * 52, 200, 5) {
+            goat_world::rival::RivalVerdict::Rival {
+                name,
+                peer_goals,
+                peer_titles,
+                ..
+            } => println!(
+                "RIVAL (seed {seed}): your generation produced {name} — {peer_goals} goals, {peer_titles} titles. The media frames the rivalry.",
+            ),
+            goat_world::rival::RivalVerdict::WeakEra => println!(
+                "RIVAL (seed {seed}): nobody kept pace. You reign alone — the schools apply the weak-era asterisk.",
+            ),
+        }
+        return;
+    }
+
+    // --world-sim [seed] [seasons] — simulate the WHOLE world headless and summarise.
+    if args.iter().any(|a| a == "--world-sim") {
+        let pos = args.iter().position(|a| a == "--world-sim").unwrap();
+        let seed: u64 = args.get(pos + 1).and_then(|s| s.parse().ok()).unwrap_or(42);
+        let seasons: u32 = args.get(pos + 2).and_then(|s| s.parse().ok()).unwrap_or(20);
+        // The PC career the rivalry is measured against (sets the "keep pace" bar). A
+        // GOAT-tier PC makes the weak-era asterisk reachable when the cohort is thin.
+        let pc_goals: u32 = args
+            .get(pos + 3)
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300);
+        let pc_titles: u32 = args.get(pos + 4).and_then(|s| s.parse().ok()).unwrap_or(8);
+
+        let mut pop = goat_world::population::genesis(seed);
+        for s in 1..=seasons {
+            goat_world::batch_tick::batch_tick_season(&mut pop, seed, s, s * 52);
+        }
+
+        // All-time top scorer of the run.
+        let top = (0..pop.len()).max_by_key(|&i| pop.career_goals[i]).unwrap();
+        // Most-titled club (sum of its squad's titles).
+        let mut club_titles = [0u32; goat_world::world::NUM_CLUBS];
+        for i in 0..pop.len() {
+            club_titles[pop.club[i] as usize] += pop.career_titles[i];
+        }
+        let top_club = (0..goat_world::world::NUM_CLUBS)
+            .max_by_key(|&c| club_titles[c])
+            .unwrap();
+        // Pantheon GOAT from the backfilled canon.
+        let hist = goat_world::history::backfill_history(seed, 30);
+        let goat = hist.canon_ranked()[0];
+        // Emergent rival vs a representative mid-tier PC.
+        let rival = match goat_world::rival::crystallise_rival(&pop, 16 * 52, pc_goals, pc_titles) {
+            goat_world::rival::RivalVerdict::Rival {
+                name, peer_goals, ..
+            } => {
+                format!("RIVAL name=\"{name}\" goals={peer_goals}")
+            }
+            goat_world::rival::RivalVerdict::WeakEra => "WEAKERA".to_string(),
+        };
+
+        println!("WORLD seed={seed} players={} seasons={seasons}", pop.len());
+        println!(
+            "WORLD topscorer=\"{}\" goals={} club=\"{}\"",
+            goat_world::history::name_from_seed(pop.seed[top]),
+            pop.career_goals[top],
+            CLUBS[pop.club[top] as usize].name
+        );
+        println!(
+            "WORLD mosttitles_club=\"{}\" titles={}",
+            CLUBS[top_club].name, club_titles[top_club]
+        );
+        println!(
+            "WORLD pantheon_goat=\"{}\" ballondors={} peak={}",
+            goat.name, goat.ballon_dors, goat.peak_ovr
+        );
+        println!("WORLD rival={rival}");
+        return;
+    }
+
     // --scan mode
     if args.iter().any(|a| a == "--scan") {
         let (k1, k2, sup, ..) = sim_pos.scan_criteria();
@@ -322,9 +910,15 @@ fn main() {
         &mut GoatRng::new(0),
     );
 
+    state = reduce(
+        state,
+        Intent::SetLifestyle { lifestyle },
+        &mut GoatRng::new(0),
+    );
+
     let routine = Routine {
         focus_attrs: sim_pos.focus_attrs(),
-        intensity: Intensity::High,
+        intensity: cli_intensity,
     };
     state = reduce(state, Intent::SetRoutine { routine }, &mut GoatRng::new(0));
 
@@ -341,6 +935,7 @@ fn main() {
 
     let mut snaps: Vec<SeasonSnap> = Vec::new();
     let mut retired_at: Option<u32> = None;
+    let mut injured_weeks: u32 = 0; // weeks spent injured across the career
 
     // ── 20-season simulation ───────────────────────────────────────────────────
     for season in 1u32..=20 {
@@ -355,6 +950,9 @@ fn main() {
                 let age = state.players.get_age_weeks(pc_id);
                 let rng_seed = age as u64 ^ (season as u64 * 0xbeef) ^ (round as u64 * 7) ^ t;
                 state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(rng_seed));
+                if state.players.get_injury_weeks(pc_id) > 0 {
+                    injured_weeks += 1;
+                }
             }
 
             let all_fixtures = round_fixtures(seed, season, season_div_idx, round);
@@ -773,6 +1371,20 @@ fn main() {
     println!(
         "║  {:76} ║",
         format!("Career apps    : {}  Goals: {}", career_apps, career_goals)
+    );
+    let lifestyle_label = match lifestyle {
+        0 => "Professional",
+        2 => "Flashy",
+        _ => "Balanced",
+    };
+    println!(
+        "║  {:76} ║",
+        format!(
+            "Lifestyle      : {}  Intensity: {}  Injured weeks: {}",
+            lifestyle_label,
+            cli_intensity.name(),
+            injured_weeks
+        )
     );
     println!(
         "║  {:76} ║",

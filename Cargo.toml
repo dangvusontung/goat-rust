@@ -8,7 +8,6 @@ members = [
     "crates/goat-meta",
     "crates/goat-save",
     "crates/goat-calendar",
-    "crates/goat-training",
     "crates/goat-traits",
     "crates/goat-tui",
     "crates/goat-bridge",

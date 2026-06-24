@@ -9,7 +9,7 @@ use std::io;
 use std::path::Path;
 
 pub const MAGIC: &[u8; 4] = b"GOAT";
-pub const VERSION: u32 = 5;
+pub const VERSION: u32 = 7;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -72,6 +72,16 @@ pub struct SaveData {
     pub pc_retired: bool,
     // ── Calendar ─────────────────────────────────────────────────────────────
     pub pc_week_training_done: bool,
+    /// Live calendar position in epoch days since career start (v6+).
+    pub pc_epoch_day: u32,
+    // ── Phase 10 economy + life (v7+) ─────────────────────────────────────────
+    pub pc_business_value: i64,
+    pub pc_bankrupt: bool,
+    pub pc_dev_invest_level: u8,
+    pub pc_marketability: i32,
+    pub pc_sponsor_tier: u8,
+    pub pc_relationships: [i32; 3],
+    pub pc_character_rep: i32,
 }
 
 #[derive(Debug)]
@@ -161,6 +171,14 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_lifestyle: state.pc_lifestyle,
         pc_retired: state.pc_retired,
         pc_week_training_done: state.pc_week_training_done,
+        pc_epoch_day: state.pc_epoch_day,
+        pc_business_value: state.pc_business_value,
+        pc_bankrupt: state.pc_bankrupt,
+        pc_dev_invest_level: state.pc_dev_invest_level,
+        pc_marketability: state.pc_marketability,
+        pc_sponsor_tier: state.pc_sponsor_tier,
+        pc_relationships: state.pc_relationships,
+        pc_character_rep: state.pc_character_rep,
     }
 }
 
@@ -356,6 +374,14 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
     state.pc_lifestyle = data.pc_lifestyle;
     state.pc_retired = data.pc_retired;
     state.pc_week_training_done = data.pc_week_training_done;
+    state.pc_epoch_day = data.pc_epoch_day;
+    state.pc_business_value = data.pc_business_value;
+    state.pc_bankrupt = data.pc_bankrupt;
+    state.pc_dev_invest_level = data.pc_dev_invest_level;
+    state.pc_marketability = data.pc_marketability;
+    state.pc_sponsor_tier = data.pc_sponsor_tier;
+    state.pc_relationships = data.pc_relationships;
+    state.pc_character_rep = data.pc_character_rep;
 
     state
 }
@@ -428,6 +454,17 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     v.push(u8::from(d.pc_retired));
     // Calendar
     v.push(u8::from(d.pc_week_training_done));
+    push_u32(&mut v, d.pc_epoch_day); // v6+
+                                      // Phase 10 economy + life (v7+)
+    push_u64(&mut v, d.pc_business_value as u64);
+    v.push(u8::from(d.pc_bankrupt));
+    v.push(d.pc_dev_invest_level);
+    push_i32(&mut v, d.pc_marketability);
+    v.push(d.pc_sponsor_tier);
+    for r in d.pc_relationships {
+        push_i32(&mut v, r);
+    }
+    push_i32(&mut v, d.pc_character_rep);
     v
 }
 
@@ -530,6 +567,20 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     let pc_retired = read_u8(b, &mut cur).unwrap_or(0) != 0;
     // Calendar (v5+; default false for older saves)
     let pc_week_training_done = read_u8(b, &mut cur).unwrap_or(0) != 0;
+    // Calendar position (v6+; default 0 for older saves)
+    let pc_epoch_day = read_u32(b, &mut cur).unwrap_or(0);
+    // Phase 10 economy + life (v7+; defaults for older saves keep them neutral)
+    let pc_business_value = read_u64(b, &mut cur).unwrap_or(0) as i64;
+    let pc_bankrupt = read_u8(b, &mut cur).unwrap_or(0) != 0;
+    let pc_dev_invest_level = read_u8(b, &mut cur).unwrap_or(0);
+    let pc_marketability = read_i32(b, &mut cur).unwrap_or(50);
+    let pc_sponsor_tier = read_u8(b, &mut cur).unwrap_or(0);
+    let pc_relationships = [
+        read_i32(b, &mut cur).unwrap_or(70),
+        read_i32(b, &mut cur).unwrap_or(70),
+        read_i32(b, &mut cur).unwrap_or(70),
+    ];
+    let pc_character_rep = read_i32(b, &mut cur).unwrap_or(50);
 
     Ok(SaveData {
         world_seed,
@@ -578,6 +629,14 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_lifestyle,
         pc_retired,
         pc_week_training_done,
+        pc_epoch_day,
+        pc_business_value,
+        pc_bankrupt,
+        pc_dev_invest_level,
+        pc_marketability,
+        pc_sponsor_tier,
+        pc_relationships,
+        pc_character_rep,
     })
 }
 
