@@ -20,3 +20,4 @@ goat-world  = { path = "../goat-world"  }
 goat-meta   = { path = "../goat-meta"   }
 goat-save   = { path = "../goat-save"   }
 goat-traits = { path = "../goat-traits" }
+goat-calendar = { path = "../goat-calendar" }

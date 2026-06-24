@@ -173,6 +173,32 @@ pub const INJURY_WEEKS_MIN: u8 = 1;
 /// Max injury duration (weeks).
 pub const INJURY_WEEKS_MAX: u8 = 8;
 
+// ── Lifestyle ↔ consequence (bible §8.6) ──────────────────────────────────────
+// The identity fork must be a real trade-off: a professional lifestyle extends the
+// peak and lowers injury risk; a flashy one burns out early. Balanced is the neutral
+// baseline (×1.0 everywhere) so all pre-existing golden values stay frozen.
+// Placeholders illustrating shape — frozen only on user approval.
+
+/// Injury-risk multiplier (×10) by lifestyle: Professional 0.7×, Balanced 1.0×, Flashy 1.5×.
+/// Tuned (seed sweep 0–19): keeps Pro robustly the safest tier and the injury spread
+/// well-proportioned (Flashy ≈ 2.1× Pro injured weeks) without an extra duration lever.
+pub const INJURY_LIFESTYLE_X10_PRO: u32 = 7;
+pub const INJURY_LIFESTYLE_X10_BALANCED: u32 = 10;
+pub const INJURY_LIFESTYLE_X10_FLASHY: u32 = 15;
+
+/// Effective ceiling: fraction of *potential* a lifestyle lets the player actually
+/// reach. Flashy burns a little of the ceiling (0.96); Professional/Balanced reach
+/// full potential. Never raises a current attr above its potential (pillar §2.4).
+pub const LIFESTYLE_CEILING_PRO: Fixed = Fixed::raw(1_000); // 1.000 — full potential
+pub const LIFESTYLE_CEILING_BALANCED: Fixed = Fixed::raw(1_000); // 1.000
+pub const LIFESTYLE_CEILING_FLASHY: Fixed = Fixed::raw(960); // 0.960 — burned potential
+
+/// Age-decline multiplier by lifestyle: Professional 0.7× (gentler, later burnout),
+/// Balanced 1.0×, Flashy 1.4× (steeper, earlier decline). Multiplies the base decay.
+pub const DECLINE_LIFESTYLE_PRO: Fixed = Fixed::raw(700); // 0.700
+pub const DECLINE_LIFESTYLE_BALANCED: Fixed = Fixed::raw(1_000); // 1.000
+pub const DECLINE_LIFESTYLE_FLASHY: Fixed = Fixed::raw(1_400); // 1.400
+
 // ── Week loop: breakthrough ───────────────────────────────────────────────────
 
 /// Chance of a training breakthrough event (per 1 000 rolls per week, when training).
@@ -191,3 +217,67 @@ pub const FACILITIES_MULTS: [Fixed; 5] = [
     Fixed::raw(1_100), // Hillside Athletic 1.100
     Fixed::raw(1_200), // Valley Rangers    1.200
 ];
+
+// ── Phase 10 — economy (TASK-10B.1) ────────────────────────────────────────────
+// Money in thousands. Advantages are ceiling-capped (§2.4): a dev multiplier speeds
+// growth but never lifts a current attribute above its potential.
+
+/// Annual lifestyle upkeep by lifestyle (0=Professional,1=Balanced,2=Flashy), in £k.
+/// A flashy lifestyle burns cash; a professional one is frugal.
+pub const UPKEEP_BY_LIFESTYLE: [i64; 3] = [40, 80, 200];
+/// Annual business/investment return, in tenths of a percent of business value.
+pub const INVEST_RETURN_PER_1000: i64 = 70; // ~7%/yr baseline
+/// Business return variance band (± this many tenths-of-percent), rolled each season.
+pub const INVEST_VARIANCE_PER_1000: i64 = 120; // swings -5%..+19% around baseline
+/// Savings (thousands) below which the player is bankrupt.
+pub const BANKRUPTCY_FLOOR: i64 = -500;
+/// Ceiling-capped development multiplier by invest level 0–3. Level 0 is neutral (×1.0)
+/// so the no-spend path stays byte-identical to existing goldens.
+pub const DEV_INVEST_MULT: [Fixed; 4] = [
+    Fixed::raw(1_000), // 0 — none (neutral)
+    Fixed::raw(1_060), // 1 — nutrition
+    Fixed::raw(1_120), // 2 — + private trainer
+    Fixed::raw(1_180), // 3 — + full performance team
+];
+/// Annual cost of each development-investment level, in £k.
+pub const DEV_INVEST_COST: [i64; 4] = [0, 60, 160, 320];
+
+// ── Phase 10 — sponsors + marketability (TASK-10B.2) ───────────────────────────
+
+/// Marketability thresholds: index 0 = min for Local tier, 1 = National, 2 = Global.
+pub const SPONSOR_TIER_THRESHOLDS: [i32; 3] = [25, 50, 75];
+/// Annual sponsor income by tier (0=none,1=local,2=national,3=global), in £k.
+pub const SPONSOR_INCOME: [i64; 4] = [0, 150, 600, 2_000];
+/// Weekly energy cost of sponsor obligations by tier (the same resource training needs).
+/// Tier 0 is 0.0 so the no-sponsor path is byte-identical to existing goldens.
+pub const SPONSOR_ENERGY_COST: [Fixed; 4] = [
+    Fixed::raw(0),     // none
+    Fixed::raw(1_000), // local      1.0/wk
+    Fixed::raw(2_500), // national   2.5/wk
+    Fixed::raw(5_000), // global     5.0/wk
+];
+/// Reputation hit for over-commercialising: signing a tier your sporting merit doesn't
+/// justify (tier outranks sporting-rep band) dents Sporting rep by this much.
+pub const OVERCOMMERCIAL_REP_PENALTY: i32 = 8;
+
+// ── Phase 10 — relationships, scandals, media (TASK-10B.3) ─────────────────────
+
+/// A relationship thread below this stability ruptures (triggers a scandal).
+pub const RELATIONSHIP_RUPTURE_THRESHOLD: i32 = 25;
+/// Character-rep hit when a relationship ruptures into a scandal.
+pub const SCANDAL_CHARACTER_HIT: i32 = 15;
+/// Scandals also dent marketability (sponsors get nervous).
+pub const SCANDAL_MARKETABILITY_HIT: i32 = 10;
+/// Media flashpoint — CONTRITE response: (Character delta, Sporting delta). Looks humble:
+/// rebuilds Character, costs a little Sporting standing.
+pub const MEDIA_CONTRITE: (i32, i32) = (12, -5);
+/// Media flashpoint — DEFIANT response: (Character delta, Sporting delta). Fans love the
+/// fire (Sporting up) but it reads as arrogant (Character down).
+pub const MEDIA_DEFIANT: (i32, i32) = (-8, 10);
+
+// ── Phase 10 — retirement trigger (TASK-10B.4) ─────────────────────────────────
+
+/// Soft retirement age: past it, a player with no contract is expected to retire.
+pub const RETIRE_AGE_SOFT: u32 = 34;
+/// Hard retirement age: nobody plays on past it.
+pub const RETIRE_AGE_HARD: u32 = 40;

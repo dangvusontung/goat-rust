@@ -11,11 +11,14 @@ use crate::player::{PlayerId, PlayerStore};
 use crate::roles::{FamiliarityTier, RoleId, ROLE_WEIGHT_TABLE};
 use crate::tuning::{
     BASE_DECAY_PER_WEEK, BASE_GROWTH_PER_WEEK, BASE_INJURY_PER_1000, BREAKTHROUGH_BONUS,
-    BREAKTHROUGH_PER_1000, ENERGY_AUTO_DOWNGRADE, ENERGY_COST_HIGH, ENERGY_COST_LOW,
+    BREAKTHROUGH_PER_1000, DECLINE_LIFESTYLE_BALANCED, DECLINE_LIFESTYLE_FLASHY,
+    DECLINE_LIFESTYLE_PRO, ENERGY_AUTO_DOWNGRADE, ENERGY_COST_HIGH, ENERGY_COST_LOW,
     ENERGY_COST_MED, ENERGY_MAX, ENERGY_PASSIVE_RECOVERY, ENERGY_RECOVERY_INJURED, FAM_XP_AWKWARD,
     FAM_XP_COMPETENT, FAM_XP_IMP_PER_WEEK, FAM_XP_KEY_PER_WEEK, FAM_XP_UNCONVINCING,
     GROWTH_MULT_HIGH, GROWTH_MULT_LOW, GROWTH_MULT_MED, GROWTH_SINGLE_WEEK_CAP,
-    GROWTH_VARIANCE_RAW, INJURY_WEEKS_MAX, INJURY_WEEKS_MIN, W_IMP, W_KEY,
+    GROWTH_VARIANCE_RAW, INJURY_LIFESTYLE_X10_BALANCED, INJURY_LIFESTYLE_X10_FLASHY,
+    INJURY_LIFESTYLE_X10_PRO, INJURY_WEEKS_MAX, INJURY_WEEKS_MIN, LIFESTYLE_CEILING_BALANCED,
+    LIFESTYLE_CEILING_FLASHY, LIFESTYLE_CEILING_PRO, W_IMP, W_KEY,
 };
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -102,6 +105,7 @@ pub fn advance_week(
     pc_id: PlayerId,
     routine: &Routine,
     facilities_mult: Fixed,
+    lifestyle: u8,
     rng: &mut impl RngSource,
 ) -> Vec<DevelopmentEvent> {
     let mut events: Vec<DevelopmentEvent> = Vec::new();
@@ -135,7 +139,7 @@ pub fn advance_week(
     players.set_energy(pc_id, new_energy);
 
     // ── Injury check ─────────────────────────────────────────────────────────
-    let inj_prob = injury_prob(new_energy, intensity, age_years);
+    let inj_prob = injury_prob(new_energy, intensity, age_years, lifestyle);
     if rng.next_range_u64(0, 999) < inj_prob as u64 {
         let dur = rng.next_range_u8(INJURY_WEEKS_MIN, INJURY_WEEKS_MAX) as u32;
         players.set_injury_weeks(pc_id, dur);
@@ -169,12 +173,14 @@ pub fn advance_week(
         let growth = (base + Fixed::raw(variance_raw)).clamp(Fixed::ZERO, GROWTH_SINGLE_WEEK_CAP);
 
         let cur = players.get_current(pc_id, a);
-        let pot = players.get_potential(pc_id, a);
+        // Effective ceiling: a flashy lifestyle burns a little of the potential, so
+        // the player never quite reaches the top (still ≤ potential — pillar §2.4).
+        let pot = players.get_potential(pc_id, a) * lifestyle_ceiling(lifestyle);
         players.set_current(pc_id, a, (cur + growth).clamp(Fixed::MIN_ATTR, pot));
     }
 
     // ── Passive decay for unfocused physical/technical attrs in older players ─
-    apply_passive_decay(players, pc_id, age_years, &routine.focus_attrs);
+    apply_passive_decay(players, pc_id, age_years, &routine.focus_attrs, lifestyle);
 
     // ── Familiarity XP and tier upgrades ─────────────────────────────────────
     let new_events = update_familiarity(players, pc_id, &routine.focus_attrs);
@@ -186,7 +192,8 @@ pub fn advance_week(
         let attr = routine.focus_attrs[0]; // reward the primary focus attr
         let a = attr as usize;
         let cur = players.get_current(pc_id, a);
-        let pot = players.get_potential(pc_id, a);
+        // Same effective ceiling as training growth — a breakthrough can't exceed it.
+        let pot = players.get_potential(pc_id, a) * lifestyle_ceiling(lifestyle);
         let new_val = (cur + BREAKTHROUGH_BONUS).clamp(Fixed::MIN_ATTR, pot);
         players.set_current(pc_id, a, new_val);
         events.push(DevelopmentEvent::Breakthrough {
@@ -257,7 +264,9 @@ fn apply_passive_decay(
     pc_id: PlayerId,
     age_years: u32,
     _focus_attrs: &[AttrId],
+    lifestyle: u8,
 ) {
+    let decline_mult = lifestyle_decline(lifestyle);
     for (i, &archetype) in ATTR_ARCHETYPES.iter().enumerate() {
         let decay = attr_decay_rate(archetype, age_years);
         if decay == Fixed::ZERO {
@@ -268,7 +277,8 @@ fn apply_passive_decay(
         // Physical attrs, growth_rate is already ZERO after 27, so the two paths
         // are independent — focusing a Physical attr in the 30s does nothing but
         // does not slow its natural decline either.
-        let loss = BASE_DECAY_PER_WEEK * decay;
+        // Lifestyle bends the decline: pro burns out later/gentler, flashy earlier/steeper.
+        let loss = BASE_DECAY_PER_WEEK * decay * decline_mult;
         let cur = players.get_current(pc_id, i);
         // Decay can never reduce below MIN_ATTR.
         players.current[i][pc_id] = (cur - loss).clamp(Fixed::MIN_ATTR, cur);
@@ -276,7 +286,7 @@ fn apply_passive_decay(
 }
 
 /// Injury probability per 1 000 rolls.
-fn injury_prob(energy: Fixed, intensity: Intensity, age_years: u32) -> u32 {
+fn injury_prob(energy: Fixed, intensity: Intensity, age_years: u32, lifestyle: u8) -> u32 {
     // Fatigue multiplier: 1.0 at full, 3.0 at 0 energy.
     let energy_pct = energy.to_int().clamp(0, 100) as u32;
     let fatigue_x10 = 10 + 20 * (100 - energy_pct) / 100;
@@ -294,7 +304,38 @@ fn injury_prob(energy: Fixed, intensity: Intensity, age_years: u32) -> u32 {
         _ => 16,
     };
 
-    BASE_INJURY_PER_1000 * fatigue_x10 * intensity_x10 * age_x10 / 1_000
+    // Lifestyle multiplier (×10): a flashy lifestyle gets hurt more, a pro less.
+    // Balanced is 10 (×1.0), so the divisor restores the pre-lifestyle baseline.
+    let lifestyle_x10 = lifestyle_injury_x10(lifestyle);
+
+    BASE_INJURY_PER_1000 * fatigue_x10 * intensity_x10 * age_x10 * lifestyle_x10 / 10_000
+}
+
+/// Injury-risk multiplier (×10) for a lifestyle (0=Pro, 2=Flashy, else Balanced).
+fn lifestyle_injury_x10(lifestyle: u8) -> u32 {
+    match lifestyle {
+        0 => INJURY_LIFESTYLE_X10_PRO,
+        2 => INJURY_LIFESTYLE_X10_FLASHY,
+        _ => INJURY_LIFESTYLE_X10_BALANCED,
+    }
+}
+
+/// Effective ceiling factor (fraction of potential reachable) for a lifestyle.
+fn lifestyle_ceiling(lifestyle: u8) -> Fixed {
+    match lifestyle {
+        0 => LIFESTYLE_CEILING_PRO,
+        2 => LIFESTYLE_CEILING_FLASHY,
+        _ => LIFESTYLE_CEILING_BALANCED,
+    }
+}
+
+/// Age-decline multiplier for a lifestyle: a pro declines gentler, a flashy steeper.
+fn lifestyle_decline(lifestyle: u8) -> Fixed {
+    match lifestyle {
+        0 => DECLINE_LIFESTYLE_PRO,
+        2 => DECLINE_LIFESTYLE_FLASHY,
+        _ => DECLINE_LIFESTYLE_BALANCED,
+    }
 }
 
 /// Energy factor on growth: 1.0 at full, 0.6 at empty.
@@ -365,7 +406,6 @@ mod tests {
     use crate::attrs::NUM_ATTRS;
     use crate::generation::{generate_player, CreationChoices, Position};
     use crate::player::PlayerStore;
-    use crate::roles::NUM_ROLES;
     use goat_rng::GoatRng;
 
     fn make_store_with_player(seed: u64, position: Position) -> (PlayerStore, PlayerId) {
@@ -394,7 +434,7 @@ mod tests {
         let routine = fwd_routine();
         let mut rng = GoatRng::new(42);
         for _ in 0..200 {
-            advance_week(&mut store, id, &routine, Fixed::ONE, &mut rng);
+            advance_week(&mut store, id, &routine, Fixed::ONE, 1, &mut rng);
             let e = store.get_energy(id);
             assert!(e >= Fixed::ZERO, "energy below 0");
             assert!(e <= Fixed::from_int(100), "energy above 100");
@@ -407,7 +447,7 @@ mod tests {
         let routine = fwd_routine();
         let mut rng = GoatRng::new(99);
         for _ in 0..500 {
-            advance_week(&mut store, id, &routine, Fixed::ONE, &mut rng);
+            advance_week(&mut store, id, &routine, Fixed::ONE, 1, &mut rng);
         }
         for a in 0..NUM_ATTRS {
             assert!(
@@ -426,7 +466,7 @@ mod tests {
         };
         let mut rng = GoatRng::new(1);
         for _ in 0..1_000 {
-            advance_week(&mut store, id, &routine, Fixed::ONE, &mut rng);
+            advance_week(&mut store, id, &routine, Fixed::ONE, 1, &mut rng);
             for a in 0..NUM_ATTRS {
                 let c = store.get_current(id, a);
                 assert!(c >= Fixed::MIN_ATTR, "attr {a} below 1");
@@ -445,7 +485,7 @@ mod tests {
         };
         let mut rng = GoatRng::new(5);
         for _ in 0..20 {
-            advance_week(&mut store, id, &routine_high, Fixed::ONE, &mut rng);
+            advance_week(&mut store, id, &routine_high, Fixed::ONE, 1, &mut rng);
         }
         let drained_energy = store.get_energy(id);
 
@@ -455,7 +495,7 @@ mod tests {
             intensity: Intensity::Low,
         };
         for _ in 0..10 {
-            advance_week(&mut store, id, &routine_rest, Fixed::ONE, &mut rng);
+            advance_week(&mut store, id, &routine_rest, Fixed::ONE, 1, &mut rng);
         }
         let recovered_energy = store.get_energy(id);
         assert!(
@@ -480,13 +520,13 @@ mod tests {
             intensity: Intensity::Low,
         };
         for _ in 0..(14 * 52) {
-            advance_week(&mut store, id, &age_routine, Fixed::ONE, &mut rng);
+            advance_week(&mut store, id, &age_routine, Fixed::ONE, 1, &mut rng);
         }
         let acc_at_30 = store.get_current(id, AttrId::Acceleration as usize);
 
         // Age another 8 years with physical unfocused
         for _ in 0..(8 * 52) {
-            advance_week(&mut store, id, &routine, Fixed::ONE, &mut rng);
+            advance_week(&mut store, id, &routine, Fixed::ONE, 1, &mut rng);
         }
         let acc_at_38 = store.get_current(id, AttrId::Acceleration as usize);
 

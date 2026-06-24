@@ -223,7 +223,7 @@ fn twenty_seasons_full_career_no_panic() {
         let table = Table::from_raw(&state.table_raw, &div_clubs);
         let pos = table.position_of(pc_club_id);
         assert!(
-            pos >= 1 && pos <= 16,
+            (1..=16).contains(&pos),
             "s{season}: position {pos} out of range"
         );
         season_positions.push(pos);
@@ -374,7 +374,7 @@ fn five_headless_seasons_no_panic() {
 
         let table = Table::from_raw(&state.table_raw, &div_clubs);
         let pos = table.position_of(pc_club_id);
-        assert!(pos >= 1 && pos <= 16, "position {pos} out of range");
+        assert!((1..=16).contains(&pos), "position {pos} out of range");
         final_positions.push(pos);
 
         // Attr invariants hold mid-career.

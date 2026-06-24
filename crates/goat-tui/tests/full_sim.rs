@@ -123,7 +123,7 @@ fn assert_invariants(state: &WorldState, label: &str) {
     );
     let form = state.pc_form.to_int();
     assert!(
-        form >= 0 && form <= 100,
+        (0..=100).contains(&form),
         "{label}: form out of range: {form}"
     );
 }
@@ -430,18 +430,17 @@ fn talent_ceiling_never_violated() {
         state = run_one_season(state, Position::Forward, &lib);
         state = end_season(state);
 
-        for a in 0..NUM_ATTRS {
+        for (a, &ceiling) in ceilings.iter().enumerate() {
             let cur = state.players.get_current(pc_id, a);
             // Potential must also never shrink.
             let pot = state.players.get_potential(pc_id, a);
             assert_eq!(
-                pot, ceilings[a],
+                pot, ceiling,
                 "s{season}: potential for attr {a} changed — ceilings are immutable"
             );
             assert!(
-                cur <= ceilings[a],
-                "s{season}: attr {a} cur({cur:?}) > ceiling({:?})",
-                ceilings[a]
+                cur <= ceiling,
+                "s{season}: attr {a} cur({cur:?}) > ceiling({ceiling:?})"
             );
         }
     }

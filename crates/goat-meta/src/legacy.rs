@@ -120,6 +120,25 @@ pub fn compute_axes(ev: &LegacyEvidence) -> LegacyAxes {
     }
 }
 
+/// The Icon legacy axis (0–100) from a career's off-pitch life (Phase 10): marketability
+/// and Character reputation set the base, a high sponsor profile lifts fame, and a
+/// bankrupt ex-star is a cautionary Icon tale. A "neutral" career (marketability 50,
+/// character 50, no sponsor, solvent) returns exactly 50 — matching the old `STUB_50`, so
+/// callers that don't supply off-pitch data are unaffected. `compute_axes` is unchanged,
+/// so the frozen `golden_legacy` axis values do not move; the verdict screen substitutes
+/// this richer Icon axis when rendering the ending.
+pub fn icon_axis(
+    marketability: i32,
+    character_rep: i32,
+    sponsor_tier: u8,
+    bankrupt: bool,
+) -> Fixed {
+    let base = (marketability.clamp(0, 100) + character_rep.clamp(0, 100)) / 2;
+    let fame = (sponsor_tier.min(3) as i32) * 8; // a global sponsor profile = +24 fame
+    let bankruptcy = if bankrupt { 20 } else { 0 };
+    Fixed::from_int((base + fame - bankruptcy).clamp(0, 100))
+}
+
 /// Axis names for TUI display, indexed by LegacyAxes::as_array() order.
 pub const AXIS_NAMES: [&str; 8] = [
     "Winning",

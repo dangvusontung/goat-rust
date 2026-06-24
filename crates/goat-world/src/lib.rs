@@ -5,8 +5,12 @@
 //! This crate depends on `goat-core` but is NOT depended on by it.
 //! The TUI links goat-world and goat-core together; goat-core stays headless.
 
+pub mod batch_tick;
 pub mod calendar;
 pub mod fixtures;
+pub mod history;
+pub mod population;
+pub mod rival;
 pub mod season;
 pub mod world;
 

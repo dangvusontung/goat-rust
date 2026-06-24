@@ -145,7 +145,7 @@ mod tests {
 
     #[test]
     fn sample_season_windows_do_not_overlap() {
-        let windows = vec![
+        let windows = [
             CalendarWindow {
                 kind: WindowKind::InternationalBreak,
                 start_day: 30,
