@@ -106,7 +106,7 @@ fn run_new_game(
 ) {
     writeln!(out, "\n--- CREATE YOUR PLAYER ---").unwrap();
     let name = {
-        let s = prompt(lines, out, "Player name");
+        let s = prompt_or_exit(lines, out, "Player name");
         if s.trim().is_empty() {
             "Unnamed Legend".to_string()
         } else {
@@ -119,7 +119,7 @@ fn run_new_game(
         writeln!(out, "  {}. {}", i + 1, p.name()).unwrap();
     }
     let primary_position = loop {
-        let s = prompt(
+        let s = prompt_or_exit(
             lines,
             out,
             &format!("Choice [1-{}]", PrimaryPosition::ALL.len()),
@@ -140,7 +140,7 @@ fn run_new_game(
     // Pick nation
     writeln!(out, "\nPick a nation:\n  1. England\n  2. Brazil").unwrap();
     let nation_idx: usize = loop {
-        match prompt(lines, out, "Choice [1-2]").trim() {
+        match prompt_or_exit(lines, out, "Choice [1-2]").trim() {
             "1" => break 0, // England = DIV_ENG_TOP / DIV_ENG_SEC
             "2" => break 2, // Brazil = DIV_BRA_TOP / DIV_BRA_SEC
             _ => writeln!(out, "  Please enter 1 or 2.").unwrap(),
@@ -157,7 +157,7 @@ fn run_new_game(
     )
     .unwrap();
     let div_idx: usize = loop {
-        match prompt(lines, out, "Choice [1-2]").trim() {
+        match prompt_or_exit(lines, out, "Choice [1-2]").trim() {
             "1" => break div_a,
             "2" => break div_b,
             _ => writeln!(out, "  Please enter 1 or 2.").unwrap(),
@@ -173,7 +173,7 @@ fn run_new_game(
         writeln!(out, "  {:2}. {:<22} {}", i + 1, club.name, stars).unwrap();
     }
     let club_pos: usize = loop {
-        let s = prompt(lines, out, &format!("Choice [1-{}]", CLUBS_PER_DIV));
+        let s = prompt_or_exit(lines, out, &format!("Choice [1-{}]", CLUBS_PER_DIV));
         if let Ok(n) = s.trim().parse::<usize>() {
             if (1..=CLUBS_PER_DIV).contains(&n) {
                 break n - 1;
@@ -185,7 +185,7 @@ fn run_new_game(
     let club = &CLUBS[club_id];
 
     let seed = loop {
-        let s = prompt(lines, out, "Seed (Enter = random)");
+        let s = prompt_or_exit(lines, out, "Seed (Enter = random)");
         if s.trim().is_empty() {
             use std::time::{SystemTime, UNIX_EPOCH};
             break SystemTime::now()
@@ -263,7 +263,11 @@ fn run_new_game(
                     let mut rng = GoatRng::new(effective_seed);
                     effective_seed = rng.next_u64();
                 }
-                _ => return,
+                "Q" | "QUIT" => return,
+                // Only an explicit Q/QUIT discards the in-progress character — a
+                // blank Enter or any other stray input reprompts instead of
+                // silently dropping back to the title screen.
+                _ => writeln!(out, "  Please choose S, R, or Q.").unwrap(),
             },
             _ => return,
         }
@@ -416,13 +420,25 @@ fn run_game_loop(
             Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                 "Q" | "QUIT" => return,
                 "W" => {
+                    // The reducer no-ops a second `W` in the same fixture round
+                    // (`pc_week_training_done` gate) — snapshot the flag first so we
+                    // can tell the player instead of silently redrawing the same state.
+                    let already_trained = state.pc_week_training_done;
                     state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(week_rng_seed));
-                    display_events(out, &state.last_week_events);
-                    display_flashpoints(out, &state.last_week_flashpoints);
+                    if already_trained {
+                        writeln!(
+                            out,
+                            "  You've already trained this week — Play or Skip this round's match to continue."
+                        )
+                        .unwrap();
+                    } else {
+                        display_events(out, &state.last_week_events);
+                        display_flashpoints(out, &state.last_week_flashpoints);
+                    }
                 }
                 "F" => {
                     let n = loop {
-                        let s = prompt(lines, out, "Advance how many weeks?");
+                        let s = prompt_or_exit(lines, out, "Advance how many weeks?");
                         if let Ok(n) = s.trim().parse::<u32>() {
                             break n;
                         }
@@ -462,7 +478,7 @@ fn run_game_loop(
                     };
                     render_player_sheet(out, &view, &choices, 0, state.pc_lifestyle);
                 }
-                _ => {}
+                _ => writeln!(out, "  Unrecognized command.").unwrap(),
             },
             _ => return,
         }
@@ -936,6 +952,18 @@ fn render_legacy_screen(out: &mut impl Write, ev: &LegacyEvidence, state: &World
     }
     writeln!(out, "╚══════════════════════════════════════════════╝").unwrap();
     let _ = pc_name;
+
+    // Career totals/Pantheon scores are batched at season end (docs/CALENDAR.md's
+    // season-boundary pipeline) — mid-season they're intentionally frozen, but
+    // nothing told the player that (playtest finding).
+    if state.season_round < ROUNDS_PER_SEASON as u32 {
+        writeln!(
+            out,
+            "  (Career totals and Pantheon scores update at season end — Round {}/{} so far.)",
+            state.season_round, ROUNDS_PER_SEASON
+        )
+        .unwrap();
+    }
 }
 
 fn run_awards_and_pundits(
@@ -1428,7 +1456,7 @@ fn run_set_routine(
     writeln!(out).unwrap();
 
     let focus_attrs = {
-        let s = prompt(lines, out, "Attr numbers (e.g. 1,7,9) or Enter to clear");
+        let s = prompt_or_exit(lines, out, "Attr numbers (e.g. 1,7,9) or Enter to clear");
         if s.trim().is_empty() {
             vec![]
         } else {
@@ -1442,7 +1470,7 @@ fn run_set_routine(
     };
 
     writeln!(out, "Intensity:  1. Low   2. Medium (default)   3. High").unwrap();
-    let intensity_input = prompt(lines, out, "Choice [1-3]");
+    let intensity_input = prompt_or_exit(lines, out, "Choice [1-3]");
     let intensity = match intensity_input.trim() {
         "1" => Intensity::Low,
         "3" => Intensity::High,
@@ -1465,10 +1493,75 @@ fn run_set_routine(
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
+/// Interior width of the standard box (matching the `╔══...══╗` borders, which
+/// are 48 columns total: 1 border char + 46 interior + 1 border char).
+const BOX_WIDTH: usize = 46;
+
+/// Truncate `text` to at most `max_chars` *characters* (not bytes — multi-byte
+/// glyphs like emoji or accented letters must count as one), breaking at the
+/// last word boundary within budget rather than mid-word, and appending `…`
+/// when truncation actually occurred.
+fn truncate_ellipsis(text: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max_chars {
+        return text.to_string();
+    }
+    let budget = max_chars.saturating_sub(1).max(1);
+    let mut cut = budget;
+    while cut > 0 && !chars[cut - 1].is_whitespace() {
+        cut -= 1;
+    }
+    if cut == 0 {
+        cut = budget; // no word boundary within budget — hard cut
+    }
+    let mut truncated: String = chars[..cut].iter().collect();
+    while truncated.ends_with(' ') {
+        truncated.pop();
+    }
+    format!("{truncated}…")
+}
+
+/// Write one line of box content, clamping/padding it to the box's fixed
+/// interior width (`BOX_WIDTH`) so every line closes with a matching `║` —
+/// truncating with `…` at a word boundary when content overflows, padding
+/// with spaces when it's short. Counts by `chars()`, not byte length, so
+/// emoji/accents don't throw off alignment.
+fn box_line(out: &mut impl Write, content: &str) {
+    let clamped = truncate_ellipsis(content, BOX_WIDTH);
+    let pad = BOX_WIDTH.saturating_sub(clamped.chars().count());
+    writeln!(out, "║{clamped}{}║", " ".repeat(pad)).unwrap();
+}
+
+/// Wrap pre-formatted `items` across as many box lines as needed (starting
+/// with `prefix`, continuation lines indented two spaces) so that a variable
+/// number of items — e.g. up to 4 training-focus attrs — never gets silently
+/// dropped just to fit one line, the way a hard `.take(3)` would.
+fn box_lines_wrapped(out: &mut impl Write, prefix: &str, items: &[String], sep: &str) {
+    let mut line = prefix.to_string();
+    let mut any_on_line = false;
+    for item in items {
+        let would_be = line.chars().count()
+            + if any_on_line { sep.chars().count() } else { 0 }
+            + item.chars().count();
+        if any_on_line && would_be > BOX_WIDTH {
+            box_line(out, &line);
+            line = String::from("  ");
+            any_on_line = false;
+        }
+        if any_on_line {
+            line.push_str(sep);
+        }
+        line.push_str(item);
+        any_on_line = true;
+    }
+    box_line(out, &line);
+}
+
 fn render_game_sheet(out: &mut impl Write, view: &PlayerView, state: &WorldState) {
     let age_y = view.age_weeks / 52;
     let age_w = view.age_weeks % 52;
-    let energy_bars = (view.energy.to_int() / 10) as usize;
+    let energy_pct = view.energy.to_int().clamp(0, 100);
+    let energy_bars = (energy_pct / 10) as usize;
     let energy_bar = format!(
         "{}{}",
         "█".repeat(energy_bars),
@@ -1482,69 +1575,76 @@ fn render_game_sheet(out: &mut impl Write, view: &PlayerView, state: &WorldState
     };
 
     writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
-    writeln!(
+    box_line(
         out,
-        "║  {}  Age {}y{}w  Energy {}{}",
-        view.name, age_y, age_w, energy_bar, injury_str
-    )
-    .unwrap();
+        &format!("  {}  Age {}y{}w{injury_str}", view.name, age_y, age_w),
+    );
+    box_line(out, &format!("  Energy {energy_bar} {energy_pct}%"));
 
     if state.season_number > 0 {
         let round = state.season_round + 1; // 1-indexed: next round to play, matches the match header
         let total = ROUNDS_PER_SEASON as u32;
         let club_name = CLUBS[state.pc_club_idx as usize].name;
-        let susp_str = if state.pc_suspension_weeks > 0 {
-            format!("  SUSPENDED({})", state.pc_suspension_weeks)
-        } else {
-            String::new()
-        };
         let disc_label = match state.pc_discipline_rep {
             0..=30 => "Clean",
             31..=60 => "Neutral",
             61..=80 => "Combative",
             _ => "Enforcer",
         };
-        writeln!(
+        box_line(
             out,
-            "║  S{}  Round {}/{}  {}  Form:{}  Disc:{} 🟨{}{}",
-            state.season_number,
-            round,
-            total,
-            club_name,
-            state.pc_form.to_int(),
-            disc_label,
-            state.pc_yellow_cards_season,
-            susp_str
-        )
-        .unwrap();
+            &format!(
+                "  S{} Round {}/{}  {}",
+                state.season_number, round, total, club_name
+            ),
+        );
+        box_line(
+            out,
+            &format!(
+                "  Form:{}  Disc:{} 🟨{} (cards)",
+                state.pc_form.to_int(),
+                disc_label,
+                state.pc_yellow_cards_season,
+            ),
+        );
+        if state.pc_suspension_weeks > 0 {
+            box_line(
+                out,
+                &format!("  SUSPENDED ({} match(es) left)", state.pc_suspension_weeks),
+            );
+        }
     }
 
-    // Routine summary
-    let routine_str = if state.pc_routine.focus_attrs.is_empty() {
-        "No focus".to_string()
+    // Routine summary — wrapped so up to 4 focus attrs never get truncated
+    // away just because their names happen to be long.
+    let mut routine_items: Vec<String> = if state.pc_routine.focus_attrs.is_empty() {
+        vec!["No focus".to_string()]
     } else {
+        let n = state.pc_routine.focus_attrs.len();
         state
             .pc_routine
             .focus_attrs
             .iter()
-            .map(|&a| {
-                ATTR_NAMES[a as usize]
+            .enumerate()
+            .map(|(idx, &a)| {
+                let name = ATTR_NAMES[a as usize]
                     .split_whitespace()
                     .next()
-                    .unwrap_or("?")
+                    .unwrap_or("?");
+                if idx + 1 < n {
+                    format!("{name},")
+                } else {
+                    name.to_string()
+                }
             })
-            .collect::<Vec<_>>()
-            .join(", ")
+            .collect()
     };
-    writeln!(
-        out,
-        "║  Routine: {} [{}]",
-        routine_str,
-        state.pc_routine.intensity.name()
-    )
-    .unwrap();
+    routine_items.push(format!("[{}]", state.pc_routine.intensity.name()));
+    box_lines_wrapped(out, "  Routine: ", &routine_items, " ");
 
-    // Last week growth
+    // Last week growth. `to_int()` truncates toward zero, which is 0 for
+    // essentially every real week (base growth is sub-1.0/week) — display the
+    // raw Fixed value as a decimal instead so real growth is visible.
     let had_growth = state.last_week_growth.iter().any(|&g| g != Fixed::ZERO);
     if had_growth {
         let mut v: Vec<_> = state
@@ -1554,35 +1654,35 @@ fn render_game_sheet(out: &mut impl Write, view: &PlayerView, state: &WorldState
             .filter(|(_, &g)| g > Fixed::ZERO)
             .collect();
         v.sort_by_key(|&(_, &g)| Reverse(g));
-        let growth_str = v
+        let items: Vec<String> = v
             .into_iter()
-            .take(3)
             .map(|(i, &g)| {
                 format!(
                     "{} +{:.1}",
                     ATTR_NAMES[i].split_whitespace().next().unwrap_or("?"),
-                    g.to_int()
+                    g.to_raw() as f64 / 1000.0
                 )
             })
-            .collect::<Vec<_>>()
-            .join("  ");
-        writeln!(out, "║  Last week: {growth_str}").unwrap();
+            .collect();
+        box_lines_wrapped(out, "  Last week: ", &items, "  ");
     }
 
     let fam = derive_attrs(&view.current);
     let player_ovr = ovr(&view.current, view.primary_position);
-    writeln!(
+    let family_items = vec![
+        format!("Pac:{}", fam.pace.to_int()),
+        format!("Sho:{}", fam.shooting.to_int()),
+        format!("Pas:{}", fam.passing.to_int()),
+        format!("Dri:{}", fam.dribbling.to_int()),
+        format!("Def:{}", fam.defending.to_int()),
+        format!("Phy:{}", fam.physical.to_int()),
+    ];
+    box_lines_wrapped(
         out,
-        "║  OVR {:<3}  Pac:{:<3} Sho:{:<3} Pas:{:<3} Dri:{:<3} Def:{:<3} Phy:{:<3}",
-        player_ovr.to_int(),
-        fam.pace.to_int(),
-        fam.shooting.to_int(),
-        fam.passing.to_int(),
-        fam.dribbling.to_int(),
-        fam.defending.to_int(),
-        fam.physical.to_int()
-    )
-    .unwrap();
+        &format!("  OVR {}  ", player_ovr.to_int()),
+        &family_items,
+        " ",
+    );
     writeln!(out, "╚══════════════════════════════════════════════╝").unwrap();
 }
 
@@ -1605,6 +1705,7 @@ fn render_player_sheet(
         format!("{}  OVR {}", player.name, player_ovr.to_int())
     )
     .unwrap();
+    box_line(out, "  OVR is position-weighted, not a simple avg.");
     writeln!(out, "╠══════════════════════════════════════════════╣").unwrap();
     if seed > 0 {
         writeln!(
@@ -1614,12 +1715,13 @@ fn render_player_sheet(
             seed
         )
         .unwrap();
-        writeln!(
+        box_line(
             out,
-            "║  Nationality: {:<10}  Club: {:<14}║",
-            choices.nationality, choices.club
-        )
-        .unwrap();
+            &format!(
+                "  Nationality: {}  Club: {}",
+                choices.nationality, choices.club
+            ),
+        );
     }
     // Lifestyle is a read-only, emergent readout (bible §8.6) — never a menu pick.
     let lifestyle_label = match lifestyle {
@@ -1826,7 +1928,7 @@ fn read_choice(
     n_choices: usize,
 ) -> usize {
     loop {
-        let s = prompt(lines, out, "Your choice");
+        let s = prompt_or_exit(lines, out, "Your choice");
         if let Ok(n) = s.trim().parse::<usize>() {
             if n >= 1 && n <= n_choices {
                 return n - 1;
@@ -1876,25 +1978,42 @@ fn render_match_result(out: &mut impl Write, result: &MatchResult, opp: &str) {
                 }
             }
         };
-        writeln!(
-            out,
-            "║  {icon} {}'  {}",
-            m.minute,
-            m.outcome_text.chars().take(38).collect::<String>()
-        )
-        .unwrap();
+        box_line(out, &format!("  {icon} {}'  {}", m.minute, m.outcome_text));
     }
     writeln!(out, "╚══════════════════════════════════════════════╝").unwrap();
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
+/// Read one line of input, distinguishing a genuine blank Enter (`Some(String::new())`)
+/// from stdin EOF (`None`) — the two must never be conflated, or a closed pipe
+/// looks identical to "bad input" and a reprompt loop spins forever.
 fn prompt(
     lines: &mut impl Iterator<Item = io::Result<String>>,
     out: &mut impl Write,
     label: &str,
-) -> String {
+) -> Option<String> {
     write!(out, "  {label}: ").unwrap();
     out.flush().unwrap();
-    lines.next().and_then(|r| r.ok()).unwrap_or_default()
+    match lines.next() {
+        Some(Ok(l)) => Some(l),
+        _ => None,
+    }
+}
+
+/// `prompt()`, treating stdin EOF like an explicit quit: no more input will
+/// ever arrive on a closed pipe, so reprompting would hang the process forever.
+fn prompt_or_exit(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+    label: &str,
+) -> String {
+    match prompt(lines, out, label) {
+        Some(s) => s,
+        None => {
+            writeln!(out, "\n  No more input — exiting.").unwrap();
+            out.flush().unwrap();
+            std::process::exit(0);
+        }
+    }
 }
