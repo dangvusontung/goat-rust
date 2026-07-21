@@ -4,7 +4,8 @@
 
 use goat_core::{
     attrs::NUM_ATTRS,
-    generation::{generate_player, CreationChoices, Position},
+    generation::{generate_player, CreationChoices},
+    positions::PrimaryPosition,
     roles::RoleId,
 };
 use goat_fixed::Fixed;
@@ -22,7 +23,7 @@ fn lib() -> BeatLibrary {
 fn forward_attrs() -> [Fixed; NUM_ATTRS] {
     let c = CreationChoices {
         name: "Test".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "Brazilian",
         club: "Riverside Town",
     };
@@ -32,7 +33,7 @@ fn forward_attrs() -> [Fixed; NUM_ATTRS] {
 fn forward_fam() -> [goat_core::roles::FamiliarityTier; goat_core::roles::NUM_ROLES] {
     let c = CreationChoices {
         name: "Test".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "Brazilian",
         club: "Riverside Town",
     };

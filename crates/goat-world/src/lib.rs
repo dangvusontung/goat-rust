@@ -15,8 +15,9 @@ pub mod season;
 pub mod world;
 
 pub use calendar::{
-    format_match_date, format_week_header, is_break_week, match_date, round_to_week,
-    week_to_rounds, BASE_CAREER_YEAR, SEASON_CALENDAR_WEEKS, WEEK_MATCH_COUNTS,
+    format_match_date, format_week_header, is_break_week, match_date, rest_weeks_after_round,
+    round_to_week, week_ends_after_round, week_to_rounds, BASE_CAREER_YEAR, SEASON_CALENDAR_WEEKS,
+    WEEK_MATCH_COUNTS,
 };
 pub use fixtures::{
     fixture_for_round, fixtures_for_club, generate_fixtures, round_fixtures, Fixture,

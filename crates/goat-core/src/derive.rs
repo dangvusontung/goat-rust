@@ -248,10 +248,11 @@ mod tests {
     /// OVR diversity: different seeds → different OVRs.
     #[test]
     fn ovr_diversity_across_seeds() {
-        use crate::generation::{generate_player, CreationChoices, Position};
+        use crate::generation::{generate_player, CreationChoices};
+        use crate::positions::PrimaryPosition;
         let c = CreationChoices {
             name: "T".into(),
-            position: Position::Forward,
+            primary_position: PrimaryPosition::ST,
             nationality: "English",
             club: "Local FC",
         };

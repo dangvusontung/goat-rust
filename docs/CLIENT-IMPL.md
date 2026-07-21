@@ -139,16 +139,23 @@ creation. See `ClubDto`.
 | Param | Type | Values |
 |---|---|---|
 | `player_name` | `String` | Any non-empty string |
-| `position` | `u8` | `0`=Defender `1`=Midfielder `2`=Forward |
+| `position` | `u8` | `0..7` — one of the 8 specific `PrimaryPosition`s (widened from the old `0..2` broad-family range): `0`=ST `1`=W `2`=WM `3`=CAM `4`=CM `5`=DM `6`=FB `7`=CB. Out-of-range values default to ST. |
 | `club_id` | `u32` | `ClubDto.club_id` from `list_clubs()` |
 | `seed` | `u64` | Any; use `0` for a random feel (pass system time nanos) |
-| `lifestyle` | `u8` | `0`=Professional `1`=Balanced `2`=Flashy |
+| `lifestyle` | `u8` | **Ignored.** Kept only for FFI binary compatibility with the existing `frb_generated.rs` signature. Lifestyle is now derived, not chosen — see the note below. |
 
 Creates a new `WorldState`, generates the player from the seed, initialises the world
 and peer cohort, and starts Season 1. Returns the initial `GoatGameState`.
 
 **Note:** `nationality` is derived from the club's division; the client does not pass it
 directly.
+
+**Note on lifestyle:** lifestyle (Professional/Balanced/Flashy) is no longer picked at
+creation. It is an emergent readout built up over the career from training intensity,
+dev-investment level, and sponsor-tier choices (bible §8.5/§8.6). There is no
+`set_lifestyle` call — read the current tier from the existing `lifestyle` field on
+`GoatGameState` (unchanged: `0`=Professional `1`=Balanced `2`=Flashy) and render it as a
+read-only status, not a picker.
 
 #### `save_game(path: String) → bool`
 Serializes the current game to disk. Returns true on success. Recommended call point:
@@ -332,7 +339,7 @@ structs except `WeekFixtureDto` inside `week_fixtures`.
 | `energy` | `i32` | 0–100 |
 | `ovr` | `i32` | Best role rating 0–100 |
 | `injury_weeks` | `u32` | 0 = healthy |
-| `position` | `u8` | 0=Def 1=Mid 2=Fwd |
+| `position` | `u8` | 0..7 — `PrimaryPosition`: 0=ST 1=W 2=WM 3=CAM 4=CM 5=DM 6=FB 7=CB |
 | `club_name` | `String` | |
 | `div_name` | `String` | |
 | `nationality` | `String` | |

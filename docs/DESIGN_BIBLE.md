@@ -91,7 +91,7 @@ You make **four choices**. The game rolls **one lottery**.
 | You choose | Effect |
 |---|---|
 | **Name** | Identity / flavor. |
-| **Position** | Biases your rolled potentials toward that position and seeds your starting natural role(s). You pick *what you want to be*; the dice decide *how good you can get*. |
+| **Position** | You pick one of the 8 specific positions (ST, W, WM, CAM, CM, DM, FB, CB — not just a broad family), which shapes your rolled potentials toward that position and seeds your starting natural role(s). You pick *what you want to be*; the dice decide *how good you can get*. |
 | **Nationality** | The difficulty + story dial (see below). Sets your starting region and football pyramid. |
 | **Starting club** | The develop-vs-minutes dial (see below). |
 
@@ -330,7 +330,7 @@ Contracts carry: **wage, length, signing + loyalty bonus, release clause, perfor
 
 ### 8.6 Off-Pitch Life & Lifestyle
 - **Relationships:** a **few key tracked threads** (partner, family, close friends) plus events — *medium depth, not a dating sim*.
-- **Lifestyle strongly affects longevity:** a professional lifestyle extends your peak; partying burns you out early.
+- **Lifestyle is an emergent readout, not a menu pick:** it is built up over the career from your training intensity, dev-investment, and commercial (sponsor) choices — never chosen directly. **Lifestyle strongly affects longevity:** a professional pattern of choices extends your peak; a flashy pattern burns you out early.
 - The **high life is risk/reward:** marketability and money up, scandal risk up.
 - This creates a genuine **identity fork:** the **professional/private** path (longevity, the long quiet legacy) vs. the **flashy/icon** path (cultural footprint, shorter burn). You cannot fully have both.
 

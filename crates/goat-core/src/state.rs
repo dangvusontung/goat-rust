@@ -27,7 +27,8 @@ pub struct WorldState {
     pub pc_routine: Routine,
     pub pc_club: &'static str,
     pub pc_nationality: &'static str,
-    /// Position as u8 (0=Defender, 1=Midfielder, 2=Forward) — saved for load reconstruct.
+    /// `PrimaryPosition as u8` (0..7 — one of the 8 specific positions, e.g. 0=ST, 7=CB;
+    /// see `positions::PrimaryPosition`) — saved for load reconstruct.
     pub pc_position: u8,
     pub last_week_events: Vec<DevelopmentEvent>,
     pub last_week_growth: [Fixed; NUM_ATTRS],
@@ -115,7 +116,14 @@ pub struct WorldState {
     /// Season in which the rivalry was first declared.
     pub pc_rival_declared_season: Option<u32>,
     // ── Phase 10 — lifestyle + retirement ────────────────────────────────────
-    /// 0=Professional, 1=Balanced, 2=Flashy.
+    /// Emergent lifestyle score, signed Fixed in [-1.000, 1.000] (bible §8.5/§8.6).
+    /// Negative = Pro-leaning, positive = Flashy-leaning, 0 = Balanced. Built up weekly
+    /// from training intensity + dev investment, plus a one-off nudge on sponsor signing.
+    /// `pc_lifestyle` below is the cached tier derived from this score each week via
+    /// `lifestyle_tier_from_score` — never set directly.
+    pub pc_lifestyle_score: Fixed,
+    /// Cached tier derived from `pc_lifestyle_score`: 0=Professional, 1=Balanced,
+    /// 2=Flashy. Recomputed at the start of every week tick — read-only elsewhere.
     pub pc_lifestyle: u8,
     /// True once the player has retired.
     pub pc_retired: bool,
@@ -157,7 +165,7 @@ impl WorldState {
             pc_routine: Routine::default(),
             pc_club: "",
             pc_nationality: "",
-            pc_position: 2, // Forward default
+            pc_position: 0, // PrimaryPosition::ST default
             last_week_events: Vec::new(),
             last_week_growth: [Fixed::ZERO; NUM_ATTRS],
             world_seed: 0,
@@ -200,7 +208,8 @@ impl WorldState {
             pc_peers: Vec::new(),
             pc_rival_idx: None,
             pc_rival_declared_season: None,
-            pc_lifestyle: 1, // Balanced
+            pc_lifestyle_score: Fixed::ZERO, // Balanced
+            pc_lifestyle: 1,                 // Balanced
             pc_retired: false,
             pc_current_calendar_week: 0,
             pc_week_training_done: false,
@@ -306,8 +315,9 @@ pub enum Intent {
     DeclareRival { peer_idx: usize, season: u32 },
 
     // ── Phase 10 intents ──────────────────────────────────────────────────────
-    /// Set the lifestyle (0=Professional,1=Balanced,2=Flashy). Done once at career start.
-    SetLifestyle { lifestyle: u8 },
+    // Lifestyle is no longer a settable intent (bible §8.5/§8.6) — it is derived
+    // weekly from `pc_lifestyle_score`, nudged by routine intensity, dev-investment
+    // level (in `tick_one_week`) and sponsor tier (in `SignSponsor` below).
     /// Set the development-investment level 0–3 (ceiling-capped growth multiplier).
     SetDevInvestment { level: u8 },
     /// Move savings into the business/investment portfolio (thousands).
@@ -364,6 +374,16 @@ pub enum Intent {
         /// All match results in the round: (home_div_pos, away_div_pos, home_gf, home_ga).
         /// `div_pos` is the 0-based club index within DIV_CLUBS[pc_div_idx].
         round_results: Vec<(u8, u8, u32, u32)>,
+        /// Break/rest calendar weeks skipped between this round and the next
+        /// (0 within the same or an adjacent week). Computed by the caller from
+        /// goat-world's calendar (`rest_weeks_after_round`); each one elapses as
+        /// a rest week for the PC so the player clock tracks the season calendar.
+        rest_weeks: u32,
+        /// True when this round is the LAST round of its calendar week (computed
+        /// by the caller via `week_ends_after_round`). False means a second
+        /// fixture follows in the SAME week: no time passes and no new training
+        /// session opens until that fixture is played.
+        week_ends: bool,
     },
 }
 
@@ -382,7 +402,8 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             view.injury_weeks = 0;
             let club = choices.club;
             let nationality = choices.nationality;
-            let position = choices.position as u8;
+            // PrimaryPosition as u8 (0..7) — widened from the old 3-way Position (0..2).
+            let position = choices.primary_position as u8;
             let id = state.players.push(view);
             state.pc_player_id = Some(id);
             state.pc_club = club;
@@ -410,7 +431,17 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state
         }
 
-        Intent::AdvanceWeek => tick_one_week(state, rng),
+        Intent::AdvanceWeek => {
+            // One session per calendar week: the flag means "this week's tick has
+            // run" (training or rest). The reducer is the gate, not the UI — a
+            // second train in the same week (e.g. a double-fixture week) is a no-op.
+            if state.pc_week_training_done {
+                return state;
+            }
+            let mut state = tick_one_week(state, rng);
+            state.pc_week_training_done = true;
+            state
+        }
 
         Intent::AdvanceWeeks { n } => {
             // Accumulate calendar flashpoints across the skipped weeks so a window that
@@ -425,6 +456,9 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 }
             }
             state.last_week_flashpoints = all_flashpoints;
+            if n > 0 {
+                state.pc_week_training_done = true;
+            }
             state
         }
 
@@ -606,7 +640,10 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
         }
 
         Intent::SignSponsor { tier } => {
-            use crate::tuning::{OVERCOMMERCIAL_REP_PENALTY, SPONSOR_TIER_THRESHOLDS};
+            use crate::tuning::{
+                LIFESTYLE_NUDGE_PER_SPONSOR_TIER, LIFESTYLE_SCORE_MAX, LIFESTYLE_SCORE_MIN,
+                OVERCOMMERCIAL_REP_PENALTY, SPONSOR_TIER_THRESHOLDS,
+            };
             let tier = tier.min(3);
             if tier == 0 {
                 state.pc_sponsor_tier = 0;
@@ -620,6 +657,11 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 if state.pc_sporting_rep < needed {
                     state.pc_sporting_rep -= OVERCOMMERCIAL_REP_PENALTY;
                 }
+                // One-off lifestyle nudge (bible §8.5): more commercial exposure leans
+                // Flashy, proportional to tier.
+                state.pc_lifestyle_score = (state.pc_lifestyle_score
+                    + LIFESTYLE_NUDGE_PER_SPONSOR_TIER * Fixed::from_int(tier as i32))
+                .clamp(LIFESTYLE_SCORE_MIN, LIFESTYLE_SCORE_MAX);
             }
             state
         }
@@ -692,11 +734,6 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
         }
 
         // ── Phase 10 handlers ────────────────────────────────────────────────────
-        Intent::SetLifestyle { lifestyle } => {
-            state.pc_lifestyle = lifestyle.min(2);
-            state
-        }
-
         Intent::Retire => {
             state.pc_retired = true;
             state
@@ -745,6 +782,18 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_yellow_cards_season = 0; // reset yellow cards each season
                                               // Preserve table from last season? No — start fresh each season.
             state.table_raw = [0u32; 80];
+
+            // ── Off-season back-fill: every season-year is exactly 52 weeks ──
+            // In-season play ticks ~41 weeks (one per round + skipped breaks);
+            // the remainder elapses here as rest weeks, so at the start of
+            // season N the invariant holds: age == START_AGE + (N−1)·52.
+            if let Some(pc_id) = state.pc_player_id {
+                let target = START_AGE_WEEKS + (state.season_number - 1) * 52;
+                while state.players.get_age_weeks(pc_id) < target {
+                    state = tick_one_rest_week(state);
+                }
+                state.pc_week_training_done = false;
+            }
             state
         }
 
@@ -753,7 +802,34 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             pc_output,
             pc_result,
             round_results,
+            rest_weeks,
+            week_ends,
         } => {
+            // ── Suspension serves one match per round resolved (bible AC-06: a
+            // ban counts down by matches actually played, not by elapsed days) ──
+            if state.pc_suspension_weeks > 0 {
+                state.pc_suspension_weeks -= 1;
+            }
+
+            // ── Time passes: the season calendar drives the player clock ─────
+            // Exactly one tick per calendar week: the match week elapses even if
+            // the player never trained in it, and any skipped break weeks before
+            // the next round elapse as rest. Between two fixtures of the SAME
+            // week no time passes — the flag stays set so the week can neither
+            // tick again nor open a second training session.
+            if state.pc_player_id.is_some() {
+                if !state.pc_week_training_done {
+                    state = tick_one_rest_week(state);
+                }
+                if week_ends {
+                    for _ in 0..rest_weeks {
+                        state = tick_one_rest_week(state);
+                    }
+                    state.pc_week_training_done = false;
+                } else {
+                    state.pc_week_training_done = true;
+                }
+            }
             const N: usize = 16; // CLUBS_PER_DIV
 
             // Update PC season stats.
@@ -822,11 +898,44 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
     }
 }
 
+/// One REST week: time passes without a training session (untrained match
+/// weeks, break weeks, off-season). Age/injury/energy/decay run via
+/// `week::advance_rest_week`; the live calendar engine still ticks 7 days so
+/// flashpoint windows stay date-aligned. Deterministic — no RNG.
+///
+/// Guarded by the season age cap (START_AGE + season·52) so pathological
+/// fast-forwarding can never compound with rest back-fill past a season-year.
+fn tick_one_rest_week(mut state: WorldState) -> WorldState {
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return state,
+    };
+    let cap = START_AGE_WEEKS + state.season_number * 52;
+    if state.players.get_age_weeks(pc_id) >= cap {
+        return state;
+    }
+
+    crate::week::advance_rest_week(&mut state.players, pc_id, state.pc_lifestyle);
+
+    let (new_epoch, flashpoints) = advance_calendar_week(state.pc_epoch_day, state.world_seed);
+    state.pc_epoch_day = new_epoch;
+    state.last_week_flashpoints = flashpoints;
+    state
+}
+
 fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState {
     let pc_id = match state.pc_player_id {
         Some(id) => id,
         None => return state,
     };
+
+    // ── Lifestyle: emergent weekly build-up (bible §8.5/§8.6) ────────────────
+    // Nudge the score from this week's other choices, then derive the cached tier —
+    // BEFORE anything below reads `state.pc_lifestyle` (injury/decline/growth all key
+    // off it). Medium intensity + dev level 0 nudge nothing, so the no-choice path
+    // stays at score 0 / tier Balanced, byte-identical to pre-existing goldens.
+    state = apply_lifestyle_weekly_nudges(state);
+    state.pc_lifestyle = lifestyle_tier_from_score(state.pc_lifestyle_score);
 
     // Snapshot current attrs to compute growth delta for TUI display.
     let before: [Fixed; NUM_ATTRS] = core::array::from_fn(|a| state.players.get_current(pc_id, a));
@@ -877,6 +986,42 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
     state.last_week_flashpoints = flashpoints;
 
     state
+}
+
+/// Apply this week's lifestyle-score nudges (bible §8.5): training intensity and
+/// dev-investment level are habits the player repeats every week, so they build up the
+/// emergent lifestyle readout gradually rather than being picked directly.
+fn apply_lifestyle_weekly_nudges(mut state: WorldState) -> WorldState {
+    use crate::tuning::{
+        LIFESTYLE_NUDGE_INTENSITY_HIGH, LIFESTYLE_NUDGE_INTENSITY_LOW,
+        LIFESTYLE_NUDGE_PER_DEV_LEVEL, LIFESTYLE_SCORE_MAX, LIFESTYLE_SCORE_MIN,
+    };
+    use crate::week::Intensity;
+
+    let intensity_nudge = match state.pc_routine.intensity {
+        Intensity::High => LIFESTYLE_NUDGE_INTENSITY_HIGH,
+        Intensity::Low => LIFESTYLE_NUDGE_INTENSITY_LOW,
+        Intensity::Medium => Fixed::ZERO,
+    };
+    let dev_nudge =
+        LIFESTYLE_NUDGE_PER_DEV_LEVEL * Fixed::from_int(state.pc_dev_invest_level as i32);
+
+    state.pc_lifestyle_score = (state.pc_lifestyle_score + intensity_nudge + dev_nudge)
+        .clamp(LIFESTYLE_SCORE_MIN, LIFESTYLE_SCORE_MAX);
+    state
+}
+
+/// Derive the cached lifestyle tier (0=Professional,1=Balanced,2=Flashy) from the
+/// signed lifestyle score (bible §8.6). Thresholds are symmetric around 0.
+pub fn lifestyle_tier_from_score(score: Fixed) -> u8 {
+    use crate::tuning::LIFESTYLE_TIER_THRESHOLD;
+    if score < Fixed::ZERO - LIFESTYLE_TIER_THRESHOLD {
+        0 // Professional
+    } else if score > LIFESTYLE_TIER_THRESHOLD {
+        2 // Flashy
+    } else {
+        1 // Balanced
+    }
 }
 
 /// Whether the player should retire now (bible §8.6): nobody plays past the hard age,

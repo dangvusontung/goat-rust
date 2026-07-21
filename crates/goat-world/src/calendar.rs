@@ -1,6 +1,7 @@
 //! Season calendar — maps league rounds to calendar weeks and real dates.
 //!
-//! The season runs 38 calendar weeks starting 15 August.
+//! The season runs 38 calendar weeks, the grid anchored to the first Monday
+//! on/after 15 August of the season year (weeks run Mon–Sun).
 //! Each week has 0, 1, or 2 league matches; 0-match weeks are breaks.
 //! All data is static — nothing is stored, everything is recomputed.
 
@@ -62,6 +63,15 @@ const MATCH_DAY_OFFSETS: [[u8; 2]; 3] = [
     [1, 5], // 2 matches: Tuesday + Saturday
 ];
 
+/// Days from Aug 15 of `season_year` to the season's week-grid anchor: the
+/// first Monday on/after Aug 15. Weeks run Mon–Sun, so the MATCH_DAY_OFFSETS
+/// land on real Tuesdays/Saturdays in every season year. Without this anchor
+/// the grid starts on whatever weekday Aug 15 falls on (a Friday in 2025) and
+/// "Saturday" fixtures render as Wednesdays.
+fn season_anchor_offset(season_year: u32) -> u32 {
+    (7 - weekday_of_aug15(season_year) as u32) % 7
+}
+
 // ── Navigation helpers ────────────────────────────────────────────────────────
 
 /// Returns the calendar week (0-indexed) that contains the given round index.
@@ -88,6 +98,27 @@ pub fn is_break_week(week: usize) -> bool {
     WEEK_MATCH_COUNTS.get(week).copied().unwrap_or(0) == 0
 }
 
+/// Break/rest calendar weeks skipped when the season advances from `round` to
+/// `round + 1` — 0 when the next round is in the same or the adjacent week.
+/// Feed this to `Intent::ApplyRoundResult { rest_weeks }` so the player clock
+/// tracks the season calendar across break weeks.
+pub fn rest_weeks_after_round(round: usize) -> u32 {
+    if round + 1 >= ROUNDS_PER_SEASON {
+        return 0; // trailing weeks are absorbed by the off-season back-fill
+    }
+    let w0 = round_to_week(round);
+    let w1 = round_to_week(round + 1);
+    w1.saturating_sub(w0).saturating_sub(1) as u32
+}
+
+/// True when `round` is the last round of its calendar week — false means a
+/// second fixture follows in the same week (double-fixture weeks). Feed this
+/// to `Intent::ApplyRoundResult { week_ends }` so the same calendar week never
+/// ticks twice.
+pub fn week_ends_after_round(round: usize) -> bool {
+    round + 1 >= ROUNDS_PER_SEASON || round_to_week(round + 1) != round_to_week(round)
+}
+
 // ── Date helpers ──────────────────────────────────────────────────────────────
 
 /// Compute the real calendar date for a match.
@@ -98,20 +129,18 @@ pub fn is_break_week(week: usize) -> bool {
 pub fn match_date(season_year: u32, week_offset: usize, slot: usize) -> (u32, u32, u32) {
     let count = WEEK_MATCH_COUNTS.get(week_offset).copied().unwrap_or(0) as usize;
     let day_offset = MATCH_DAY_OFFSETS[count.min(2)][slot.min(1)];
-    let total_days = week_offset as u32 * 7 + day_offset as u32;
+    let total_days = season_anchor_offset(season_year) + week_offset as u32 * 7 + day_offset as u32;
     advance_from_aug15(season_year, total_days)
 }
 
 /// Format a date as "Sat 15 Aug 2025".
 pub fn format_match_date(season_year: u32, week_offset: usize, slot: usize) -> String {
     let (year, month, day) = match_date(season_year, week_offset, slot);
-    // Day of week: compute from absolute offset (week_offset*7 + day_offset).
+    // The week grid is Monday-anchored (see season_anchor_offset), so the
+    // day offset IS the weekday (0=Mon … 6=Sun).
     let count = WEEK_MATCH_COUNTS.get(week_offset).copied().unwrap_or(0) as usize;
     let day_offset = MATCH_DAY_OFFSETS[count.min(2)][slot.min(1)];
-    // Aug 15, 2025 is a Friday (weekday index 4, Mon=0).
-    // Compute the base weekday for Aug 15 of season_year, then add offsets.
-    let base_weekday = weekday_of_aug15(season_year);
-    let weekday = (base_weekday + week_offset * 7 + day_offset as usize) % 7;
+    let weekday = day_offset as usize % 7;
     let day_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
     let month_names = [
         "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
@@ -127,7 +156,10 @@ pub fn format_match_date(season_year: u32, week_offset: usize, slot: usize) -> S
 
 /// Format a week label for the header: "Game Week 5 · Aug 2025".
 pub fn format_week_header(season_year: u32, week_offset: usize) -> String {
-    let (year, month, _) = advance_from_aug15(season_year, week_offset as u32 * 7);
+    let (year, month, _) = advance_from_aug15(
+        season_year,
+        season_anchor_offset(season_year) + week_offset as u32 * 7,
+    );
     let month_names = [
         "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ];
@@ -236,22 +268,54 @@ mod tests {
 
     #[test]
     fn season_opener_date() {
-        // Week 0, 1 match → Saturday. Aug 15 + 5 days = Aug 20.
+        // Aug 15 2025 is a Friday → week grid anchors on Mon Aug 18.
+        // Week 0, 1 match → Saturday: Aug 18 + 5 = Sat Aug 23.
         let (y, m, d) = match_date(2025, 0, 0);
-        assert_eq!(y, 2025);
-        assert_eq!(m, 8);
-        assert_eq!(d, 20); // Aug 15 + 5 = Aug 20
+        assert_eq!((y, m, d), (2025, 8, 23));
+        assert_eq!(format_match_date(2025, 0, 0), "Sat 23 Aug 2025");
     }
 
     #[test]
     fn two_match_week_dates() {
-        // Week 1 has 2 matches: Tuesday (offset 1) and Saturday (offset 5).
-        // Week 1 starts at day 7 from Aug 15 = Aug 22.
-        // Tuesday = Aug 22 + 1 = Aug 23. Saturday = Aug 22 + 5 = Aug 27.
+        // Week 1 starts Mon Aug 25 (anchor Mon Aug 18 + 7).
+        // Tuesday = Aug 26, Saturday = Aug 30.
         let (_, m1, d1) = match_date(2025, 1, 0); // Tuesday
         let (_, m2, d2) = match_date(2025, 1, 1); // Saturday
-        assert_eq!((m1, d1), (8, 23));
-        assert_eq!((m2, d2), (8, 27));
+        assert_eq!((m1, d1), (8, 26));
+        assert_eq!((m2, d2), (8, 30));
+        assert_eq!(format_match_date(2025, 1, 0), "Tue 26 Aug 2025");
+        assert_eq!(format_match_date(2025, 1, 1), "Sat 30 Aug 2025");
+    }
+
+    /// Independent weekday check (Sakamoto, 0=Sun … 6=Sat) — deliberately NOT
+    /// using the module's Monday-anchored shortcut, so it catches anchor bugs.
+    fn true_weekday(y: u32, m: u32, d: u32) -> u32 {
+        let t = [0u32, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+        let y = if m < 3 { y - 1 } else { y };
+        (y + y / 4 - y / 100 + y / 400 + t[(m - 1) as usize] + d) % 7
+    }
+
+    #[test]
+    fn match_weekdays_correct_every_season_year() {
+        // The anchor must hold for any year: 1-match weeks land on real
+        // Saturdays, 2-match weeks on real Tuesday + Saturday.
+        const SAT: u32 = 6;
+        const TUE: u32 = 2;
+        for year in 2025..2045 {
+            for (week, &count) in WEEK_MATCH_COUNTS.iter().enumerate() {
+                for slot in 0..count as usize {
+                    let (y, m, d) = match_date(year, week, slot);
+                    let expected = if count == 1 || slot == 1 { SAT } else { TUE };
+                    assert_eq!(
+                        true_weekday(y, m, d),
+                        expected,
+                        "season {year} week {week} slot {slot}: {y}-{m:02}-{d:02} \
+                         is not on the expected weekday ({})",
+                        format_match_date(year, week, slot),
+                    );
+                }
+            }
+        }
     }
 
     #[test]

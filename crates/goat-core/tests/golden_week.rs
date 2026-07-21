@@ -4,7 +4,8 @@
 //! Values frozen from first green run. NEVER update them to fix a failing test.
 
 use goat_core::attrs::{AttrId, NUM_ATTRS};
-use goat_core::generation::{CreationChoices, Position};
+use goat_core::generation::CreationChoices;
+use goat_core::positions::PrimaryPosition;
 use goat_core::state::{reduce, Intent, WorldState};
 use goat_core::week::{Intensity, Routine};
 use goat_fixed::Fixed;
@@ -13,7 +14,7 @@ use goat_rng::GoatRng;
 fn forward_state() -> WorldState {
     let choices = CreationChoices {
         name: "Golden Fwd".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "Brazilian",
         club: "Riverside Town",
     };
@@ -121,8 +122,13 @@ fn long_horizon_full_career() {
     let mut rng = GoatRng::new(77777);
 
     // Run 22 seasons (16 → 38 years) = 1 144 weeks.
+    // AdvanceWeek is gated to one session per calendar week
+    // (TASK-CORE-double-week-tick); this harness has no round loop, so it
+    // simulates each week boundary itself by clearing the flag. The per-tick
+    // math is untouched — every tick below runs exactly as before the gate.
     for _ in 0..1_144 {
         s = reduce(s, Intent::AdvanceWeek, &mut rng);
+        s.pc_week_training_done = false;
     }
 
     // ── Invariants (must hold at all ages) ───────────────────────────────────

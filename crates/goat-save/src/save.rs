@@ -9,7 +9,11 @@ use std::io;
 use std::path::Path;
 
 pub const MAGIC: &[u8; 4] = b"GOAT";
-pub const VERSION: u32 = 7;
+/// v8+: adds `pc_lifestyle_score` (the emergent-lifestyle readout, bible §8.5/§8.6) as a
+/// new appended field. `pc_lifestyle` is still persisted for legacy readers but is now
+/// fully re-derivable from the score via `lifestyle_tier_from_score` — `to_world_state`
+/// recomputes it rather than trusting the stored byte.
+pub const VERSION: u32 = 8;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -18,7 +22,7 @@ pub struct SaveData {
     pub world_seed: u64,
     // ── PC creation ───────────────────────────────────────────────────────────
     pub pc_name: String,
-    pub pc_position: u8, // Position as 0/1/2
+    pub pc_position: u8, // PrimaryPosition as u8 (0..7)
     pub pc_nationality_idx: u8,
     pub pc_club_idx: u16,
     pub pc_div_idx: u8,
@@ -82,6 +86,10 @@ pub struct SaveData {
     pub pc_sponsor_tier: u8,
     pub pc_relationships: [i32; 3],
     pub pc_character_rep: i32,
+    // ── Lifestyle score (v8+) ──────────────────────────────────────────────────
+    /// Raw `Fixed` value of the emergent lifestyle score (bible §8.5/§8.6). New saves
+    /// write it; older saves default to 0 (Balanced) on load.
+    pub pc_lifestyle_score: i32,
 }
 
 #[derive(Debug)]
@@ -179,6 +187,7 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_sponsor_tier: state.pc_sponsor_tier,
         pc_relationships: state.pc_relationships,
         pc_character_rep: state.pc_character_rep,
+        pc_lifestyle_score: state.pc_lifestyle_score.to_raw(),
     }
 }
 
@@ -268,23 +277,21 @@ pub fn load_from_file(path: impl AsRef<Path>) -> Result<SaveData, SaveError> {
 /// restored from the save. This is the inverse of `from_world_state`.
 pub fn to_world_state(data: &SaveData) -> WorldState {
     use goat_core::attrs::AttrId;
-    use goat_core::generation::{generate_player, CreationChoices, Position};
+    use goat_core::generation::{generate_player, CreationChoices};
     use goat_core::player::PlayerStore;
+    use goat_core::positions::PrimaryPosition;
     use goat_core::roles::FamiliarityTier;
-    use goat_core::state::WorldState;
+    use goat_core::state::{lifestyle_tier_from_score, WorldState};
     use goat_core::week::{Intensity, Routine};
     use goat_world::world::CLUBS;
 
     let club = CLUBS[data.pc_club_idx as usize];
     let nationality = club.nation.name();
-    let position = match data.pc_position {
-        1 => Position::Midfielder,
-        2 => Position::Forward,
-        _ => Position::Defender,
-    };
+    let primary_position =
+        PrimaryPosition::from_u8(data.pc_position).unwrap_or(PrimaryPosition::ST);
     let choices = CreationChoices {
         name: data.pc_name.clone(),
-        position,
+        primary_position,
         nationality,
         club: club.name,
     };
@@ -371,7 +378,11 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
     state.pc_peers = decode_peers(&data.peer_blob);
     state.pc_rival_idx = data.pc_rival_idx.map(|i| i as usize);
     state.pc_rival_declared_season = data.pc_rival_declared_season;
-    state.pc_lifestyle = data.pc_lifestyle;
+    // Lifestyle is derived, not trusted from the stored byte (bible §8.6) — recompute
+    // the tier from the score so an old save (score defaults to 0) and a fresh derive
+    // always agree.
+    state.pc_lifestyle_score = goat_fixed::Fixed::raw(data.pc_lifestyle_score);
+    state.pc_lifestyle = lifestyle_tier_from_score(state.pc_lifestyle_score);
     state.pc_retired = data.pc_retired;
     state.pc_week_training_done = data.pc_week_training_done;
     state.pc_epoch_day = data.pc_epoch_day;
@@ -465,6 +476,8 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
         push_i32(&mut v, r);
     }
     push_i32(&mut v, d.pc_character_rep);
+    // v8+
+    push_i32(&mut v, d.pc_lifestyle_score);
     v
 }
 
@@ -581,6 +594,8 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         read_i32(b, &mut cur).unwrap_or(70),
     ];
     let pc_character_rep = read_i32(b, &mut cur).unwrap_or(50);
+    // Lifestyle score (v8+; default 0 = Balanced for older saves).
+    let pc_lifestyle_score = read_i32(b, &mut cur).unwrap_or(0);
 
     Ok(SaveData {
         world_seed,
@@ -637,6 +652,7 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_sponsor_tier,
         pc_relationships,
         pc_character_rep,
+        pc_lifestyle_score,
     })
 }
 

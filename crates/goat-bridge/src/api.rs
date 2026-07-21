@@ -11,7 +11,8 @@ use std::sync::Mutex;
 use goat_core::{
     attrs::{AttrId, ATTR_NAMES, NUM_ATTRS},
     derive::{derive_attrs, ovr, role_rating},
-    generation::{CreationChoices, Position},
+    generation::CreationChoices,
+    positions::PrimaryPosition,
     roles::{RoleId, NUM_ROLES},
     state::{reduce, Intent, PeerState, WorldState},
     week::{Intensity, Routine},
@@ -101,6 +102,7 @@ struct ActiveMatchSession {
 // ── Data Transfer Objects ─────────────────────────────────────────────────────
 
 /// Flat snapshot of game state returned to Dart after every mutation.
+#[derive(Debug, Clone, PartialEq)]
 pub struct GoatGameState {
     pub player_name: String,
     pub age_years: u32,
@@ -108,7 +110,8 @@ pub struct GoatGameState {
     pub energy: i32, // 0–100
     pub ovr: i32,    // 0–100
     pub injury_weeks: u32,
-    pub position: u8, // 0=Defender 1=Mid 2=Forward
+    /// PrimaryPosition discriminant: 0=ST 1=W 2=WM 3=CAM 4=CM 5=DM 6=FB 7=CB.
+    pub position: u8,
     pub club_name: String,
     pub div_name: String,
     pub nationality: String,
@@ -211,6 +214,7 @@ pub struct TableRowDto {
     pub is_player_club: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct MatchResultDto {
     pub player_output: i32,
     pub goals_for: u32,
@@ -269,9 +273,12 @@ pub struct TransferOfferDto {
     pub strength: u8,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct WeekFixtureDto {
     /// 0-indexed round index.
     pub round: u32,
+    /// 0-indexed calendar week this round falls in (see goat_world::calendar).
+    pub calendar_week: u32,
     pub opponent: String,
     pub opp_strength: u8,
     pub is_home: bool,
@@ -329,6 +336,22 @@ pub struct BeatOutcomeDto {
 }
 
 // ── Builder helpers ───────────────────────────────────────────────────────────
+
+/// Family-representative match role for a specific position (0..7 PrimaryPosition
+/// discriminant). Deploying the player in their exact role (Winger vs Poacher …)
+/// is the TASK-CORE-creation-role-choice follow-up; until then the match engine
+/// uses one anchor role per broad family, matching pre-revision behaviour.
+fn match_role_for_position(pc_position: u8) -> RoleId {
+    use goat_core::roles::PositionFamily;
+    match PrimaryPosition::from_u8(pc_position)
+        .unwrap_or(PrimaryPosition::ST)
+        .family()
+    {
+        PositionFamily::Defender => RoleId::CentreBack,
+        PositionFamily::Midfielder => RoleId::CentralMid,
+        PositionFamily::Forward => RoleId::CompleteForward,
+    }
+}
 
 fn build_game_state(s: &WorldState) -> GoatGameState {
     let pc_id = match s.pc_player_id {
@@ -461,6 +484,7 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
                 let opp_id = if is_home { f.away } else { f.home };
                 week_fixtures.push(WeekFixtureDto {
                     round: round_idx as u32,
+                    calendar_week: cal_week as u32,
                     opponent: CLUBS[opp_id].name.to_string(),
                     opp_strength: CLUBS[opp_id].strength,
                     is_home,
@@ -590,12 +614,21 @@ pub fn list_clubs() -> Vec<ClubDto> {
 }
 
 /// Start a new game. Returns the initial game state snapshot.
+///
+/// `position` accepts the full 0..7 `PrimaryPosition` range (widened from the old 0..2
+/// broad-family range — bible §4 revision, TASK-CORE-creation-role-choice): 0=ST, 1=W,
+/// 2=WM, 3=CAM, 4=CM, 5=DM, 6=FB, 7=CB. Out-of-range values default to ST.
+///
+/// `lifestyle` is accepted only for FFI binary compatibility with the existing
+/// `frb_generated.rs` signature — it is now ignored. Lifestyle is derived (bible
+/// §8.5/§8.6) from training intensity, dev investment and sponsor choices over the
+/// career; read it back via the `lifestyle` field on `GoatGameState`.
 pub fn new_game(
     player_name: String,
-    position: u8, // 0=Def 1=Mid 2=Fwd
+    position: u8,
     club_id: u32,
     seed: u64,
-    lifestyle: u8, // 0=Professional 1=Balanced 2=Flashy
+    _lifestyle: u8,
 ) -> GoatGameState {
     let club_id = club_id as usize;
     let club = &CLUBS[club_id];
@@ -604,15 +637,11 @@ pub fn new_game(
     let div_idx = goat_world::world::club_division(club_id);
     let nationality = DIV_NATIONS[div_idx].name();
 
-    let pos = match position {
-        0 => Position::Defender,
-        1 => Position::Midfielder,
-        _ => Position::Forward,
-    };
+    let primary_position = PrimaryPosition::from_u8(position).unwrap_or(PrimaryPosition::ST);
 
     let choices = CreationChoices {
         name: player_name,
-        position: pos,
+        primary_position,
         nationality,
         club: club.name,
     };
@@ -632,11 +661,6 @@ pub fn new_game(
             facilities_mult: club.facilities_mult(),
             initial_table: Box::new([0u32; 80]),
         },
-        &mut GoatRng::new(0),
-    );
-    state = reduce(
-        state,
-        Intent::SetLifestyle { lifestyle },
         &mut GoatRng::new(0),
     );
 
@@ -701,21 +725,66 @@ pub fn advance_week() -> GoatGameState {
     let pc_id = state.pc_player_id.unwrap_or(0);
     let view = state.players.snapshot(pc_id);
     let seed = (view.age_weeks as u64).wrapping_mul(6364136223846793005);
-    let mut state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(seed));
-    state.pc_week_training_done = true;
+    let state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(seed));
     let snap = build_game_state(&state);
     set_state(state);
     snap
 }
 
+/// True if the club's current calendar week has a scheduled fixture that hasn't
+/// been played yet. `AdvanceWeeks` never touches `season_round` (only playing a
+/// match does), so this can only be true at call time — it can't newly become
+/// true partway through the skipped weeks.
+fn current_week_has_pending_match(state: &WorldState) -> bool {
+    if state.season_number == 0 || state.season_round >= ROUNDS_PER_SEASON as u32 {
+        return false;
+    }
+    let cal_week = round_to_week(state.season_round.min(ROUNDS_PER_SEASON as u32 - 1) as usize);
+    if is_break_week(cal_week) {
+        return false;
+    }
+    let week_rounds = week_to_rounds(cal_week);
+    let played = state.season_round.saturating_sub(week_rounds.start as u32) as usize;
+    played < week_rounds.len()
+}
+
 /// Advance up to `n` weeks, stopping at notable events.
+///
+/// Caps the actual number of weeks ticked to at most 1 while this week's
+/// fixture(s) are unplayed (0 if this week's training is already done too) —
+/// otherwise the player's age/development clock (ticked here) would drift
+/// arbitrarily far ahead of the match calendar (only advanced by actually
+/// playing), leaving fixtures stuck unplayed indefinitely with no way back.
+/// A single extra tick is still allowed so this doesn't regress the ordinary
+/// "train, then play this week's match" flow — only unbounded multi-week
+/// skips past an unresolved fixture are blocked.
 pub fn advance_weeks(n: u32) -> GoatGameState {
     let state = take_state();
+    let pending = current_week_has_pending_match(&state);
+    let effective_n = if pending {
+        if state.pc_week_training_done {
+            0
+        } else {
+            n.min(1)
+        }
+    } else {
+        n
+    };
+    let capped = effective_n < n;
+
     let pc_id = state.pc_player_id.unwrap_or(0);
     let view = state.players.snapshot(pc_id);
     let seed = (view.age_weeks as u64).wrapping_mul(6364136223846793005);
-    let state = reduce(state, Intent::AdvanceWeeks { n }, &mut GoatRng::new(seed));
-    let snap = build_game_state(&state);
+    let state = reduce(
+        state,
+        Intent::AdvanceWeeks { n: effective_n },
+        &mut GoatRng::new(seed),
+    );
+    let mut snap = build_game_state(&state);
+    if capped {
+        snap.last_events
+            .push("Play this week's match(es) to keep fast-forwarding.".to_string());
+    }
     set_state(state);
     snap
 }
@@ -775,6 +844,11 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
     let match_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
     let mut match_rng = GoatRng::new(match_seed);
 
+    // A suspended player's club still plays the fixture, but the PC doesn't
+    // personally take part (bible AC-06: the ban is served by the round being
+    // played, not by the PC's own participation).
+    let is_suspended = state.pc_suspension_weeks > 0;
+
     // Sim PC match.
     let pc_fixture = goat_world::fixture_for_round(world_seed, season, div_idx, pc_club_id, round);
     let (pc_goals, pc_output, pc_result, match_dto) = if let Some(f) = pc_fixture {
@@ -783,86 +857,100 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
         let opp = &CLUBS[opp_id];
         let own_str = CLUBS[pc_club_id].strength;
 
-        let pc_id = state.pc_player_id.unwrap_or(0);
-        let view = state.players.snapshot(pc_id);
-
-        let ref_personality = {
-            let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
-            RefPersonality::from_rng(&mut rp_rng)
-        };
-
-        let setup = MatchSetup {
-            player_role: match state.pc_position {
-                0 => goat_core::roles::RoleId::CentreBack,
-                1 => goat_core::roles::RoleId::CentralMid,
-                _ => goat_core::roles::RoleId::CompleteForward,
-            },
-            player_attrs: view.current,
-            player_familiarity: view.familiarity,
-            own_strength: own_str,
-            opp_strength: opp.strength,
-            opp_name: opp.name,
-            form: state.pc_form,
-            player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
-                .to_int()
-                .clamp(1, 99) as u8,
-            ref_personality,
-            dirty_rep: state.pc_discipline_rep,
-            player_traits: PlayerTraits::default(),
-        };
-
-        let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
-
-        let stars = "★".repeat((result.player_output / 20 + 1).clamp(1, 5) as usize)
-            + &"☆".repeat(5 - (result.player_output / 20 + 1).clamp(1, 5) as usize);
-        let moments: Vec<String> = result
-            .moments
-            .iter()
-            .filter(|m| m.goal_event.is_some() || m.success)
-            .take(5)
-            .map(|m| {
-                let icon = match m.goal_event {
-                    Some(goat_match::beats::ScoreEvent::GoalFor) => "⚽",
-                    Some(goat_match::beats::ScoreEvent::GoalAgainst) => "❌",
-                    None => {
-                        if m.success {
-                            "✓"
-                        } else {
-                            "✗"
-                        }
-                    }
-                };
-                format!("{icon} {}'  {}", m.minute, m.outcome_text)
-            })
-            .collect();
-
-        let pc_goals = result
-            .moments
-            .iter()
-            .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::GoalFor)))
-            .count() as u32;
-        let pc_result: i8 = if result.goals_for > result.goals_against {
-            1
-        } else if result.goals_for < result.goals_against {
-            -1
+        if is_suspended {
+            let (gf, ga) = goat_world::sim_team_match(own_str, opp.strength, &mut match_rng);
+            (
+                0,
+                0,
+                0i8,
+                MatchResultDto {
+                    player_output: 0,
+                    goals_for: gf,
+                    goals_against: ga,
+                    rating_label: "SUSPENDED".to_string(),
+                    moments: Vec::new(),
+                    yellow_cards: 0,
+                    red_card: false,
+                },
+            )
         } else {
-            0
-        };
+            let pc_id = state.pc_player_id.unwrap_or(0);
+            let view = state.players.snapshot(pc_id);
 
-        (
-            pc_goals,
-            result.player_output,
-            pc_result,
-            MatchResultDto {
-                player_output: result.player_output,
-                goals_for: result.goals_for,
-                goals_against: result.goals_against,
-                rating_label: stars,
-                moments,
-                yellow_cards: result.yellow_cards as u32,
-                red_card: result.red_card,
-            },
-        )
+            let ref_personality = {
+                let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+                RefPersonality::from_rng(&mut rp_rng)
+            };
+
+            let setup = MatchSetup {
+                player_role: match_role_for_position(state.pc_position),
+                player_attrs: view.current,
+                player_familiarity: view.familiarity,
+                own_strength: own_str,
+                opp_strength: opp.strength,
+                opp_name: opp.name,
+                form: state.pc_form,
+                player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+                    .to_int()
+                    .clamp(1, 99) as u8,
+                ref_personality,
+                dirty_rep: state.pc_discipline_rep,
+                player_traits: PlayerTraits::default(),
+            };
+
+            let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
+
+            let stars = "★".repeat((result.player_output / 20 + 1).clamp(1, 5) as usize)
+                + &"☆".repeat(5 - (result.player_output / 20 + 1).clamp(1, 5) as usize);
+            let moments: Vec<String> = result
+                .moments
+                .iter()
+                .filter(|m| m.goal_event.is_some() || m.success)
+                .take(5)
+                .map(|m| {
+                    let icon = match m.goal_event {
+                        Some(goat_match::beats::ScoreEvent::GoalFor) => "⚽",
+                        Some(goat_match::beats::ScoreEvent::GoalAgainst) => "❌",
+                        None => {
+                            if m.success {
+                                "✓"
+                            } else {
+                                "✗"
+                            }
+                        }
+                    };
+                    format!("{icon} {}'  {}", m.minute, m.outcome_text)
+                })
+                .collect();
+
+            let pc_goals = result
+                .moments
+                .iter()
+                .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::GoalFor)))
+                .count() as u32;
+            let pc_result: i8 = if result.goals_for > result.goals_against {
+                1
+            } else if result.goals_for < result.goals_against {
+                -1
+            } else {
+                0
+            };
+
+            (
+                pc_goals,
+                result.player_output,
+                pc_result,
+                MatchResultDto {
+                    player_output: result.player_output,
+                    goals_for: result.goals_for,
+                    goals_against: result.goals_against,
+                    rating_label: stars,
+                    moments,
+                    yellow_cards: result.yellow_cards as u32,
+                    red_card: result.red_card,
+                },
+            )
+        }
     } else {
         (
             0,
@@ -940,20 +1028,59 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
             pc_output,
             pc_result,
             round_results,
+            rest_weeks: goat_world::rest_weeks_after_round(round),
+            week_ends: goat_world::week_ends_after_round(round),
         },
         &mut GoatRng::new(0),
     );
 
-    // Reset training flag when we've crossed into a new calendar week.
+    // Training flag is reset by the ApplyRoundResult reducer (the player can
+    // train before each round). Update the stored calendar week if it changed.
     let new_cal_week = round_to_week((state.season_round as usize).min(ROUNDS_PER_SEASON - 1));
     if new_cal_week != old_cal_week {
-        state.pc_week_training_done = false;
         state.pc_current_calendar_week = new_cal_week as u32;
     }
 
     let snap = build_game_state(&state);
     set_state(state);
     (snap, match_dto)
+}
+
+/// Get every fixture for the player's club across the full season, not just
+/// the current calendar week. Fixture generation is deterministic and pure
+/// (see `goat_world::fixtures` — "never stored, always recomputed"), so the
+/// entire season's schedule already exists the moment a season starts; this
+/// just exposes it instead of recomputing only the current week's slice.
+pub fn get_full_season_fixtures() -> Vec<WeekFixtureDto> {
+    with_state(|s| {
+        if s.season_number == 0 {
+            return Vec::new();
+        }
+        let div_idx = s.pc_div_idx as usize;
+        let pc_club_id = s.pc_club_idx as usize;
+        let season_year = BASE_CAREER_YEAR + s.season_number.saturating_sub(1);
+
+        goat_world::fixtures_for_club(s.world_seed, s.season_number, div_idx, pc_club_id)
+            .into_iter()
+            .map(|f| {
+                let cal_week = round_to_week(f.round);
+                let slot = week_to_rounds(cal_week)
+                    .position(|r| r == f.round)
+                    .unwrap_or(0);
+                let is_home = f.home == pc_club_id;
+                let opp_id = if is_home { f.away } else { f.home };
+                WeekFixtureDto {
+                    round: f.round as u32,
+                    calendar_week: cal_week as u32,
+                    opponent: CLUBS[opp_id].name.to_string(),
+                    opp_strength: CLUBS[opp_id].strength,
+                    is_home,
+                    played: (f.round as u32) < s.season_round,
+                    date: format_match_date(season_year, cal_week, slot),
+                }
+            })
+            .collect()
+    })
 }
 
 /// Get the current league table.
@@ -1414,10 +1541,16 @@ pub fn get_state() -> Option<GoatGameState> {
 }
 
 /// Start an interactive match for the current season round.
-/// Returns `None` if there is no fixture this round.
+/// Returns `None` if there is no fixture this round, or if the PC is
+/// suspended — a suspended player doesn't personally take part (bible
+/// AC-06); callers should fall back to `play_round`, which auto-sims the
+/// club's match without the PC and serves one match of the ban.
 pub fn start_interactive_match() -> Option<ActiveBeatDto> {
     let session = with_state(|s| -> Option<ActiveMatchSession> {
-        if s.season_number == 0 || s.season_round >= ROUNDS_PER_SEASON as u32 {
+        if s.season_number == 0
+            || s.season_round >= ROUNDS_PER_SEASON as u32
+            || s.pc_suspension_weeks > 0
+        {
             return None;
         }
         let round = s.season_round as usize;
@@ -1448,11 +1581,7 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
         };
 
         let setup = MatchSetup {
-            player_role: match s.pc_position {
-                0 => goat_core::roles::RoleId::CentreBack,
-                1 => goat_core::roles::RoleId::CentralMid,
-                _ => goat_core::roles::RoleId::CompleteForward,
-            },
+            player_role: match_role_for_position(s.pc_position),
             player_attrs: view.current,
             player_familiarity: view.familiarity,
             own_strength: own_str,
@@ -1645,14 +1774,16 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
                     pc_output,
                     pc_result,
                     round_results,
+                    rest_weeks: goat_world::rest_weeks_after_round(round),
+                    week_ends: goat_world::week_ends_after_round(round),
                 },
                 &mut GoatRng::new(0),
             );
 
+            // Training flag is reset by the ApplyRoundResult reducer.
             let new_cal_week =
                 round_to_week((state.season_round as usize).min(ROUNDS_PER_SEASON - 1));
             if new_cal_week != old_cal_week {
-                state.pc_week_training_done = false;
                 state.pc_current_calendar_week = new_cal_week as u32;
             }
 

@@ -31,22 +31,37 @@ pub fn generate_fixtures(world_seed: u64, season: u32, div_idx: usize) -> Vec<Fi
     // Build the two half-seasons (first: rounds 0..n-2; second: rounds n-1..2n-3).
     // Circle method: fix clubs[0], rotate clubs[1..n].
     // rotation[i] holds an index into `clubs`; clubs[0] is never in the rotation.
+    // The rotation sequence is identical in both halves, so local_round X always
+    // pairs the same two clubs in half 0 and half 1 — that pairing's home/away
+    // swap is decided once (during half 0) and mirrored (flipped) in half 1,
+    // rather than redrawn, so every pair meets exactly once home and once away.
     let rotation: Vec<usize> = (1..n).collect(); // clubs[1]..clubs[n-1]
 
     let mut fixtures: Vec<Fixture> = Vec::with_capacity(n * (n - 1));
+    let mut swaps: Vec<Vec<bool>> = Vec::with_capacity(n - 1);
 
     for half in 0..2usize {
         let mut rot = rotation.clone();
         for local_round in 0..(n - 1) {
             let round = half * (n - 1) + local_round;
+            if half == 0 {
+                swaps.push(Vec::with_capacity(n / 2));
+            }
+
             // Fixed team is clubs[0]; rotating partner is clubs[rot[n-2]] (last slot).
             let fixed_team = clubs[0];
             let partner = clubs[rot[n - 2]];
-            // Determine home/away for the fixed pair.
-            let (home0, away0) = if rng.next_range_u64(0, 1) == 0 {
-                (fixed_team, partner)
+            let swap0 = if half == 0 {
+                let s = rng.next_range_u64(0, 1) == 1;
+                swaps[local_round].push(s);
+                s
             } else {
+                !swaps[local_round][0]
+            };
+            let (home0, away0) = if swap0 {
                 (partner, fixed_team)
+            } else {
+                (fixed_team, partner)
             };
             fixtures.push(Fixture {
                 home: home0,
@@ -58,11 +73,14 @@ pub fn generate_fixtures(world_seed: u64, season: u32, div_idx: usize) -> Vec<Fi
             for i in 0..n / 2 - 1 {
                 let team_a = clubs[rot[i]];
                 let team_b = clubs[rot[n - 3 - i]];
-                let (home, away) = if rng.next_range_u64(0, 1) == 0 {
-                    (team_a, team_b)
+                let swap = if half == 0 {
+                    let s = rng.next_range_u64(0, 1) == 1;
+                    swaps[local_round].push(s);
+                    s
                 } else {
-                    (team_b, team_a)
+                    !swaps[local_round][i + 1]
                 };
+                let (home, away) = if swap { (team_b, team_a) } else { (team_a, team_b) };
                 fixtures.push(Fixture { home, away, round });
             }
 

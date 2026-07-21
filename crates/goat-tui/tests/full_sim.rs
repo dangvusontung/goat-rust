@@ -11,9 +11,10 @@
 use goat_core::{
     attrs::{AttrId, NUM_ATTRS},
     derive::ovr,
-    generation::{CreationChoices, Position},
+    generation::CreationChoices,
+    positions::PrimaryPosition,
     roles::RoleId,
-    state::{reduce, Intent, PeerState, WorldState},
+    state::{lifestyle_tier_from_score, reduce, Intent, PeerState, WorldState},
     week::{Intensity, Routine},
 };
 use goat_fixed::Fixed;
@@ -24,13 +25,34 @@ use goat_match::{
 use goat_rng::GoatRng;
 use goat_traits::PlayerTraits;
 use goat_world::{
-    fixture_for_round, round_fixtures, sim_team_match, Table, CLUBS, DIV_CLUBS, DIV_ENG_SEC,
-    DIV_ENG_TOP, ROUNDS_PER_SEASON,
+    fixture_for_round, rest_weeks_after_round, round_fixtures, sim_team_match,
+    week_ends_after_round, Table, CLUBS, DIV_CLUBS, DIV_ENG_SEC, DIV_ENG_TOP, ROUNDS_PER_SEASON,
 };
 
 const BEATS_JSON: &str = include_str!("../../../beats.json");
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Broad position family used only within this test harness (creation now picks one
+/// of the 8 specific `PrimaryPosition`s directly — bible §4 revision). Maps to the
+/// same specific position the old 3-way picker's `default_primary()` produced, so
+/// this harness's invariant tests are unaffected by the model change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Position {
+    Defender,
+    Midfielder,
+    Forward,
+}
+
+impl Position {
+    fn to_primary(self) -> PrimaryPosition {
+        match self {
+            Position::Defender => PrimaryPosition::CB,
+            Position::Midfielder => PrimaryPosition::CM,
+            Position::Forward => PrimaryPosition::ST,
+        }
+    }
+}
 
 fn beat_lib() -> BeatLibrary {
     BeatLibrary::load(BEATS_JSON).expect("beats.json must parse")
@@ -41,7 +63,7 @@ fn make_state(seed: u64, position: Position, div_idx: usize) -> WorldState {
     let club = &CLUBS[pc_club_id];
     let choices = CreationChoices {
         name: "Test Legend".into(),
-        position,
+        primary_position: position.to_primary(),
         nationality: "England",
         club: club.name,
     };
@@ -274,6 +296,8 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                 pc_output,
                 pc_result,
                 round_results,
+                rest_weeks: rest_weeks_after_round(round),
+                week_ends: week_ends_after_round(round),
             },
             &mut GoatRng::new(0),
         );
@@ -627,7 +651,14 @@ fn professional_lifestyle_outgrows_balanced() {
 
     let run_season = |lifestyle: u8| {
         let mut s = make_state(99, Position::Forward, DIV_ENG_SEC);
-        s = reduce(s, Intent::SetLifestyle { lifestyle }, &mut GoatRng::new(0));
+        // Lifestyle is now emergent (bible §8.5/§8.6) — pin the score directly to
+        // force the tier for this comparison, rather than picking it via an intent.
+        s.pc_lifestyle_score = match lifestyle {
+            0 => Fixed::raw(-1_000),
+            2 => Fixed::raw(1_000),
+            _ => Fixed::ZERO,
+        };
+        s.pc_lifestyle = lifestyle_tier_from_score(s.pc_lifestyle_score);
         s = run_one_season(s, Position::Forward, &lib);
         let pc_id = s.pc_player_id.unwrap();
         s.players.get_current(pc_id, AttrId::Finishing as usize)

@@ -6,15 +6,17 @@
 //! and is neutral at level 0 so the no-spend path is byte-identical to existing goldens.
 
 use goat_core::attrs::{AttrId, NUM_ATTRS};
-use goat_core::generation::{CreationChoices, Position};
-use goat_core::state::{reduce, Intent, WorldState};
+use goat_core::generation::CreationChoices;
+use goat_core::positions::PrimaryPosition;
+use goat_core::state::{lifestyle_tier_from_score, reduce, Intent, WorldState};
 use goat_core::week::{Intensity, Routine};
+use goat_fixed::Fixed;
 use goat_rng::GoatRng;
 
 fn player(seed: u64) -> WorldState {
     let choices = CreationChoices {
         name: "Econ".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "Brazilian",
         club: "Riverside Town",
     };
@@ -63,11 +65,8 @@ fn golden_cashflow_over_a_career() {
 fn bankruptcy_is_reachable() {
     let mut s = player(2);
     s.pc_wage_annual = 20; // tiny wage
-    s = reduce(
-        s,
-        Intent::SetLifestyle { lifestyle: 2 },
-        &mut GoatRng::new(0),
-    ); // Flashy upkeep
+    s.pc_lifestyle_score = Fixed::raw(1_000); // Flashy upkeep
+    s.pc_lifestyle = lifestyle_tier_from_score(s.pc_lifestyle_score);
     let mut rng = GoatRng::new(7);
     let mut went_bankrupt = false;
     for _ in 0..20 {
@@ -91,6 +90,7 @@ fn dev_investment_respects_talent_ceiling() {
         let mut rng = GoatRng::new(9);
         for _ in 0..120 {
             s = reduce(s, Intent::AdvanceWeek, &mut rng);
+            s.pc_week_training_done = false; // week boundary — harness has no round loop
             for a in 0..NUM_ATTRS {
                 assert!(
                     s.players.get_current(pc, a) <= s.players.get_potential(pc, a),
@@ -121,6 +121,7 @@ fn dev_level_zero_is_neutral() {
         let mut rng = GoatRng::new(11);
         for _ in 0..30 {
             s = reduce(s, Intent::AdvanceWeek, &mut rng);
+            s.pc_week_training_done = false; // week boundary — harness has no round loop
         }
         let v = s.players.snapshot(pc);
         (0..NUM_ATTRS).map(|a| v.current[a]).collect::<Vec<_>>()

@@ -10,8 +10,9 @@
 
 use crate::world::{Nation, CLUBS, NUM_CLUBS};
 use goat_core::attrs::NUM_ATTRS;
-use goat_core::generation::{generate_player, CreationChoices, Position};
+use goat_core::generation::{generate_player, CreationChoices};
 use goat_core::player::PlayerView;
+use goat_core::positions::PrimaryPosition;
 use goat_fixed::Fixed;
 use goat_rng::{GoatRng, RngSource};
 
@@ -166,11 +167,14 @@ fn development_fraction(age_years: u32) -> Fixed {
     Fixed::raw(pct.min(1000) as i32)
 }
 
-fn position_from_u8(p: u8) -> Position {
+/// Maps the background population's family-level column (0=Defender,1=Midfielder,
+/// 2=Forward) to the same specific position the old 3-way creation picker's
+/// `default_primary()` produced, so genesis stays byte-identical.
+fn position_from_u8(p: u8) -> PrimaryPosition {
     match p {
-        0 => Position::Defender,
-        1 => Position::Midfielder,
-        _ => Position::Forward,
+        0 => PrimaryPosition::CB,
+        1 => PrimaryPosition::CM,
+        _ => PrimaryPosition::ST,
     }
 }
 
@@ -209,7 +213,7 @@ impl Population {
         }
         let choices = CreationChoices {
             name: name.into(),
-            position: position_from_u8(self.position[idx]),
+            primary_position: position_from_u8(self.position[idx]),
             nationality: Nation::from_idx(self.nation[idx] as usize)
                 .map(|n| n.name())
                 .unwrap_or("England"),

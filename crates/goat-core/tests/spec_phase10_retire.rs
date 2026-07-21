@@ -3,14 +3,15 @@
 //! Nobody plays past the hard age; past the soft age a player whose contract has run out
 //! (offers drying up) retires. The player may always choose to retire earlier.
 
-use goat_core::generation::{CreationChoices, Position};
+use goat_core::generation::CreationChoices;
+use goat_core::positions::PrimaryPosition;
 use goat_core::state::{reduce, should_retire, Intent, WorldState};
 use goat_rng::GoatRng;
 
 fn player_at_age(age_years: u32, contract_left: u32) -> WorldState {
     let choices = CreationChoices {
         name: "Vet".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "Brazilian",
         club: "Riverside Town",
     };

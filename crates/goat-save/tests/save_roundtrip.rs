@@ -5,11 +5,13 @@
 
 use goat_core::{
     attrs::{AttrId, NUM_ATTRS},
-    generation::{CreationChoices, Position},
+    generation::CreationChoices,
+    positions::PrimaryPosition,
     roles::NUM_ROLES,
-    state::{reduce, Intent, WorldState},
+    state::{lifestyle_tier_from_score, reduce, Intent, WorldState},
     week::{Intensity, Routine},
 };
+use goat_fixed::Fixed;
 use goat_rng::GoatRng;
 use goat_save::save::{from_world_state, load_from_file, save_to_file, to_world_state};
 use goat_world::world::{CLUBS, DIV_CLUBS, DIV_ENG_SEC};
@@ -20,7 +22,7 @@ fn setup_state() -> WorldState {
 
     let choices = CreationChoices {
         name: "Round-Trip Sam".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "England",
         club: CLUBS[pc_club_id].name,
     };
@@ -193,4 +195,41 @@ fn save_load_restores_phase10_economy_and_life() {
     assert_eq!(restored.pc_sponsor_tier, 2);
     assert_eq!(restored.pc_relationships, [40, 95, 12]);
     assert_eq!(restored.pc_character_rep, 37);
+}
+
+#[test]
+fn save_load_restores_lifestyle_score_and_derived_tier() {
+    // v8+: lifestyle is a derived readout, not a stored menu pick (bible §8.5/§8.6).
+    // The score must survive a full byte round-trip and the cached tier must be
+    // recomputed identically from it.
+    let mut state = setup_state();
+    state.pc_lifestyle_score = Fixed::raw(-450); // deep in Professional territory
+    state.pc_lifestyle = lifestyle_tier_from_score(state.pc_lifestyle_score);
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join("goat_save_lifestyle_roundtrip.gsav");
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(restored.pc_lifestyle_score, Fixed::raw(-450));
+    assert_eq!(
+        restored.pc_lifestyle, 0,
+        "score of -450 must derive Professional (0)"
+    );
+}
+
+#[test]
+fn old_v7_save_without_lifestyle_score_defaults_to_balanced() {
+    // Simulate an older save by truncating the bytes right before the v8 field.
+    let state = setup_state();
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+    let restored = to_world_state(&data);
+    // setup_state() never touches lifestyle, so the score defaults to 0 = Balanced.
+    assert_eq!(restored.pc_lifestyle_score, Fixed::ZERO);
+    assert_eq!(restored.pc_lifestyle, 1);
 }

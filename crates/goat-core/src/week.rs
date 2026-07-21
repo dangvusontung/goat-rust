@@ -205,6 +205,43 @@ pub fn advance_week(
     events
 }
 
+/// Advance one REST week — time passes without a training session (untrained
+/// match weeks, break weeks, off-season). Runs the time-driven parts of the
+/// weekly tick only: age, injury countdown, energy recovery and passive decay.
+/// No training growth, no familiarity XP, no breakthroughs, and no
+/// training-injury risk (hence no RNG — a rest week is fully deterministic).
+pub fn advance_rest_week(
+    players: &mut PlayerStore,
+    pc_id: PlayerId,
+    lifestyle: u8,
+) -> Vec<DevelopmentEvent> {
+    let events: Vec<DevelopmentEvent> = Vec::new();
+
+    // ── Age advancement (always) ──────────────────────────────────────────────
+    let age_weeks = players.get_age_weeks(pc_id);
+    players.set_age_weeks(pc_id, age_weeks + 1);
+    let age_years = age_weeks / 52;
+
+    // ── Injured? Rest and return early (same as the training tick) ───────────
+    let injury = players.get_injury_weeks(pc_id);
+    if injury > 0 {
+        players.set_injury_weeks(pc_id, injury - 1);
+        let e =
+            (players.get_energy(pc_id) + ENERGY_RECOVERY_INJURED).clamp(Fixed::ZERO, ENERGY_MAX);
+        players.set_energy(pc_id, e);
+        return events;
+    }
+
+    // ── Energy: passive recovery only — no session, no cost ──────────────────
+    let e = (players.get_energy(pc_id) + ENERGY_PASSIVE_RECOVERY).clamp(Fixed::ZERO, ENERGY_MAX);
+    players.set_energy(pc_id, e);
+
+    // ── Age-related decline does not take weeks off ───────────────────────────
+    apply_passive_decay(players, pc_id, age_years, &[], lifestyle);
+
+    events
+}
+
 // ── Private helpers ───────────────────────────────────────────────────────────
 
 /// Growth rate for an archetype at a given age (scales BASE_GROWTH_PER_WEEK).
@@ -404,14 +441,18 @@ fn update_familiarity(
 mod tests {
     use super::*;
     use crate::attrs::NUM_ATTRS;
-    use crate::generation::{generate_player, CreationChoices, Position};
+    use crate::generation::{generate_player, CreationChoices};
     use crate::player::PlayerStore;
+    use crate::positions::PrimaryPosition;
     use goat_rng::GoatRng;
 
-    fn make_store_with_player(seed: u64, position: Position) -> (PlayerStore, PlayerId) {
+    fn make_store_with_player(
+        seed: u64,
+        primary_position: PrimaryPosition,
+    ) -> (PlayerStore, PlayerId) {
         let choices = CreationChoices {
             name: "Test".into(),
-            position,
+            primary_position,
             nationality: "English",
             club: "Riverside Town",
         };
@@ -430,7 +471,7 @@ mod tests {
 
     #[test]
     fn energy_stays_in_bounds() {
-        let (mut store, id) = make_store_with_player(1, Position::Forward);
+        let (mut store, id) = make_store_with_player(1, PrimaryPosition::ST);
         let routine = fwd_routine();
         let mut rng = GoatRng::new(42);
         for _ in 0..200 {
@@ -443,7 +484,7 @@ mod tests {
 
     #[test]
     fn current_never_exceeds_potential() {
-        let (mut store, id) = make_store_with_player(7, Position::Forward);
+        let (mut store, id) = make_store_with_player(7, PrimaryPosition::ST);
         let routine = fwd_routine();
         let mut rng = GoatRng::new(99);
         for _ in 0..500 {
@@ -459,7 +500,7 @@ mod tests {
 
     #[test]
     fn attrs_stay_in_valid_range() {
-        let (mut store, id) = make_store_with_player(42, Position::Defender);
+        let (mut store, id) = make_store_with_player(42, PrimaryPosition::CB);
         let routine = Routine {
             focus_attrs: vec![AttrId::StandingTackle, AttrId::Marking],
             intensity: Intensity::High,
@@ -477,7 +518,7 @@ mod tests {
 
     #[test]
     fn resting_recovers_energy() {
-        let (mut store, id) = make_store_with_player(3, Position::Midfielder);
+        let (mut store, id) = make_store_with_player(3, PrimaryPosition::CM);
         // Drain energy first
         let routine_high = Routine {
             focus_attrs: vec![AttrId::Vision],
@@ -506,7 +547,7 @@ mod tests {
 
     #[test]
     fn old_player_physical_declines() {
-        let (mut store, id) = make_store_with_player(10, Position::Forward);
+        let (mut store, id) = make_store_with_player(10, PrimaryPosition::ST);
         let routine = Routine {
             focus_attrs: vec![AttrId::Finishing], // not training physical attrs
             intensity: Intensity::Medium,

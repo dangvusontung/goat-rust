@@ -1,24 +1,60 @@
-# CLAUDE.md — Become the GOAT (Rust core + text renderer)
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project overview
 
 Single-career football life-sim. Headless deterministic simulation core in Rust with a
 **playable text-based renderer** (`goat-tui`) — the first proof of the swappable-renderer
 architecture. Mobile (Flutter) renderer comes later; the core never knows the difference.
 100% offline at runtime.
 
+## Commands
+
+```bash
+# Full quality gate (fmt → clippy → tests → career-sim sanity)
+./scripts/test.sh
+
+# Individual steps
+cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+
+# Run specific crate tests
+cargo test -p goat-core
+cargo test -p goat-match -- golden        # run only tests matching "golden"
+
+# Run the TUI
+cargo run -p goat-tui
+
+# Headless simulation harnesses (in goat-tui's career-sim binary)
+cargo run -p goat-tui --bin career-sim -- --seed 42           # single career, seed 42
+cargo run -p goat-tui --bin career-sim -- --scan              # seed scanner (1-50)
+cargo run -p goat-tui --bin career-sim -- --match-sim 100 7   # 100 matches, player seed 7
+cargo run -p goat-tui --bin career-sim -- --world-sim 20 20   # 20 seeds × 20 seasons
+
+# Convenience wrappers around the harnesses
+./scripts/match-sim.sh [N_matches] [player_seed]
+./scripts/world-sim.sh [batches] [seasons] [pc_goals] [pc_titles]
+```
+
 ## Source of truth (read in this order before any non-trivial change)
 
-1. `docs/BecomeTheGOAT-RustCore-TechDoc.md` — the *mechanisms*: stack, RNG design,
-   fixed-point, save format, module map, build order. **This doc wins all conflicts.**
-2. `docs/BecomeTheGOAT-TechnicalDesign.md` — architecture rationale and trade-offs.
-3. `docs/Become-the-GOAT-Design-Bible.md` — game design *intent*. Never contradict it.
-4. `docs/CALENDAR.md` — the Calendar Simulator spec: day-tick loop, flashpoint
+1. `docs/DESIGN_BIBLE.md` + `docs/DESIGN_BIBLE_APP_A.md` — game design intent.
+   Never contradict them. `MAIN.md` is a merged snapshot of DESIGN_BIBLE + MATCH + CALENDAR.
+2. `docs/CALENDAR.md` — the Calendar Simulator spec: day-tick loop, flashpoint
    arbitration, conflict resolution, season boundary pipeline, RNG stream forking.
    Authoritative for `goat-calendar` and any crate that registers as a subsystem.
-5. `ROADMAP.md` — the phase plan. Work happens one phase at a time, in order.
-6. The existing crates (`crates/goat-rng`, `crates/goat-fixed`) — their public APIs and
+3. `docs/MATCH.md` — beat engine design, headspace, discipline rules.
+4. `docs/TRAINING.md` — training subsystem spec (the `goat-training` crate target).
+5. `docs/TRAITS.md` — traits & mastery appendix for `goat-traits`.
+6. `docs/CLIENT-IMPL.md` — `goat-bridge` public API reference for renderer authors.
+7. `docs/BEATS-AUTHORING-GUIDE.md` — how to author beats in `beats.json`.
+8. `ROADMAP.md` — the phase plan. Work happens one phase at a time, in order.
+9. The existing crates (`crates/goat-rng`, `crates/goat-fixed`) — their public APIs and
    golden values are **frozen**. Read them; never guess their signatures.
 
-If this file ever disagrees with the tech doc or the calendar spec, those docs win —
+If this file ever disagrees with the docs above, those docs win —
 flag the discrepancy to the user instead of silently picking one.
 
 ## Non-negotiable rules
@@ -62,26 +98,74 @@ These are load-bearing. Violating any of them is a bug even if all tests pass.
 goat/
   Cargo.toml            # workspace
   ROADMAP.md            # phase plan + playable gates
+  beats.json            # beat library (runtime-loaded authoring data)
+  beats_test.json       # beats used by tests
   tasks/                # one paste-ready task file per phase
+  scripts/
+    test.sh             # full quality gate (fmt + clippy + tests + career-sim)
+    match-sim.sh        # beat-engine match simulation harness
+    world-sim.sh        # whole-world simulation harness
   crates/
     goat-rng/           # seeded, injectable RNG — FROZEN API + golden values
     goat-fixed/         # fixed-point math — FROZEN API + golden values
     goat-core/          # domain model, player, roles, week loop, reduce()
+                        #   Key public surface: WorldState, Intent, reduce(), PlayerStore
     goat-match/         # beat engine, headspace, discipline
+                        #   Key public surface: BeatLibrary, MatchSetup, start_match, advance_beat
     goat-world/         # genesis, fixtures, tiered sim, transfers, rival
     goat-meta/          # legacy, pantheon, reputation, pundits, contracts, life, money
-    goat-save/          # tiny-save serialization (v4 format)
-    goat-training/      # training routines, intensity, growth, energy — extracted from core
+    goat-save/          # tiny-save serialization — persist path-dependent state only
+    goat-traits/        # traits & mastery system (MasteryTier, TraitId, PlayerTraits)
     goat-calendar/      # time orchestrator: day-tick loop, flashpoint arbitration,
                         #   conflict resolution, season boundary pipeline, RNG forking
     goat-bridge/        # FFI bridge for Flutter via flutter_rust_bridge 2.9.0
-                        #   (static lib; see docs/CALENDAR.md appendix for task file)
+                        #   (static lib; see docs/CLIENT-IMPL.md)
     goat-tui/           # text renderer BINARY — the playable game. No sim logic.
+                        #   Two binaries: goat-tui (interactive) and career-sim (headless harness)
   docs/
+    DESIGN_BIBLE.md     # game design intent — never contradict
+    DESIGN_BIBLE_APP_A.md # traits & mastery appendix
+    CALENDAR.md         # calendar engine spec — authoritative for goat-calendar
+    MATCH.md            # match engine design
+    TRAINING.md         # training subsystem spec
+    TRAITS.md           # traits & mastery appendix (same content as DESIGN_BIBLE_APP_A)
+    CLIENT-IMPL.md      # goat-bridge API for renderer authors
+    BEATS-AUTHORING-GUIDE.md  # how to write beats in beats.json
+    MAIN.md             # merged snapshot of DESIGN_BIBLE + MATCH + CALENDAR
 ```
 
-Crate boundaries may be refined by the tech doc's module map — tech doc wins. But the
-core/renderer split is absolute.
+Note: `goat-training` (training routines, intensity, growth, energy) is a planned crate
+per the roadmap but is not yet in the workspace — training logic currently lives inline
+in `goat-core/src/week.rs`. See ROADMAP.md Phase 3.5 for the wiring plan.
+
+Crate boundaries may be refined by the docs — they win. But the core/renderer split
+is absolute.
+
+## Architecture: how the pieces connect
+
+The simulation follows a strict unidirectional data flow:
+
+```
+Renderer (goat-tui)
+  ↓ sends Intent
+goat-core::reduce(WorldState, Intent, &mut RngSource) → WorldState
+  ↑ reads state (no mutation)
+```
+
+`goat-core::state::reduce()` is the **only** mutation point. It dispatches to:
+- `week.rs` — `advance_week()` for training/energy/events
+- `calendar_loop.rs` — bridges to `goat-calendar`
+- `generation.rs` — player creation pipeline
+
+`goat-match` is invoked by `goat-tui` directly (not by `reduce()`); the renderer drives
+beat-by-beat match play and reports the `MatchResult` back via an Intent.
+
+`goat-save` persists only the fields that cannot be rederived from the world seed.
+The save format is v4; see `goat-save/src/save.rs` for the `SaveData` struct.
+
+Beat authoring happens via `beats.json` (loaded at runtime by `goat-match`). To add
+beats: edit `beats.json` following `docs/BEATS-AUTHORING-GUIDE.md`, then run
+`cargo test -p goat-match` to validate the library loads.
 
 ## Workflow: phases and gates
 
@@ -117,7 +201,7 @@ core/renderer split is absolute.
 - Property tests where cheap: `current <= potential` always; `role_rating` monotonic in
   key attributes; familiarity ordering preserved; attributes always in 1–99.
 - Long-horizon sanity: headless fast-forward of full careers/seasons must not panic and
-  must keep invariants.
+  must keep invariants. Use `cargo run -p goat-tui --bin career-sim -- --seed N`.
 - The TUI gets at least a smoke test: scripted stdin → expected stdout fragments,
   run against a fixed seed.
 - Tests must not depend on each other or on execution order.
