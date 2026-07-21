@@ -60,12 +60,18 @@ fn balanced_setup() -> MatchSetup {
 /// Re-frozen after C.9 tuning (KEY=95, IMP=92, SEC=88 — much higher starting attrs
 /// for seed 12345 Forward, output hits cap at 100; scoreline unchanged as team
 /// strengths are fixed 50v50 and goals come from team sim not player attrs).
+/// Re-frozen again for the §A.3 position/role selector bias fix: `pick_beat`
+/// previously ignored `player_role` entirely, so a Forward (this test uses
+/// `RoleId::Trequartista`) drew defend-phase beats at the same rate as attack
+/// beats. The old values (output=100, goals_for=2, goals_against=3) baked in
+/// that pre-fix, unbiased beat selection for seed 42; the new values reflect
+/// the corrected, role-weighted selection (see `sim.rs::role_bias_pct`).
 #[test]
 fn golden_seed_42_balanced_auto() {
     let result = auto_play_match(&lib(), balanced_setup(), &mut GoatRng::new(42));
-    assert_eq!(result.player_output, 100, "output frozen at 100");
-    assert_eq!(result.goals_for, 2, "goals_for frozen at 2");
-    assert_eq!(result.goals_against, 3, "goals_against frozen at 3");
+    assert_eq!(result.player_output, 87, "output frozen at 87");
+    assert_eq!(result.goals_for, 4, "goals_for frozen at 4");
+    assert_eq!(result.goals_against, 1, "goals_against frozen at 1");
 }
 
 /// Demonstrates Output ≠ Result: a high-output performance can still end in a loss.
@@ -286,6 +292,62 @@ fn form_influences_starting_headspace() {
         "high form should start calmer: {} vs {}",
         ms_high.headspace.nerves,
         ms_low.headspace.nerves
+    );
+}
+
+// ── Position bias (§A.3) ──────────────────────────────────────────────────────
+
+/// A Forward must face far fewer on-ball defensive-decision beats than a
+/// Defender across many matches, and a Defender far fewer on-ball attacking
+/// beats than a Forward — but neither count may hit zero across the sample,
+/// since role biases the selector's weights, it does not lock a beat list.
+#[test]
+fn position_bias_suppresses_but_does_not_lock_off_role_beats() {
+    use goat_match::beats::MatchPhase;
+
+    let lib = lib();
+    let traits = PlayerTraits::default();
+
+    let mut forward_defend = 0u32;
+    let mut forward_attack = 0u32;
+    let mut defender_defend = 0u32;
+    let mut defender_attack = 0u32;
+
+    for seed in 0..200u64 {
+        let mut rng_f = GoatRng::new(seed);
+        for b in lib.generate_match(&mut rng_f, RoleId::CompleteForward, &traits) {
+            match b.phase {
+                MatchPhase::OpenPlayDefend => forward_defend += 1,
+                MatchPhase::OpenPlayAttack => forward_attack += 1,
+                _ => {}
+            }
+        }
+
+        let mut rng_d = GoatRng::new(seed);
+        for b in lib.generate_match(&mut rng_d, RoleId::CentreBack, &traits) {
+            match b.phase {
+                MatchPhase::OpenPlayDefend => defender_defend += 1,
+                MatchPhase::OpenPlayAttack => defender_attack += 1,
+                _ => {}
+            }
+        }
+    }
+
+    assert!(
+        forward_defend < defender_defend,
+        "forward should face fewer defensive beats than a defender: {forward_defend} vs {defender_defend}"
+    );
+    assert!(
+        defender_attack < forward_attack,
+        "defender should face fewer attacking beats than a forward: {defender_attack} vs {forward_attack}"
+    );
+    assert!(
+        forward_defend > 0,
+        "off-role defensive beats must still be reachable for a forward (bias, not lock)"
+    );
+    assert!(
+        defender_attack > 0,
+        "off-role attacking beats must still be reachable for a defender (bias, not lock)"
     );
 }
 

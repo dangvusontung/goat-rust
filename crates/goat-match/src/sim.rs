@@ -1,7 +1,9 @@
 //! Match simulation: beat generation, sequencing, team result, familiarity XP.
 
 use goat_core::attrs::{AttrId, ATTR_NAMES, NUM_ATTRS};
-use goat_core::roles::{FamiliarityTier, RoleId, NUM_ROLES, ROLE_WEIGHT_TABLE};
+use goat_core::roles::{
+    FamiliarityTier, PositionFamily, RoleId, NUM_ROLES, ROLE_POSITION_FAMILY, ROLE_WEIGHT_TABLE,
+};
 use goat_core::tuning::{FAM_XP_IMP_PER_WEEK, FAM_XP_KEY_PER_WEEK, W_IMP, W_KEY};
 use goat_fixed::Fixed;
 use goat_rng::RngSource;
@@ -22,6 +24,13 @@ const BASE_STAMINA_COST: u8 = 3;
 const BEATS_PER_MATCH: usize = 15;
 const STARTING_STAMINA: Fixed = Fixed::raw(100_000);
 const FAM_MATCH_BONUS: Fixed = Fixed::raw(60);
+
+/// §A.3 position/role bias: a situation whose phase fits the player's position
+/// family is boosted; a situation whose phase runs against it is suppressed —
+/// proportionally, never to zero, so off-role beats stay reachable as emergent
+/// moments (a striker tracking back) rather than routine occurrences.
+const ROLE_BIAS_FIT_PCT: i32 = 25;
+const ROLE_BIAS_AGAINST_PCT: i32 = -60;
 
 // ── Beat library ──────────────────────────────────────────────────────────────
 
@@ -48,32 +57,34 @@ impl BeatLibrary {
     pub fn generate_match(
         &self,
         rng: &mut impl RngSource,
+        player_role: RoleId,
         player_traits: &PlayerTraits,
     ) -> Vec<GeneratedBeat> {
+        let family = ROLE_POSITION_FAMILY[player_role as usize];
         let mut beats = Vec::with_capacity(BEATS_PER_MATCH);
 
         // Five early beats (period 0)
         for _ in 0..5 {
-            if let Some(b) = self.pick_beat(0, rng, player_traits) {
+            if let Some(b) = self.pick_beat(0, rng, family, player_traits) {
                 beats.push(b);
             }
         }
         // Five mid beats (period 1)
         for _ in 0..5 {
-            if let Some(b) = self.pick_beat(1, rng, player_traits) {
+            if let Some(b) = self.pick_beat(1, rng, family, player_traits) {
                 beats.push(b);
             }
         }
         // Four late beats (period 2)
         for _ in 0..4 {
-            if let Some(b) = self.pick_beat(2, rng, player_traits) {
+            if let Some(b) = self.pick_beat(2, rng, family, player_traits) {
                 beats.push(b);
             }
         }
-        // Final climax beat — always a key-moment situation; traits don't bias tag search
+        // Final climax beat — always a key-moment situation; role/traits don't bias tag search
         if let Some(b) = self.pick_beat_by_tag("key", 2, rng) {
             beats.push(b);
-        } else if let Some(b) = self.pick_beat(2, rng, player_traits) {
+        } else if let Some(b) = self.pick_beat(2, rng, family, player_traits) {
             beats.push(b);
         }
 
@@ -84,29 +95,32 @@ impl BeatLibrary {
         &self,
         period: usize,
         rng: &mut impl RngSource,
+        family: PositionFamily,
         player_traits: &PlayerTraits,
     ) -> Option<GeneratedBeat> {
-        // Beat-summoner hook (§A.2 hook type 2): each situation's effective weight is
-        // base + base * trait_bonus_pct / 100, so traits proportionally inflate matching
-        // situations without destroying the relative weights of unmatched ones.
-        let total_weight: u32 = self
-            .raw
-            .situations
-            .iter()
-            .map(|s| {
-                let base = s.bias[period] as u32;
-                let bonus = player_traits.beat_summoner_bonus_pct(&s.tags);
-                base + base * bonus / 100
-            })
-            .sum();
+        // Beat-summoner hook (§A.2 hook type 2) + position/role bias (§A.3): each
+        // situation's effective weight is base + base*trait_bonus_pct/100 +
+        // base*role_bonus_pct/100. Traits and role each proportionally scale matching
+        // situations without destroying the relative weights of unmatched ones, and
+        // role bias never fully zeroes out an off-role situation (floor of 1 when base
+        // > 0) — it biases the selector, it does not lock a beat list.
+        let weight_for = |s: &RawSituation| -> u32 {
+            let base = s.bias[period] as i64;
+            if base == 0 {
+                return 0;
+            }
+            let trait_bonus = player_traits.beat_summoner_bonus_pct(&s.tags) as i64;
+            let role_bonus = role_bias_pct(family, &s.phase) as i64;
+            let w = base + base * trait_bonus / 100 + base * role_bonus / 100;
+            w.max(1) as u32
+        };
+        let total_weight: u32 = self.raw.situations.iter().map(weight_for).sum();
         if total_weight == 0 {
             return None;
         }
         let mut roll = rng.next_range_u64(0, total_weight as u64 - 1) as u32;
         let situation = self.raw.situations.iter().find(|s| {
-            let base = s.bias[period] as u32;
-            let bonus = player_traits.beat_summoner_bonus_pct(&s.tags);
-            let w = base + base * bonus / 100;
+            let w = weight_for(s);
             if roll < w {
                 true
             } else {
@@ -336,6 +350,19 @@ fn parse_phase(s: &str) -> MatchPhase {
     }
 }
 
+/// Position/role bias (§A.3) for a situation's `phase`, relative to the acting
+/// player's position family. Set pieces, positioning, and key moments are shared
+/// team-context phases and stay neutral for every family.
+fn role_bias_pct(family: PositionFamily, phase: &str) -> i32 {
+    match (family, phase) {
+        (PositionFamily::Forward, "attack") => ROLE_BIAS_FIT_PCT,
+        (PositionFamily::Forward, "defend") => ROLE_BIAS_AGAINST_PCT,
+        (PositionFamily::Defender, "defend") => ROLE_BIAS_FIT_PCT,
+        (PositionFamily::Defender, "attack") => ROLE_BIAS_AGAINST_PCT,
+        _ => 0,
+    }
+}
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Everything the match engine needs to run a match.
@@ -423,7 +450,7 @@ pub fn start_match(
     rng: &mut impl RngSource,
 ) -> ActiveMatchState {
     let headspace = Headspace::from_form(setup.form);
-    let beats = lib.generate_match(rng, &setup.player_traits);
+    let beats = lib.generate_match(rng, setup.player_role, &setup.player_traits);
     ActiveMatchState {
         headspace,
         setup,
