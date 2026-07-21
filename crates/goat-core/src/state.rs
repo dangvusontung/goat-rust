@@ -1169,6 +1169,32 @@ mod tests {
     }
 
     #[test]
+    fn advance_week_raw_growth_nonzero_but_display_truncates_to_zero() {
+        // Locks in the fix for the "+0 training display" bug (playtest Slice 1):
+        // real growth happens every trained week, but base growth is sub-1.0/week,
+        // so `Fixed::to_int()` truncates it to 0 — a display bug, not a growth bug.
+        // The TUI must format the raw `Fixed` value, never `to_int()`, for this
+        // per-attribute weekly delta.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 30, 99);
+        let routine = Routine {
+            focus_attrs: vec![AttrId::Finishing],
+            intensity: Intensity::Medium,
+        };
+        let s = reduce(s, Intent::SetRoutine { routine }, &mut make_rng());
+        let s = reduce(s, Intent::AdvanceWeek, &mut make_rng());
+        let growth = s.last_week_growth[AttrId::Finishing as usize];
+        assert!(growth > Fixed::ZERO, "expected real growth, got {growth:?}");
+        assert_eq!(
+            growth.to_int(),
+            0,
+            "this test's whole point is a sub-1.0 weekly growth that to_int() truncates to 0 \
+             — if this fails, the growth tuning changed and the test needs a different attr/seed, \
+             not a change to the display fix"
+        );
+    }
+
+    #[test]
     fn advance_weeks_stops_on_event() {
         // Use a seed/state likely to produce an injury within 100 weeks.
         let mut s = WorldState::new();
