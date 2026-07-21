@@ -44,7 +44,11 @@ fn batch_tick_world_fingerprint_is_stable() {
         pop.career_fingerprint()
     };
     assert_eq!(run(7), run(7), "batch-tick must be deterministic");
-    assert_eq!(run(7), 0x5b1e_8128_8c99_b478, "career fingerprint drifted");
+    // Re-frozen after the fixtures.rs home/away mirroring fix (see fixture_mirror_check.rs):
+    // home/away for each pairing is now decided once and mirrored for the return leg
+    // instead of independently re-rolled, so simulated results (and this fingerprint)
+    // legitimately changed.
+    assert_eq!(run(7), 0x0e0e_dac6_9e84_5141, "career fingerprint drifted");
 }
 
 /// The backfilled pre-history is a stable, derivable canon for a fixed seed. Frozen.
@@ -83,5 +87,6 @@ fn rival_verdict_pattern_is_stable() {
         mask != 0 && mask != (1 << 24) - 1,
         "rivalry has no variance"
     );
-    assert_eq!(mask, 0x00a4_4108, "rival verdict pattern drifted");
+    // Re-frozen after the fixtures.rs home/away mirroring fix — see comment above.
+    assert_eq!(mask, 0x008b_748c, "rival verdict pattern drifted");
 }

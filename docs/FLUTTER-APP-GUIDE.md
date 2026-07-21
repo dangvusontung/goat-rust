@@ -150,15 +150,22 @@ For each screen: **shows** (which DTO fields), **actions** (which bridge fns). F
 names are authoritative in CLIENT-IMPL §4–5.
 
 ### 3.1 Create Player  [NOW]
-- **Shows:** name input, position picker (0/1/2), nationality, club list (`list_clubs` →
-  `ClubDto`), lifestyle picker (0=Pro/1=Balanced/2=Flashy), seed (optional; Enter = random).
-- **Actions:** `new_game(name, position, nationality, club, lifestyle, seed)` → `GoatGameState`.
+- **Shows:** name input, position picker (8-way — one of `PrimaryPosition` ST/W/WM/CAM/
+  CM/DM/FB/CB, not the old 3-way broad-family picker), nationality, club list
+  (`list_clubs` → `ClubDto`), seed (optional; Enter = random). No lifestyle picker —
+  lifestyle is no longer chosen at creation.
+- **Actions:** `new_game(name, position, nationality, club, lifestyle, seed)` →
+  `GoatGameState`. The `lifestyle` arg is ignored (kept for FFI binary compatibility) —
+  pass any value, e.g. `1`.
 - Offer a "re-roll seed" to preview different talent before committing.
 
 ### 3.2 Player Sheet  [NOW]
 - **Shows:** `get_attributes()` → `AttrDto[]` (current/potential bars per attribute,
   grouped by family via `get_families`), `get_roles()` → role familiarity, OVR, age, energy,
-  injury weeks, form.
+  injury weeks, form, and lifestyle as a **read-only status** (`GoatGameState.lifestyle`:
+  0=Professional/1=Balanced/2=Flashy) — it emerges from training intensity, dev
+  investment, and sponsor choices over the career; there is no lifestyle picker anywhere
+  in the app.
 - **Actions:** none (read-only). This is the player's identity screen.
 
 ### 3.3 Week Loop (Train)  [NOW] — the heartbeat

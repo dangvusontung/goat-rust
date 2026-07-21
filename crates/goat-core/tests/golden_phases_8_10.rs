@@ -6,8 +6,9 @@
 
 use goat_core::{
     attrs::{AttrId, NUM_ATTRS},
-    generation::{CreationChoices, Position},
-    state::{reduce, Intent, PeerState, WorldState},
+    generation::CreationChoices,
+    positions::PrimaryPosition,
+    state::{lifestyle_tier_from_score, reduce, Intent, PeerState, WorldState},
     week::{Intensity, Routine},
 };
 use goat_fixed::Fixed;
@@ -16,7 +17,7 @@ use goat_rng::GoatRng;
 fn base_state() -> WorldState {
     let choices = CreationChoices {
         name: "Test Legend".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "England",
         club: "Burnley",
     };
@@ -238,12 +239,12 @@ fn professional_lifestyle_boosts_growth() {
         intensity: Intensity::Medium,
     };
 
+    // Lifestyle is now emergent (bible §8.5/§8.6) — seed the underlying score directly
+    // to force each career onto its tier before the comparison, rather than picking it
+    // via an intent.
     let mut s_pro = base_state();
-    s_pro = reduce(
-        s_pro,
-        Intent::SetLifestyle { lifestyle: 0 },
-        &mut GoatRng::new(0),
-    );
+    s_pro.pc_lifestyle_score = Fixed::raw(-1_000);
+    s_pro.pc_lifestyle = lifestyle_tier_from_score(s_pro.pc_lifestyle_score);
     s_pro = reduce(
         s_pro,
         Intent::SetRoutine {
@@ -253,17 +254,16 @@ fn professional_lifestyle_boosts_growth() {
     );
 
     let mut s_bal = base_state();
-    s_bal = reduce(
-        s_bal,
-        Intent::SetLifestyle { lifestyle: 1 },
-        &mut GoatRng::new(0),
-    );
+    s_bal.pc_lifestyle_score = Fixed::ZERO;
+    s_bal.pc_lifestyle = lifestyle_tier_from_score(s_bal.pc_lifestyle_score);
     s_bal = reduce(s_bal, Intent::SetRoutine { routine }, &mut GoatRng::new(0));
 
     let mut rng = GoatRng::new(555);
     for _ in 0..52 {
         s_pro = reduce(s_pro, Intent::AdvanceWeek, &mut rng.clone());
+        s_pro.pc_week_training_done = false; // week boundary — harness has no round loop
         s_bal = reduce(s_bal, Intent::AdvanceWeek, &mut rng);
+        s_bal.pc_week_training_done = false; // week boundary — harness has no round loop
     }
 
     let fin_pro = s_pro.players.get_current(0, AttrId::Finishing as usize);
@@ -278,11 +278,8 @@ fn professional_lifestyle_boosts_growth() {
 fn flashy_lifestyle_has_lower_mult() {
     let s_flash = {
         let mut s = base_state();
-        s = reduce(
-            s,
-            Intent::SetLifestyle { lifestyle: 2 },
-            &mut GoatRng::new(0),
-        );
+        s.pc_lifestyle_score = Fixed::raw(1_000);
+        s.pc_lifestyle = lifestyle_tier_from_score(s.pc_lifestyle_score);
         s
     };
     assert_eq!(s_flash.pc_lifestyle, 2);
@@ -303,16 +300,14 @@ fn attrs_stay_in_bounds_with_lifestyle_professional() {
         intensity: Intensity::High,
     };
     let mut s = base_state();
-    s = reduce(
-        s,
-        Intent::SetLifestyle { lifestyle: 0 },
-        &mut GoatRng::new(0),
-    );
+    s.pc_lifestyle_score = Fixed::raw(-1_000);
+    s.pc_lifestyle = lifestyle_tier_from_score(s.pc_lifestyle_score);
     s = reduce(s, Intent::SetRoutine { routine }, &mut GoatRng::new(0));
 
     let mut rng = GoatRng::new(77);
     for _ in 0..200 {
         s = reduce(s, Intent::AdvanceWeek, &mut rng);
+        s.pc_week_training_done = false; // week boundary — harness has no round loop
         for a in 0..NUM_ATTRS {
             let cur = s.players.get_current(0, a);
             let pot = s.players.get_potential(0, a);

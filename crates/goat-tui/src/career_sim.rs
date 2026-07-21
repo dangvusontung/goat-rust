@@ -8,8 +8,8 @@
 use goat_core::{
     attrs::{AttrId, NUM_ATTRS},
     derive::ovr,
-    generation::{generate_player, CreationChoices, Position},
-    positions::POSITION_WEIGHT_TABLE,
+    generation::{generate_player, CreationChoices},
+    positions::{PrimaryPosition, POSITION_WEIGHT_TABLE},
     roles::RoleId,
     state::{reduce, Intent, WorldState},
     week::{Intensity, Routine},
@@ -24,8 +24,9 @@ use goat_traits::PlayerTraits;
 
 const BEATS_JSON: &str = include_str!("../../../beats.json");
 use goat_world::{
-    fixture_for_round, round_fixtures, sim_team_match, Table, BASE_CAREER_YEAR, CLUBS, DIV_CLUBS,
-    DIV_ENG_SEC, ROUNDS_PER_SEASON,
+    fixture_for_round, rest_weeks_after_round, round_fixtures, sim_team_match,
+    week_ends_after_round, Table, BASE_CAREER_YEAR, CLUBS, DIV_CLUBS, DIV_ENG_SEC,
+    ROUNDS_PER_SEASON,
 };
 
 // ── Position selector ─────────────────────────────────────────────────────────
@@ -47,11 +48,13 @@ impl SimPos {
         }
     }
 
-    fn to_position(self) -> Position {
+    /// Maps to the same specific position the old 3-way `default_primary()` picked,
+    /// so career-sim's byte-identical goldens are preserved.
+    fn to_position(self) -> PrimaryPosition {
         match self {
-            Self::Forward => Position::Forward,
-            Self::Midfielder => Position::Midfielder,
-            Self::Defender => Position::Defender,
+            Self::Forward => PrimaryPosition::ST,
+            Self::Midfielder => PrimaryPosition::CM,
+            Self::Defender => PrimaryPosition::CB,
         }
     }
 
@@ -214,7 +217,7 @@ fn scan_star_seed(limit: u64, sim_pos: SimPos) -> Option<u64> {
     let (k1, k2, sup, min1, min2, min_sup) = sim_pos.scan_criteria();
     let choices = CreationChoices {
         name: "Prospect".into(),
-        position: sim_pos.to_position(),
+        primary_position: sim_pos.to_position(),
         nationality: "England",
         club: "Leeds United",
     };
@@ -283,7 +286,7 @@ fn main() {
         let lib = BeatLibrary::load(BEATS_JSON).expect("beats.json must parse");
         let choices = CreationChoices {
             name: "Striker".into(),
-            position: Position::Forward,
+            primary_position: PrimaryPosition::ST,
             nationality: "Brazilian",
             club: "Riverside Town",
         };
@@ -360,7 +363,7 @@ fn main() {
         let div_clubs = DIV_CLUBS[div_idx];
         let choices = CreationChoices {
             name: "Tung".into(),
-            position: Position::Forward,
+            primary_position: PrimaryPosition::ST,
             nationality: "England",
             club: CLUBS[pc_club_id].name,
         };
@@ -504,6 +507,8 @@ fn main() {
                     pc_output: r.player_output,
                     pc_result: res_int,
                     round_results,
+                    rest_weeks: rest_weeks_after_round(round),
+                    week_ends: week_ends_after_round(round),
                 },
                 &mut GoatRng::new(0),
             );
@@ -592,7 +597,7 @@ fn main() {
         let lib = BeatLibrary::load(BEATS_JSON).expect("beats.json must parse");
         let choices = CreationChoices {
             name: "Striker".into(),
-            position: Position::Forward,
+            primary_position: PrimaryPosition::ST,
             nationality: "Brazilian",
             club: "Riverside Town",
         };
@@ -843,7 +848,7 @@ fn main() {
         println!("{}", "─".repeat(40));
         let choices = CreationChoices {
             name: "X".into(),
-            position: sim_pos.to_position(),
+            primary_position: sim_pos.to_position(),
             nationality: "England",
             club: "Leeds United",
         };
@@ -887,7 +892,7 @@ fn main() {
 
     let choices = CreationChoices {
         name: "Tung".into(),
-        position: sim_pos.to_position(),
+        primary_position: sim_pos.to_position(),
         nationality: "England",
         club: CLUBS[pc_club_id].name,
     };
@@ -910,11 +915,15 @@ fn main() {
         &mut GoatRng::new(0),
     );
 
-    state = reduce(
-        state,
-        Intent::SetLifestyle { lifestyle },
-        &mut GoatRng::new(0),
-    );
+    // Lifestyle is now a derived readout (bible §8.6), not a settable intent — this
+    // harness still wants to force a starting tier for long-horizon comparisons, so it
+    // seeds the underlying score directly at the extremes/centre of the tier band.
+    state.pc_lifestyle_score = match lifestyle {
+        0 => Fixed::raw(-1_000),
+        2 => Fixed::raw(1_000),
+        _ => Fixed::ZERO,
+    };
+    state.pc_lifestyle = lifestyle.min(2);
 
     let routine = Routine {
         focus_attrs: sim_pos.focus_attrs(),
@@ -1012,6 +1021,8 @@ fn main() {
                     pc_output,
                     pc_result,
                     round_results,
+                    rest_weeks: rest_weeks_after_round(round),
+                    week_ends: week_ends_after_round(round),
                 },
                 &mut GoatRng::new(0),
             );

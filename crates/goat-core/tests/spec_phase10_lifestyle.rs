@@ -11,7 +11,8 @@
 //! weeks, Flashy peaks 89 vs 93 — toxic finally costs ceiling + durability.
 
 use goat_core::derive::ovr;
-use goat_core::generation::{CreationChoices, Position};
+use goat_core::generation::CreationChoices;
+use goat_core::positions::PrimaryPosition;
 use goat_core::state::{reduce, Intent, WorldState};
 use goat_core::week::{Intensity, Routine};
 use goat_fixed::Fixed;
@@ -20,12 +21,29 @@ use goat_rng::GoatRng;
 const PROFESSIONAL: u8 = 0;
 const FLASHY: u8 = 2;
 
-/// Build a Forward at a fixed seed, set the given lifestyle + a High-intensity
+/// Maps a forced test lifestyle tier to the extreme lifestyle score that produces it
+/// (bible §8.5/§8.6 — lifestyle is now emergent, not a settable intent). Pinned to the
+/// extremes of the [-1.000, 1.000] band so a single week's nudge can never cross a
+/// tier threshold on its own.
+fn score_for_lifestyle(lifestyle: u8) -> Fixed {
+    match lifestyle {
+        0 => Fixed::raw(-1_000),
+        2 => Fixed::raw(1_000),
+        _ => Fixed::ZERO,
+    }
+}
+
+/// Build a Forward at a fixed seed, pin the given lifestyle tier + a High-intensity
 /// striker routine, then run `weeks` weeks. Returns (peak OVR seen, weeks injured).
+///
+/// The High-intensity routine nudges the lifestyle score toward Professional every
+/// week (bible §8.5); this harness re-pins the score before each week so the forced
+/// tier holds for the whole run — reproducing the old "lifestyle set once, never
+/// changes" behaviour byte-for-bit, which is what the frozen goldens below assume.
 fn run_career(seed: u64, lifestyle: u8, weeks: u32) -> (i32, u32) {
     let choices = CreationChoices {
         name: "Spec".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "Brazilian",
         club: "Riverside Town",
     };
@@ -35,7 +53,9 @@ fn run_career(seed: u64, lifestyle: u8, weeks: u32) -> (i32, u32) {
         Intent::CreatePlayer { seed, choices },
         &mut GoatRng::new(0),
     );
-    s = reduce(s, Intent::SetLifestyle { lifestyle }, &mut GoatRng::new(0));
+    let forced_score = score_for_lifestyle(lifestyle);
+    s.pc_lifestyle_score = forced_score;
+    s.pc_lifestyle = lifestyle;
     let routine = Routine {
         focus_attrs: vec![
             goat_core::attrs::AttrId::Finishing,
@@ -51,7 +71,10 @@ fn run_career(seed: u64, lifestyle: u8, weeks: u32) -> (i32, u32) {
     let mut peak = 0i32;
     let mut injured = 0u32;
     for _ in 0..weeks {
+        s.pc_lifestyle_score = forced_score;
+        s.pc_lifestyle = lifestyle;
         s = reduce(s, Intent::AdvanceWeek, &mut rng);
+        s.pc_week_training_done = false; // week boundary — harness has no round loop
         if s.players.get_injury_weeks(pc) > 0 {
             injured += 1;
         }
@@ -107,7 +130,7 @@ fn professional_lifestyle_reaches_higher_peak() {
 fn lifestyle_never_breaks_talent_ceiling() {
     let choices = CreationChoices {
         name: "Ceil".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "Brazilian",
         club: "Riverside Town",
     };
@@ -117,13 +140,8 @@ fn lifestyle_never_breaks_talent_ceiling() {
         Intent::CreatePlayer { seed: 7, choices },
         &mut GoatRng::new(0),
     );
-    s = reduce(
-        s,
-        Intent::SetLifestyle {
-            lifestyle: PROFESSIONAL,
-        },
-        &mut GoatRng::new(0),
-    );
+    s.pc_lifestyle_score = score_for_lifestyle(PROFESSIONAL);
+    s.pc_lifestyle = PROFESSIONAL;
     let routine = Routine {
         focus_attrs: vec![goat_core::attrs::AttrId::Finishing],
         intensity: Intensity::High,
@@ -132,7 +150,10 @@ fn lifestyle_never_breaks_talent_ceiling() {
     let pc = s.pc_player_id.unwrap();
     let mut rng = GoatRng::new(7);
     for _ in 0..600 {
+        s.pc_lifestyle_score = score_for_lifestyle(PROFESSIONAL);
+        s.pc_lifestyle = PROFESSIONAL;
         s = reduce(s, Intent::AdvanceWeek, &mut rng);
+        s.pc_week_training_done = false; // week boundary — harness has no round loop
         for a in 0..goat_core::attrs::NUM_ATTRS {
             assert!(
                 s.players.get_current(pc, a) <= s.players.get_potential(pc, a).max(Fixed::MIN_ATTR),

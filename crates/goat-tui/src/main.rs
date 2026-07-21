@@ -12,8 +12,9 @@ use goat_core::{
         PHYSICAL_ATTRS, SHOOTING_ATTRS,
     },
     derive::{derive_attrs, ovr, role_rating},
-    generation::{generate_player, CreationChoices, Position},
+    generation::{generate_player, CreationChoices},
     player::PlayerView,
+    positions::PrimaryPosition,
     roles::RoleId,
     state::{reduce, Intent, WorldState},
     week::{DevelopmentEvent, Intensity, Routine},
@@ -113,18 +114,27 @@ fn run_new_game(
         }
     };
 
-    writeln!(
-        out,
-        "\nPick a position:\n  1. Defender\n  2. Midfielder\n  3. Forward"
-    )
-    .unwrap();
-    let position = loop {
-        match prompt(lines, out, "Choice [1-3]").trim() {
-            "1" => break Position::Defender,
-            "2" => break Position::Midfielder,
-            "3" => break Position::Forward,
-            _ => writeln!(out, "  Please enter 1, 2 or 3.").unwrap(),
+    writeln!(out, "\nPick a position:").unwrap();
+    for (i, p) in PrimaryPosition::ALL.iter().enumerate() {
+        writeln!(out, "  {}. {}", i + 1, p.name()).unwrap();
+    }
+    let primary_position = loop {
+        let s = prompt(
+            lines,
+            out,
+            &format!("Choice [1-{}]", PrimaryPosition::ALL.len()),
+        );
+        if let Ok(n) = s.trim().parse::<usize>() {
+            if (1..=PrimaryPosition::ALL.len()).contains(&n) {
+                break PrimaryPosition::ALL[n - 1];
+            }
         }
+        writeln!(
+            out,
+            "  Please enter a number between 1 and {}.",
+            PrimaryPosition::ALL.len()
+        )
+        .unwrap();
     };
 
     // Pick nation
@@ -192,7 +202,7 @@ fn run_new_game(
     let nationality = DIV_NATIONS[div_idx].name();
     let choices = CreationChoices {
         name,
-        position,
+        primary_position,
         nationality,
         club: club.name,
     };
@@ -200,7 +210,9 @@ fn run_new_game(
     let mut effective_seed = seed;
     loop {
         let player = generate_player(effective_seed, &choices);
-        render_player_sheet(out, &player, &choices, effective_seed);
+        // Lifestyle is not yet determined at creation time (every career starts
+        // Balanced) — pass the default tier for the preview sheet.
+        render_player_sheet(out, &player, &choices, effective_seed, 1);
         writeln!(out, "\n  [S] Start game   [R] Re-roll   [Q] Back").unwrap();
         write!(out, "  > ").unwrap();
         out.flush().unwrap();
@@ -208,25 +220,9 @@ fn run_new_game(
         match lines.next() {
             Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                 "S" | "START" => {
-                    // Pick lifestyle (Phase 10).
-                    writeln!(out, "\n--- LIFESTYLE ---").unwrap();
-                    writeln!(
-                        out,
-                        "  1. Professional — slower decline, better long-term development"
-                    )
-                    .unwrap();
-                    writeln!(out, "  2. Balanced      — the default path").unwrap();
-                    writeln!(
-                        out,
-                        "  3. Flashy        — peak burns brighter but fades faster"
-                    )
-                    .unwrap();
-                    let lifestyle: u8 = match prompt(lines, out, "Choice [1-3]").trim() {
-                        "1" => 0,
-                        "3" => 2,
-                        _ => 1,
-                    };
-
+                    // Lifestyle is no longer picked here (bible §8.6) — it emerges over
+                    // the career from training intensity, dev investment and sponsor
+                    // choices. Every career starts Balanced (score 0).
                     let mut state = WorldState::new();
                     state = reduce(
                         state,
@@ -245,11 +241,6 @@ fn run_new_game(
                             facilities_mult: club.facilities_mult(),
                             initial_table: Box::new([0u32; 80]),
                         },
-                        &mut GoatRng::new(0),
-                    );
-                    state = reduce(
-                        state,
-                        Intent::SetLifestyle { lifestyle },
                         &mut GoatRng::new(0),
                     );
 
@@ -464,15 +455,12 @@ fn run_game_loop(
                 "V" => {
                     let choices = CreationChoices {
                         name: view.name.clone(),
-                        position: match state.pc_position {
-                            1 => Position::Midfielder,
-                            2 => Position::Forward,
-                            _ => Position::Defender,
-                        },
+                        primary_position: PrimaryPosition::from_u8(state.pc_position)
+                            .unwrap_or(PrimaryPosition::ST),
                         nationality: state.pc_nationality,
                         club: state.pc_club,
                     };
-                    render_player_sheet(out, &view, &choices, 0);
+                    render_player_sheet(out, &view, &choices, 0, state.pc_lifestyle);
                 }
                 _ => {}
             },
@@ -516,13 +504,14 @@ fn run_next_round(
     )
     .unwrap();
 
-    // Suspension check: serve ban, auto-skip.
+    // Suspension check: serve ban, auto-skip. `reduce(ApplyRoundResult)` below
+    // is the one that actually decrements the ban (bible AC-06) — this branch
+    // only skips the PC's personal match participation.
     if state.pc_suspension_weeks > 0 {
-        state.pc_suspension_weeks -= 1;
         writeln!(
             out,
             "  You are SUSPENDED. {} match(es) remaining after this.",
-            state.pc_suspension_weeks
+            state.pc_suspension_weeks - 1
         )
         .unwrap();
         // Still need to sim other matches and advance the round.
@@ -544,6 +533,8 @@ fn run_next_round(
                 pc_output: 0,
                 pc_result: 0,
                 round_results,
+                rest_weeks: goat_world::rest_weeks_after_round(round),
+                week_ends: goat_world::week_ends_after_round(round),
             },
             &mut GoatRng::new(0),
         );
@@ -720,6 +711,8 @@ fn run_next_round(
             pc_output,
             pc_result,
             round_results,
+            rest_weeks: goat_world::rest_weeks_after_round(round),
+            week_ends: goat_world::week_ends_after_round(round),
         },
         &mut GoatRng::new(0),
     );
@@ -734,11 +727,18 @@ fn club_div_pos_in(div_idx: usize, club_id: usize) -> usize {
         .expect("club in division")
 }
 
+/// Family-representative match role for a 0..7 PrimaryPosition discriminant
+/// (0=ST … 7=CB). The pre-revision 0..2 mapping would deploy a Striker (0) as
+/// a CentreBack.
 fn best_role_for_position(pc_position: u8) -> RoleId {
-    match pc_position {
-        0 => RoleId::CentreBack,
-        1 => RoleId::CentralMid,
-        _ => RoleId::CompleteForward,
+    use goat_core::{positions::PrimaryPosition, roles::PositionFamily};
+    match PrimaryPosition::from_u8(pc_position)
+        .unwrap_or(PrimaryPosition::ST)
+        .family()
+    {
+        PositionFamily::Defender => RoleId::CentreBack,
+        PositionFamily::Midfielder => RoleId::CentralMid,
+        PositionFamily::Forward => RoleId::CompleteForward,
     }
 }
 
@@ -1490,7 +1490,7 @@ fn render_game_sheet(out: &mut impl Write, view: &PlayerView, state: &WorldState
     .unwrap();
 
     if state.season_number > 0 {
-        let round = state.season_round;
+        let round = state.season_round + 1; // 1-indexed: next round to play, matches the match header
         let total = ROUNDS_PER_SEASON as u32;
         let club_name = CLUBS[state.pc_club_idx as usize].name;
         let susp_str = if state.pc_suspension_weeks > 0 {
@@ -1591,6 +1591,7 @@ fn render_player_sheet(
     player: &PlayerView,
     choices: &CreationChoices,
     seed: u64,
+    lifestyle: u8,
 ) {
     let cur = &player.current;
     let fam = &player.familiarity;
@@ -1609,7 +1610,7 @@ fn render_player_sheet(
         writeln!(
             out,
             "║  Position: {:<10}  Seed: {:<16}║",
-            choices.position.name(),
+            choices.primary_position.name(),
             seed
         )
         .unwrap();
@@ -1620,6 +1621,13 @@ fn render_player_sheet(
         )
         .unwrap();
     }
+    // Lifestyle is a read-only, emergent readout (bible §8.6) — never a menu pick.
+    let lifestyle_label = match lifestyle {
+        0 => "Professional",
+        2 => "Flashy",
+        _ => "Balanced",
+    };
+    writeln!(out, "║  Lifestyle: {:<34}║", lifestyle_label).unwrap();
     writeln!(out, "╠══════════════════════════════════════════════╣").unwrap();
     writeln!(out, "║  ATTRIBUTES (current / potential)            ║").unwrap();
     writeln!(out, "║  ─────────────────────────────────────────── ║").unwrap();

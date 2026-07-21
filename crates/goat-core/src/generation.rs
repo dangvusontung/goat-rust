@@ -16,51 +16,18 @@ use crate::tuning::{
     TECHNICAL_START_PCT,
 };
 
-/// High-level player position chosen at career creation (bible §4).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Position {
-    Defender,
-    Midfielder,
-    Forward,
-    // Goalkeeper parked (bible §11)
-}
-
-impl Position {
-    pub fn name(self) -> &'static str {
-        match self {
-            Position::Defender => "Defender",
-            Position::Midfielder => "Midfielder",
-            Position::Forward => "Forward",
-        }
-    }
-
-    fn family(self) -> PositionFamily {
-        match self {
-            Position::Defender => PositionFamily::Defender,
-            Position::Midfielder => PositionFamily::Midfielder,
-            Position::Forward => PositionFamily::Forward,
-        }
-    }
-
-    /// Default primary position for OVR (appendix C.4).
-    /// Maps the broad creation choice to a specific position for rating purposes.
-    pub fn default_primary(self) -> PrimaryPosition {
-        match self {
-            Position::Forward => PrimaryPosition::ST,
-            Position::Midfielder => PrimaryPosition::CM,
-            Position::Defender => PrimaryPosition::CB,
-        }
-    }
-}
-
 /// Choices the player makes at career-creation time (bible §4).
 ///
 /// Nationality and club are stub lists in this phase; real world arrives in Phase 5.
 /// Their effects on play land in later phases; they are recorded in state now.
+///
+/// `primary_position` picks one of the 8 specific outfield positions directly
+/// (bible §4 revision: the player selects a specific position, not a broad family).
+/// Goalkeeper is parked (bible §11).
 #[derive(Debug, Clone)]
 pub struct CreationChoices {
     pub name: String,
-    pub position: Position,
+    pub primary_position: PrimaryPosition,
     pub nationality: &'static str,
     pub club: &'static str,
 }
@@ -107,17 +74,18 @@ pub fn generate_player(seed: u64, choices: &CreationChoices) -> PlayerView {
     let spikiness = rng.next_range_u8(1, 3) as i32;
 
     // Step 3 — role DNA: kept to preserve familiarity seeding for the match engine
-    let primary_role = roll_primary_role(&mut rng, choices.position);
+    let family = choices.primary_position.family();
+    let primary_role = roll_primary_role(&mut rng, family);
 
     // Step 4 — per-attribute potentials (C.5: position-shaped + bounded noise)
-    let primary_pos = choices.position.default_primary();
+    let primary_pos = choices.primary_position;
     let potential = roll_potentials(seed, ceiling, spikiness, primary_pos);
 
     // Step 5 — starting current values
     let current = derive_starting_current(&potential);
 
     // Step 6 — familiarity seeding
-    let familiarity = seed_familiarity(choices.position, primary_role);
+    let familiarity = seed_familiarity(family, primary_role);
 
     PlayerView {
         name: choices.name.clone(),
@@ -133,8 +101,7 @@ pub fn generate_player(seed: u64, choices: &CreationChoices) -> PlayerView {
 ///
 /// Roles in the player's position family have triple the probability of roles
 /// outside it.
-fn roll_primary_role(rng: &mut impl RngSource, position: Position) -> RoleId {
-    let family = position.family();
+fn roll_primary_role(rng: &mut impl RngSource, family: PositionFamily) -> RoleId {
     const TICKETS_IN: u32 = 3;
     const TICKETS_OUT: u32 = 1;
     let total: u32 = RoleId::ALL
@@ -248,9 +215,7 @@ fn derive_starting_current(potential: &[Fixed; NUM_ATTRS]) -> [Fixed; NUM_ATTRS]
 /// - Natural: one role in the chosen position family (primary_role if in-family; else first in-family).
 /// - Competent: all remaining roles in the chosen position family.
 /// - Awkward: everything else.
-fn seed_familiarity(position: Position, primary_role: RoleId) -> [FamiliarityTier; NUM_ROLES] {
-    let family = position.family();
-
+fn seed_familiarity(family: PositionFamily, primary_role: RoleId) -> [FamiliarityTier; NUM_ROLES] {
     let natural_role = if ROLE_POSITION_FAMILY[primary_role as usize] == family {
         primary_role
     } else {
@@ -283,10 +248,10 @@ mod tests {
     use super::*;
     use crate::attrs::NUM_ATTRS;
 
-    fn choices(pos: Position) -> CreationChoices {
+    fn choices(pos: PrimaryPosition) -> CreationChoices {
         CreationChoices {
             name: "Test Player".into(),
-            position: pos,
+            primary_position: pos,
             nationality: "English",
             club: "Local FC",
         }
@@ -295,7 +260,7 @@ mod tests {
     #[test]
     fn current_never_exceeds_potential() {
         for seed in [1u64, 42, 999, 12345, 99999] {
-            let p = generate_player(seed, &choices(Position::Forward));
+            let p = generate_player(seed, &choices(PrimaryPosition::ST));
             for i in 0..NUM_ATTRS {
                 assert!(
                     p.current[i] <= p.potential[i],
@@ -308,7 +273,7 @@ mod tests {
     #[test]
     fn all_attrs_in_valid_range() {
         for seed in [7u64, 100, 55555] {
-            let p = generate_player(seed, &choices(Position::Midfielder));
+            let p = generate_player(seed, &choices(PrimaryPosition::CM));
             for i in 0..NUM_ATTRS {
                 assert!(
                     p.current[i] >= Fixed::MIN_ATTR,
@@ -332,15 +297,15 @@ mod tests {
 
     #[test]
     fn different_seeds_produce_different_players() {
-        let a = generate_player(1, &choices(Position::Forward));
-        let b = generate_player(2, &choices(Position::Forward));
+        let a = generate_player(1, &choices(PrimaryPosition::ST));
+        let b = generate_player(2, &choices(PrimaryPosition::ST));
         let any_diff = (0..NUM_ATTRS).any(|i| a.potential[i] != b.potential[i]);
         assert!(any_diff, "different seeds must produce different players");
     }
 
     #[test]
     fn chosen_position_favored_in_familiarity() {
-        let p = generate_player(42, &choices(Position::Forward));
+        let p = generate_player(42, &choices(PrimaryPosition::ST));
         let has_natural_forward = [
             RoleId::InsideForward,
             RoleId::TargetForward,
@@ -358,7 +323,7 @@ mod tests {
 
     #[test]
     fn same_seed_same_player() {
-        let c = choices(Position::Defender);
+        let c = choices(PrimaryPosition::CB);
         let a = generate_player(777, &c);
         let b = generate_player(777, &c);
         for i in 0..NUM_ATTRS {
@@ -374,7 +339,7 @@ mod tests {
     fn forward_key_attrs_outrank_zero_weight_attrs() {
         // For a forward (ST), Finishing must have higher potential than Marking.
         use crate::attrs::AttrId;
-        let p = generate_player(42, &choices(Position::Forward));
+        let p = generate_player(42, &choices(PrimaryPosition::ST));
         let fin = p.potential[AttrId::Finishing as usize];
         let mark = p.potential[AttrId::Marking as usize]; // zero weight for ST
         assert!(
@@ -387,13 +352,48 @@ mod tests {
 
     #[test]
     fn primary_position_set_correctly() {
-        let fwd = generate_player(1, &choices(Position::Forward));
+        let fwd = generate_player(1, &choices(PrimaryPosition::ST));
         assert_eq!(fwd.primary_position, PrimaryPosition::ST);
 
-        let mid = generate_player(1, &choices(Position::Midfielder));
+        let mid = generate_player(1, &choices(PrimaryPosition::CM));
         assert_eq!(mid.primary_position, PrimaryPosition::CM);
 
-        let def = generate_player(1, &choices(Position::Defender));
+        let def = generate_player(1, &choices(PrimaryPosition::CB));
         assert_eq!(def.primary_position, PrimaryPosition::CB);
+    }
+
+    /// Creation can now pick any of the 8 specific positions directly, not just the 3
+    /// broad families the old picker exposed. A Winger (W) was never reachable through
+    /// `default_primary()` (which only ever produced ST/CM/CB) — verify it shapes
+    /// potentials via `POSITION_WEIGHT_TABLE[W]` and seeds Natural familiarity toward a
+    /// Midfielder-family role (bible §4/§5.3).
+    #[test]
+    fn winger_position_reachable_directly_and_shapes_generation() {
+        let p = generate_player(42, &choices(PrimaryPosition::W));
+        assert_eq!(p.primary_position, PrimaryPosition::W);
+        assert_eq!(p.primary_position.family(), PositionFamily::Midfielder);
+
+        // Key attrs for W (Acceleration, SprintSpeed, CloseControl) must outrank a
+        // zero-weight attr for W (e.g. Marking).
+        use crate::attrs::AttrId;
+        let acc = p.potential[AttrId::Acceleration as usize];
+        let mark = p.potential[AttrId::Marking as usize];
+        assert!(
+            acc > mark,
+            "Acceleration potential ({}) must exceed Marking ({}) for a winger",
+            acc.to_int(),
+            mark.to_int()
+        );
+
+        // Natural familiarity should land on a Midfielder-family role (W's family),
+        // never a pure Forward or Defender role.
+        let has_natural_midfielder = RoleId::ALL.iter().any(|&r| {
+            p.familiarity[r as usize] == FamiliarityTier::Natural
+                && ROLE_POSITION_FAMILY[r as usize] == PositionFamily::Midfielder
+        });
+        assert!(
+            has_natural_midfielder,
+            "winger should have a natural Midfielder-family role"
+        );
     }
 }

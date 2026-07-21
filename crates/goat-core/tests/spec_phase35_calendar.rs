@@ -10,7 +10,8 @@
 
 use goat_calendar::WindowKind;
 use goat_core::calendar_loop::SEASON_DAYS;
-use goat_core::generation::{CreationChoices, Position};
+use goat_core::generation::CreationChoices;
+use goat_core::positions::PrimaryPosition;
 use goat_core::state::{reduce, Intent, WorldState};
 use goat_core::week::{Intensity, Routine};
 use goat_rng::GoatRng;
@@ -18,7 +19,7 @@ use goat_rng::GoatRng;
 fn forward(seed: u64) -> WorldState {
     let choices = CreationChoices {
         name: "Cal".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "Brazilian",
         club: "Riverside Town",
     };
@@ -42,6 +43,7 @@ fn calendar_flashpoints_surface_over_a_season() {
     // 53 weeks ≈ one 365-day season — each window should open once.
     for _ in 0..53 {
         s = reduce(s, Intent::AdvanceWeek, &mut GoatRng::new(1));
+        s.pc_week_training_done = false; // week boundary — harness has no round loop
         for f in &s.last_week_flashpoints {
             seen.push(f.window);
         }
@@ -59,6 +61,7 @@ fn epoch_day_advances_seven_per_week() {
     let mut s = forward(3);
     for wk in 1..=10u32 {
         s = reduce(s, Intent::AdvanceWeek, &mut GoatRng::new(wk as u64));
+        s.pc_week_training_done = false; // week boundary — harness has no round loop
         assert_eq!(s.pc_epoch_day, wk * 7, "epoch day should be 7×week");
     }
     assert!(s.pc_epoch_day < SEASON_DAYS); // 70 < 365
@@ -74,6 +77,7 @@ fn calendar_seed_does_not_affect_growth() {
         s.world_seed = world_seed; // change ONLY the calendar's stream source
         for _ in 0..40 {
             s = reduce(s, Intent::AdvanceWeek, &mut GoatRng::new(123));
+            s.pc_week_training_done = false; // week boundary — harness has no round loop
         }
         let pc = s.pc_player_id.unwrap();
         (0..goat_core::attrs::NUM_ATTRS)

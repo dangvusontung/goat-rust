@@ -3,14 +3,16 @@
 
 use goat_core::{
     attrs::AttrId,
-    generation::{CreationChoices, Position},
+    generation::CreationChoices,
+    positions::PrimaryPosition,
     state::{reduce, Intent, WorldState},
     week::{Intensity, Routine},
 };
 use goat_rng::GoatRng;
 use goat_world::{
-    generate_fixtures, round_fixtures, sim_team_match, Table, CLUBS, CLUBS_PER_DIV, DIV_BRA_SEC,
-    DIV_BRA_TOP, DIV_CLUBS, DIV_ENG_SEC, DIV_ENG_TOP, ROUNDS_PER_SEASON,
+    generate_fixtures, rest_weeks_after_round, round_fixtures, sim_team_match,
+    week_ends_after_round, Table, CLUBS, CLUBS_PER_DIV, DIV_BRA_SEC, DIV_BRA_TOP, DIV_CLUBS,
+    DIV_ENG_SEC, DIV_ENG_TOP, ROUNDS_PER_SEASON,
 };
 
 #[test]
@@ -124,7 +126,7 @@ fn twenty_seasons_full_career_no_panic() {
 
     let choices = CreationChoices {
         name: "Career GOAT".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "England",
         club: CLUBS[pc_club_id].name,
     };
@@ -210,6 +212,8 @@ fn twenty_seasons_full_career_no_panic() {
                     pc_output: 60,
                     pc_result,
                     round_results,
+                    rest_weeks: rest_weeks_after_round(round),
+                    week_ends: week_ends_after_round(round),
                 },
                 &mut GoatRng::new(0),
             );
@@ -276,7 +280,7 @@ fn five_headless_seasons_no_panic() {
 
     let choices = CreationChoices {
         name: "Headless Hero".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "England",
         club: CLUBS[pc_club_id].name,
     };
@@ -362,6 +366,8 @@ fn five_headless_seasons_no_panic() {
                     pc_output: 60,
                     pc_result,
                     round_results,
+                    rest_weeks: rest_weeks_after_round(round),
+                    week_ends: week_ends_after_round(round),
                 },
                 &mut GoatRng::new(0),
             );

@@ -5,7 +5,8 @@
 //! sporting merit dents reputation. Tier 0 (no sponsor) is neutral — byte-identical to
 //! the existing goldens.
 
-use goat_core::generation::{CreationChoices, Position};
+use goat_core::generation::CreationChoices;
+use goat_core::positions::PrimaryPosition;
 use goat_core::state::{reduce, Intent, WorldState};
 use goat_core::week::{Intensity, Routine};
 use goat_rng::GoatRng;
@@ -13,7 +14,7 @@ use goat_rng::GoatRng;
 fn player(seed: u64) -> WorldState {
     let choices = CreationChoices {
         name: "Spon".into(),
-        position: Position::Forward,
+        primary_position: PrimaryPosition::ST,
         nationality: "Brazilian",
         club: "Riverside Town",
     };
@@ -109,6 +110,7 @@ fn sponsor_obligations_drain_energy_but_none_is_neutral() {
         let mut rng = GoatRng::new(9);
         for _ in 0..10 {
             s = reduce(s, Intent::AdvanceWeek, &mut rng);
+            s.pc_week_training_done = false; // week boundary — harness has no round loop
         }
         s.players.get_energy(pc)
     };
