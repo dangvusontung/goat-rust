@@ -463,7 +463,7 @@ fn start_season_resets_standout_and_transfer_request_counters() {
     assert_eq!(s.pc_season_transfer_requests, 1);
     assert_eq!(s.pc_season_standout_matches, 1);
 
-    s = reduce(s, Intent::StartSeason, &mut GoatRng::new(0));
+    s = reduce(s, Intent::StartSeason { fixtures: vec![] }, &mut GoatRng::new(0));
     assert_eq!(
         s.pc_season_transfer_requests, 0,
         "StartSeason resets the live counter"

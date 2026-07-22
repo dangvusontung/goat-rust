@@ -701,7 +701,7 @@ pub fn new_game(
     // Seed peer cohort.
     let peers = build_peers(seed, &nationality);
     state = reduce(state, Intent::InitPeers { peers }, &mut GoatRng::new(0));
-    state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+    state = reduce(state, Intent::StartSeason { fixtures: vec![] }, &mut GoatRng::new(0));
 
     let snapshot = build_game_state(&state);
     set_state(state);
@@ -1454,7 +1454,7 @@ pub fn apply_season_end() -> GoatGameState {
 /// Start the next season.
 pub fn start_next_season() -> GoatGameState {
     let state = take_state();
-    let state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+    let state = reduce(state, Intent::StartSeason { fixtures: vec![] }, &mut GoatRng::new(0));
     let snap = build_game_state(&state);
     set_state(state);
     snap

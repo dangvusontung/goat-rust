@@ -222,7 +222,7 @@ fn direct_new_game(seed: u64, club_id: usize) -> WorldState {
     // keep this direct-reduce mirror in parity with the bridge.
     let peers = direct_build_peers(seed, &nationality);
     state = reduce(state, Intent::InitPeers { peers }, &mut GoatRng::new(0));
-    reduce(state, Intent::StartSeason, &mut GoatRng::new(0))
+    reduce(state, Intent::StartSeason { fixtures: vec![] }, &mut GoatRng::new(0))
 }
 
 /// Same seeding `advance_week` performs, applied via direct reduce.

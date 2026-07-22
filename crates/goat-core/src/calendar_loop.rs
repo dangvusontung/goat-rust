@@ -9,13 +9,30 @@
 //! windows.
 
 use goat_calendar::{
-    CalendarEngine, CalendarWindow, DayContext, DayReport, Season, StopClass, Subsystem,
-    SubsystemId, WindowKind,
+    CalendarEngine, CalendarWindow, Competition, CompetitionId, CompetitionKind, DayContext,
+    DayReport, Fixture, Season, StopClass, Subsystem, SubsystemId, WindowKind,
 };
 use goat_rng::RngSource;
 
 /// Fixed-length in-game year (§2.3 — no leap years).
 pub const SEASON_DAYS: u32 = 365;
+
+/// The PC's league competition id. `goat-core` stays headless (no `goat-world`
+/// dependency — see that crate's own doc comment), so this is the one fixed id the
+/// bridge (the TUI, which links `goat-core` and `goat-world` together) must use when it
+/// builds the season's `Fixture`s to hand into `Intent::StartSeason`.
+pub const LEAGUE_COMPETITION_ID: CompetitionId = 1;
+
+/// The competitions active this season. Slice 1: just the league; sibling slices append
+/// domestic-cup/continental/national-team competitions to this same list.
+fn standard_competitions() -> Vec<Competition> {
+    vec![Competition {
+        id: LEAGUE_COMPETITION_ID,
+        kind: CompetitionKind::League,
+        priority: 100,
+        is_orbit: true,
+    }]
+}
 
 /// A calendar flashpoint surfaced to the renderer (template + slot; the TUI formats it).
 /// Produced when a calendar window opens during the week.
@@ -51,7 +68,7 @@ fn standard_season() -> Season {
                 end_day: 364,
             },
         ],
-        competition_ids: vec![],
+        competition_ids: vec![LEAGUE_COMPETITION_ID],
     }
 }
 
@@ -83,12 +100,35 @@ impl Subsystem for WindowWatch {
 /// Advance the calendar by 7 days (one week) from `epoch_day`, returning the new epoch
 /// day and any window-entry flashpoints. `world_seed` seeds the calendar's own RNG —
 /// it never touches the growth RNG, so this is golden-safe.
-pub fn advance_calendar_week(epoch_day: u32, world_seed: u64) -> (u32, Vec<CalendarFlashpoint>) {
+///
+/// `orbit_fixtures` is the PC's current-season fixture list (league fixtures this
+/// slice; cup/continental/national-team fixtures once sibling slices ship), built by the
+/// TUI bridge (see `goat_calendar::Fixture`/`LEAGUE_COMPETITION_ID`) and threaded in via
+/// `Intent::StartSeason` — `goat-core` never constructs these itself, since it stays
+/// headless with respect to `goat-world`.
+///
+/// Note: this constructs a fresh, throwaway `CalendarEngine` every call (one per week),
+/// seeded each time from the SAME immutable `orbit_fixtures` baseline. A conflict-
+/// resolution reschedule that lands outside the current 7-day window is therefore not
+/// carried forward to the next call — harmless for a single-competition (league-only)
+/// season, since a club is never double-booked against itself, but something a sibling
+/// slice threading a second orbit competition through here will need to address (see
+/// the slice1 task doc's final report for detail).
+pub fn advance_calendar_week(
+    epoch_day: u32,
+    world_seed: u64,
+    orbit_fixtures: &[Fixture],
+) -> (u32, Vec<CalendarFlashpoint>) {
     let season = standard_season();
     let windows = season.windows.clone();
     let start = epoch_day % SEASON_DAYS;
 
-    let mut engine = CalendarEngine::new(world_seed, season, Vec::new());
+    let mut engine = CalendarEngine::new(
+        world_seed,
+        season,
+        orbit_fixtures.to_vec(),
+        standard_competitions(),
+    );
     engine.clock.epoch_day = start;
     engine.register(Box::new(WindowWatch));
 
@@ -119,7 +159,7 @@ mod tests {
         let mut seen: Vec<(u32, WindowKind)> = Vec::new();
         // 53 weeks ≈ one full 365-day season plus a little, so each window opens once.
         for _ in 0..53 {
-            let (next, fps) = advance_calendar_week(day, 42);
+            let (next, fps) = advance_calendar_week(day, 42, &[]);
             for f in fps {
                 seen.push((f.day, f.window));
             }
@@ -132,7 +172,7 @@ mod tests {
 
     #[test]
     fn epoch_day_advances_seven_per_week() {
-        let (next, _) = advance_calendar_week(100, 1);
+        let (next, _) = advance_calendar_week(100, 1, &[]);
         assert_eq!(next, 107);
     }
 }
