@@ -62,6 +62,10 @@ pub struct Club {
     pub nation: NationId,
     /// Aggregate team strength 1–99.
     pub strength: u8,
+    /// Per-club squad size, 18–30, correlated with (but not identical to) `strength` —
+    /// stronger clubs support deeper squads (Design round 3, Doc C §Slice 1). Replaces the
+    /// old global `SQUAD_SIZE` constant.
+    pub squad_size: u8,
     /// The club's style bias over the 14 outfield roles (Design round 2, Doc B §B.2) —
     /// one `TacticalIdentity` generated per club at genesis, seed-derived.
     pub tactical_identity: TacticalIdentity,
@@ -301,6 +305,12 @@ impl WorldGenesis {
                     let rank_decay = (rank as i32 * 2) / 3;
                     let noise = rng.next_range_u32(0, 10) as i32 - 5;
                     let strength = (tier_base - rank_decay + noise).clamp(1, 99) as u8;
+                    // Squad size 18–30, stature-weighted (Design round 3, Doc C §1.2): bigger
+                    // clubs support deeper squads, mirroring `facilities_mult`'s same shape.
+                    let span = 12i32; // 30 - 18
+                    let squad_base = 18 + (strength as i32 * span) / 99;
+                    let squad_noise = rng.next_range_u32(0, 2) as i32 - 1; // ±1 jitter
+                    let squad_size = (squad_base + squad_noise).clamp(18, 30) as u8;
                     let tactical_identity =
                         TacticalIdentity::generate(seed_mix(world_seed, 0xE5, club_id as u64));
                     clubs.push(Club {
@@ -308,6 +318,7 @@ impl WorldGenesis {
                         name,
                         nation: nation.id,
                         strength,
+                        squad_size,
                         tactical_identity,
                     });
                     league_clubs.push(club_id);
@@ -434,6 +445,36 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), NUM_NATIONS, "nation names must be unique");
+    }
+
+    #[test]
+    fn squad_size_always_in_band() {
+        let w = WorldGenesis::generate(17);
+        assert!(w.clubs.iter().all(|c| (18..=30).contains(&c.squad_size)));
+    }
+
+    #[test]
+    fn squad_size_correlates_with_strength() {
+        let w = WorldGenesis::generate(17);
+        let mut by_strength = w.clubs.clone();
+        by_strength.sort_by_key(|c| c.strength);
+        let n = by_strength.len();
+        let quartile = n / 4;
+        let bottom_avg: f64 = by_strength[..quartile]
+            .iter()
+            .map(|c| c.squad_size as f64)
+            .sum::<f64>()
+            / quartile as f64;
+        let top_avg: f64 = by_strength[n - quartile..]
+            .iter()
+            .map(|c| c.squad_size as f64)
+            .sum::<f64>()
+            / quartile as f64;
+        assert!(
+            top_avg > bottom_avg,
+            "top-quartile-strength clubs ({top_avg}) should average a materially higher \
+             squad_size than bottom-quartile clubs ({bottom_avg})"
+        );
     }
 
     #[test]

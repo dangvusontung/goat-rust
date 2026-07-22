@@ -20,11 +20,6 @@ use goat_rng::{GoatRng, RngSource};
 /// retired identity can never re-enter the live world as an active player.
 pub const RETIRE_AGE_YEARS: u32 = 38;
 
-/// Players generated per club at genesis. Total headcount = `world.clubs.len() * SQUAD_SIZE`
-/// — scales directly with the generated club/nation count (~1,200 clubs → 30,000 players,
-/// the bible §7.2/§9 population target).
-pub const SQUAD_SIZE: usize = 25;
-
 /// Background population as parallel columns. Index `i` identifies one player across all
 /// columns — there is no per-player struct.
 #[derive(Debug, Clone, Default)]
@@ -113,15 +108,21 @@ fn player_seed(world_seed: u64, club_id: u64, slot: u64) -> u64 {
 }
 
 /// Generate the background population deterministically from `world_seed`. Every club
-/// gets a `SQUAD_SIZE` squad; potential is anchored to club stature (stronger clubs draw
-/// stronger players) with per-player variance. Pure and order-stable.
+/// gets a `club.squad_size` squad; potential is anchored to club stature (stronger clubs
+/// draw stronger players) with per-player variance. Pure and order-stable.
 pub fn genesis(world_seed: u64, world: &WorldGenesis) -> Population {
     let mut pop = Population::default();
-    pop.seed.reserve(world.clubs.len() * SQUAD_SIZE);
+    pop.seed.reserve(
+        world
+            .clubs
+            .iter()
+            .map(|c| c.squad_size as usize)
+            .sum::<usize>(),
+    );
 
     for club in &world.clubs {
         let club_id = club.id;
-        for slot in 0..SQUAD_SIZE {
+        for slot in 0..club.squad_size as usize {
             let pseed = player_seed(world_seed, club_id as u64, slot as u64);
             let mut rng = GoatRng::new(pseed);
 
@@ -238,7 +239,7 @@ mod tests {
     fn genesis_is_full_and_columnar() {
         let world = WorldGenesis::generate(7);
         let pop = genesis(7, &world);
-        let expected = world.clubs.len() * SQUAD_SIZE;
+        let expected: usize = world.clubs.iter().map(|c| c.squad_size as usize).sum();
         assert_eq!(pop.len(), expected);
         // All columns are the same length (true SoA — no ragged rows).
         assert_eq!(pop.club.len(), expected);
@@ -250,6 +251,14 @@ mod tests {
             .birth_age_weeks
             .iter()
             .all(|&w| (16 * 52..=33 * 52).contains(&w)));
+    }
+
+    #[test]
+    fn genesis_headcount_matches_sum_of_squad_sizes() {
+        let world = WorldGenesis::generate(23);
+        let pop = genesis(23, &world);
+        let expected: usize = world.clubs.iter().map(|c| c.squad_size as usize).sum();
+        assert_eq!(pop.len(), expected);
     }
 
     #[test]
