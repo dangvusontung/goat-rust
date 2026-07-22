@@ -61,6 +61,11 @@ pub struct Population {
     /// Headline potential OVR (1–99). Cached identity column; the per-attribute potential
     /// is re-derivable from `seed`.
     pub potential_ovr: Vec<u8>,
+    /// Elapsed weeks (since world genesis) at which this player entered the population.
+    /// `0` for every genesis-created player (byte-identical to pre-Slice-4 behaviour); a
+    /// Slice-4 youth-intake player's is `season * 52`. Needed because `birth_age_weeks`
+    /// alone assumes an entry point at `elapsed_weeks = 0` — see `age_years_at`.
+    pub intake_week: Vec<u32>,
     // ── Path-dependent accumulators (batch-tick residue; bible §247) ──────────
     /// Career goals accumulated by season batch-tick. Not derivable — persisted.
     pub career_goals: Vec<u32>,
@@ -92,6 +97,7 @@ impl Population {
                 self.position[i] as u64,
                 self.birth_age_weeks[i] as u64,
                 self.potential_ovr[i] as u64,
+                self.intake_week[i] as u64,
             ] {
                 h ^= x;
                 h = h.wrapping_mul(0x0000_0100_0000_01b3);
@@ -163,6 +169,7 @@ pub fn genesis(world_seed: u64, world: &WorldGenesis) -> Population {
             pop.position.push(position);
             pop.birth_age_weeks.push(birth_age_weeks);
             pop.potential_ovr.push(potential_ovr);
+            pop.intake_week.push(0);
             pop.career_goals.push(0);
             pop.career_apps.push(0);
             pop.career_titles.push(0);
@@ -203,7 +210,8 @@ fn position_from_u8(p: u8) -> PrimaryPosition {
 impl Population {
     /// Age in years of background player `idx` at `elapsed_weeks` after genesis.
     fn age_years_at(&self, idx: usize, elapsed_weeks: u32) -> u32 {
-        (self.birth_age_weeks[idx] + elapsed_weeks) / 52
+        let weeks_since_intake = elapsed_weeks.saturating_sub(self.intake_week[idx]);
+        (self.birth_age_weeks[idx] + weeks_since_intake) / 52
     }
 
     /// Cheap O(1) current OVR of a background player at a date (epoch weeks since genesis),
@@ -282,9 +290,95 @@ impl Population {
         for a in 0..NUM_ATTRS {
             view.current[a] = (view.potential[a] * frac).clamp(Fixed::MIN_ATTR, view.potential[a]);
         }
-        view.age_weeks = self.birth_age_weeks[idx] + elapsed_weeks;
+        let weeks_since_intake = elapsed_weeks.saturating_sub(self.intake_week[idx]);
+        view.age_weeks = self.birth_age_weeks[idx] + weeks_since_intake;
         Some(view)
     }
+}
+
+/// Age (years) an intake player enters the population at — mirrors a real academy
+/// graduate's age, and is the age `age_years_at` must report exactly at
+/// `elapsed_weeks == intake_week` (the 4.4 correctness fix's own regression target).
+const INTAKE_AGE_YEARS: u32 = 16;
+
+/// Deterministic seed for a Slice-4 intake player, per `(world_seed, club_id, season,
+/// local_idx)` — mirrors `player_seed`'s "generated but consistent" pattern with a season
+/// term folded in.
+fn intake_player_seed(world_seed: u64, club_id: u64, season: u32, local_idx: u64) -> u64 {
+    world_seed
+        ^ club_id.rotate_left(21).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (season as u64)
+            .rotate_left(31)
+            .wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ local_idx
+            .rotate_left(11)
+            .wrapping_mul(0x1656_67B1_9E37_79F9)
+}
+
+/// Deterministic seed for a club's season-level "how many intake players this season"
+/// roll — same seed family as `intake_player_seed`, but scoped to `(club_id, season)` only
+/// (no `local_idx` term), so this count roll's RNG stream never entangles with any one
+/// intake player's own identity seed.
+fn intake_count_seed(world_seed: u64, club_id: u64, season: u32) -> u64 {
+    world_seed
+        ^ club_id.rotate_left(21).wrapping_mul(0x9E37_79B9_7F4A_7C15)
+        ^ (season as u64)
+            .rotate_left(31)
+            .wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
+        ^ 0x494E_5441_4B45 // "INTAKE" salt — keeps this stream distinct from per-player seeds
+}
+
+/// Season-end youth academy replenishment for every club (Design round 3, Doc C §Slice
+/// 4). Appends new SoA rows to `pop` in place — never removes or reorders existing rows;
+/// retirement stays purely virtual, per `is_retired`. Rolls an independent uniform 1–4
+/// intake count per club per season (no arithmetic tie to that season's actual retirement
+/// count — Tùng explicitly rejected a rigid 1-in-1-out mechanic as unrealistic), skipped
+/// entirely for a club whose active squad is already at/above `squad_size * 1.2`. Returns
+/// the total number of players added, for logging/telemetry.
+pub fn apply_youth_intake(
+    pop: &mut Population,
+    world: &WorldGenesis,
+    world_seed: u64,
+    season: u32,
+) -> u32 {
+    let elapsed_weeks = season * 52;
+    let mut total_added = 0u32;
+
+    for club in &world.clubs {
+        let target = club.squad_size as u32;
+        let ceiling = target + target / 5; // +20%
+        let active = (0..pop.len())
+            .filter(|&i| pop.club[i] as usize == club.id && !pop.is_retired(i, elapsed_weeks))
+            .count() as u32;
+        if active >= ceiling {
+            continue;
+        }
+
+        let mut count_rng = GoatRng::new(intake_count_seed(world_seed, club.id as u64, season));
+        let intake_count = count_rng.next_range_u32(1, 4);
+
+        for local_idx in 0..intake_count {
+            let pseed = intake_player_seed(world_seed, club.id as u64, season, local_idx as u64);
+            let mut rng = GoatRng::new(pseed);
+
+            let position = squad_position(local_idx as usize);
+            let potential_ovr = roll_potential_ovr(&mut rng, club.strength);
+
+            pop.seed.push(pseed);
+            pop.club.push(club.id as u16);
+            pop.nation.push(club.nation as u8);
+            pop.position.push(position);
+            pop.birth_age_weeks.push(INTAKE_AGE_YEARS * 52);
+            pop.potential_ovr.push(potential_ovr);
+            pop.intake_week.push(elapsed_weeks);
+            pop.career_goals.push(0);
+            pop.career_apps.push(0);
+            pop.career_titles.push(0);
+            total_added += 1;
+        }
+    }
+
+    total_added
 }
 
 #[cfg(test)]
@@ -467,6 +561,7 @@ mod tests {
             pop.position.push(0);
             pop.birth_age_weeks.push(birth_age_weeks);
             pop.potential_ovr.push(potential_ovr);
+            pop.intake_week.push(0);
             pop.career_goals.push(0);
             pop.career_apps.push(0);
             pop.career_titles.push(0);
@@ -502,6 +597,139 @@ mod tests {
             differs,
             "at least one club's live strength should differ across a 20-season gap as its \
              roster ages"
+        );
+    }
+
+    #[test]
+    fn youth_intake_adds_players_deterministically() {
+        let world = WorldGenesis::generate(41);
+        let mut pop_a = genesis(41, &world);
+        let mut pop_b = genesis(41, &world);
+        let added_a = apply_youth_intake(&mut pop_a, &world, 41, 1);
+        let added_b = apply_youth_intake(&mut pop_b, &world, 41, 1);
+        assert_eq!(added_a, added_b);
+        assert!(
+            added_a > 0,
+            "expected at least one club to receive intake in season 1"
+        );
+        assert_eq!(pop_a.fingerprint(), pop_b.fingerprint());
+    }
+
+    #[test]
+    fn youth_intake_respects_ceiling() {
+        let world = WorldGenesis::generate(9);
+        let mut pop = genesis(9, &world);
+        let club = &world.clubs[0];
+        let season = 3u32;
+        let elapsed_weeks = season * 52;
+        let ceiling = club.squad_size as u32 + club.squad_size as u32 / 5;
+
+        // Artificially inflate this club's active squad to at/above its ceiling.
+        let current_active = (0..pop.len())
+            .filter(|&i| pop.club[i] as usize == club.id && !pop.is_retired(i, elapsed_weeks))
+            .count() as u32;
+        let to_add = ceiling.saturating_sub(current_active) + 2;
+        for extra in 0..to_add {
+            pop.seed.push(90_000 + extra as u64);
+            pop.club.push(club.id as u16);
+            pop.nation.push(club.nation as u8);
+            pop.position.push(0);
+            pop.birth_age_weeks.push(20 * 52);
+            pop.potential_ovr.push(50);
+            pop.intake_week.push(0);
+            pop.career_goals.push(0);
+            pop.career_apps.push(0);
+            pop.career_titles.push(0);
+        }
+
+        let len_before = pop.len();
+        apply_youth_intake(&mut pop, &world, 9, season);
+        let new_rows_for_club = (len_before..pop.len())
+            .filter(|&i| pop.club[i] as usize == club.id)
+            .count();
+        assert_eq!(
+            new_rows_for_club, 0,
+            "a club already at/above its squad_size*1.2 ceiling must get zero intake this season"
+        );
+    }
+
+    #[test]
+    fn youth_intake_uses_shared_outlier_formula() {
+        let world = WorldGenesis::generate(9);
+        let mut pop = genesis(9, &world);
+        let club = &world.clubs[0];
+        let season = 5u32;
+        apply_youth_intake(&mut pop, &world, 9, season);
+
+        let mut local_idx = 0u64;
+        for i in 0..pop.len() {
+            if pop.club[i] as usize == club.id && pop.intake_week[i] == season * 52 {
+                let pseed = intake_player_seed(9, club.id as u64, season, local_idx);
+                assert_eq!(
+                    pop.seed[i], pseed,
+                    "intake player seed must match intake_player_seed"
+                );
+                let mut rng = GoatRng::new(pseed);
+                let expected = roll_potential_ovr(&mut rng, club.strength);
+                assert_eq!(
+                    pop.potential_ovr[i], expected,
+                    "intake potential_ovr must come from the shared roll_potential_ovr, not a \
+                     re-derived formula"
+                );
+                local_idx += 1;
+            }
+        }
+        assert!(
+            local_idx > 0,
+            "expected at least one intake player for club 0 this season"
+        );
+    }
+
+    #[test]
+    fn intake_player_age_is_correct_mid_career() {
+        let world = WorldGenesis::generate(9);
+        let mut pop = genesis(9, &world);
+        let season = 6u32;
+        apply_youth_intake(&mut pop, &world, 9, season);
+        let elapsed_weeks = season * 52;
+
+        let idx = (0..pop.len())
+            .find(|&i| pop.intake_week[i] == elapsed_weeks)
+            .expect("expected at least one intake player at this season");
+        assert_eq!(
+            pop.age_years_at(idx, elapsed_weeks),
+            16,
+            "an intake player must report age 16 at his own intake week"
+        );
+        // Regression guard: under the pre-4.4 birth_age_weeks-only formula (no intake
+        // offset), this must NOT come out to 16 — proves the fix is load-bearing.
+        let old_formula_age = (pop.birth_age_weeks[idx] + elapsed_weeks) / 52;
+        assert_ne!(
+            old_formula_age, 16,
+            "the old formula (no intake_week offset) must get this wrong, or the fix isn't \
+             load-bearing"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_after_intake_but_is_still_deterministic() {
+        let world = WorldGenesis::generate(9);
+        let mut pop = genesis(9, &world);
+        let fp_before = pop.fingerprint();
+        apply_youth_intake(&mut pop, &world, 9, 2);
+        let fp_after = pop.fingerprint();
+        assert_ne!(
+            fp_before, fp_after,
+            "fingerprint must change once new identity data (intake players) exists"
+        );
+
+        let mut pop2 = genesis(9, &world);
+        apply_youth_intake(&mut pop2, &world, 9, 2);
+        assert_eq!(
+            fp_after,
+            pop2.fingerprint(),
+            "two independent runs through the same intake must produce the same post-intake \
+             fingerprint"
         );
     }
 }

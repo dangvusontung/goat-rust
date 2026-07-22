@@ -148,6 +148,11 @@ impl ReplayCache {
             season * 52,
         );
         let events = apply_season_end(world, &mut self.membership, season, &tables);
+        // Youth intake shapes *next* season's roster; ordering vs. apply_season_end above
+        // doesn't matter for correctness, but running after batch_tick_season means this
+        // season's career-accumulator crediting isn't affected by mid-season-boundary new
+        // arrivals (Design round 3, Doc C §4.6).
+        crate::population::apply_youth_intake(&mut self.pop, world, self.world_seed, season);
         self.resolved_through = season;
         events
     }
