@@ -34,14 +34,18 @@ use goat_meta::{
     AXIS_NAMES, PUNDITS, SCHOOLS,
 };
 use goat_rng::{GoatRng, RngSource};
-use goat_save::save::{from_world_state, load_from_file, save_to_file, to_world_state};
+use goat_save::save::{
+    from_world_state, list_slots, load_from_file, save_to_file, slot_path, to_world_state,
+    SaveSlotSummary,
+};
 use goat_traits::PlayerTraits;
 use goat_world::{
     fixture_for_round, format_week_header, round_fixtures, round_to_week, sim_team_match, Table,
     BASE_CAREER_YEAR, CLUBS, CLUBS_PER_DIV, DIV_CLUBS, DIV_NAMES, DIV_NATIONS, ROUNDS_PER_SEASON,
 };
 
-const SAVE_PATH: &str = "goat.sav";
+const SAVE_DIR: &str = "saves";
+const NUM_SLOTS: u8 = 9;
 const BEATS_JSON: &str = include_str!("../../../beats.json");
 
 fn main() {
@@ -49,6 +53,8 @@ fn main() {
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
     let mut lines = stdin.lock().lines();
+
+    std::fs::create_dir_all(SAVE_DIR).ok();
 
     // Try to load beats.json from disk (allows updates without recompile);
     // fall back to the compiled-in copy.
@@ -75,20 +81,33 @@ fn main() {
             Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                 "Q" | "QUIT" => break,
                 "N" | "NEW" => run_new_game(&mut lines, &mut out, &beat_lib),
-                "L" | "LOAD" => match load_from_file(SAVE_PATH) {
-                    Ok(data) => {
-                        writeln!(out, "  Save loaded.").unwrap();
-                        let state = to_world_state(&data);
-                        run_game_loop(
-                            &mut lines,
-                            &mut out,
-                            state,
-                            &beat_lib,
-                            PlayerTraits::default(),
-                        );
+                "L" | "LOAD" => {
+                    let slots = list_slots(SAVE_DIR, NUM_SLOTS);
+                    render_slot_picker(&mut out, &slots);
+                    match prompt_slot_choice(&mut lines, &mut out) {
+                        Some(slot) => {
+                            if !slots[(slot - 1) as usize].occupied {
+                                writeln!(out, "  Slot {slot} is empty.").unwrap();
+                            } else {
+                                match load_from_file(slot_path(SAVE_DIR, slot)) {
+                                    Ok(data) => {
+                                        writeln!(out, "  Save loaded.").unwrap();
+                                        let state = to_world_state(&data);
+                                        run_game_loop(
+                                            &mut lines,
+                                            &mut out,
+                                            state,
+                                            &beat_lib,
+                                            PlayerTraits::default(),
+                                        );
+                                    }
+                                    Err(e) => writeln!(out, "  Load failed: {e}").unwrap(),
+                                }
+                            }
+                        }
+                        None => writeln!(out, "  Load cancelled.").unwrap(),
                     }
-                    Err(e) => writeln!(out, "  Load failed: {e}").unwrap(),
-                },
+                }
                 _ => writeln!(out, "  Unknown command.").unwrap(),
             },
             _ => break,
@@ -406,7 +425,7 @@ fn run_game_loop(
                         continue;
                     }
                     "Z" => {
-                        run_save(out, &state);
+                        run_save(lines, out, &state);
                         return;
                     }
                     _ => return,
@@ -492,7 +511,7 @@ fn run_game_loop(
                     render_legacy_screen(out, &ev, &state);
                 }
                 "Z" => {
-                    run_save(out, &state);
+                    run_save(lines, out, &state);
                 }
                 "V" => {
                     let choices = CreationChoices {
@@ -1436,14 +1455,92 @@ fn render_retirement_screen(out: &mut impl Write, state: &WorldState, view: &Pla
 
 // ── Save / Load ───────────────────────────────────────────────────────────────
 
-fn run_save(out: &mut impl Write, state: &WorldState) {
-    if let Some(pc_id) = state.pc_player_id {
-        let view = state.players.snapshot(pc_id);
-        let data = from_world_state(state, &view);
-        match save_to_file(&data, SAVE_PATH) {
-            Ok(()) => writeln!(out, "  Game saved to {SAVE_PATH}.").unwrap(),
-            Err(e) => writeln!(out, "  Save failed: {e}").unwrap(),
+/// One line per slot: `"  [3] Alex Turner — S4, age 24"` when occupied,
+/// `"  [3] <empty>"` when not.
+fn render_slot_picker(out: &mut impl Write, slots: &[SaveSlotSummary]) {
+    for s in slots {
+        if s.occupied {
+            writeln!(
+                out,
+                "  [{}] {} — S{}, age {}",
+                s.slot,
+                s.pc_name,
+                s.season_number,
+                s.pc_age_weeks / 52
+            )
+            .unwrap();
+        } else {
+            writeln!(out, "  [{}] <empty>", s.slot).unwrap();
         }
+    }
+}
+
+/// Reads a single digit `1..=NUM_SLOTS`. `Q`/blank cancels (`None`); anything else
+/// reprompts instead of silently dropping back to the caller.
+fn prompt_slot_choice(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+) -> Option<u8> {
+    loop {
+        let s = prompt_or_exit(
+            lines,
+            out,
+            &format!("Slot (1-{NUM_SLOTS}, blank/Q to cancel)"),
+        );
+        let t = s.trim();
+        if t.is_empty() || t.eq_ignore_ascii_case("q") {
+            return None;
+        }
+        match t.parse::<u8>() {
+            Ok(n) if (1..=NUM_SLOTS).contains(&n) => return Some(n),
+            _ => writeln!(
+                out,
+                "  Please enter a slot number 1-{NUM_SLOTS}, or Q to cancel."
+            )
+            .unwrap(),
+        }
+    }
+}
+
+fn run_save(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+    state: &WorldState,
+) {
+    let Some(pc_id) = state.pc_player_id else {
+        return;
+    };
+
+    let slots = list_slots(SAVE_DIR, NUM_SLOTS);
+    render_slot_picker(out, &slots);
+    let Some(slot) = prompt_slot_choice(lines, out) else {
+        writeln!(out, "  Save cancelled.").unwrap();
+        return;
+    };
+
+    let summary = &slots[(slot - 1) as usize];
+    if summary.occupied {
+        write!(
+            out,
+            "  Slot {slot} has a save ({}, S{}). Overwrite? [Y/N] ",
+            summary.pc_name, summary.season_number
+        )
+        .unwrap();
+        out.flush().unwrap();
+        match lines.next() {
+            Some(Ok(l)) if l.trim().eq_ignore_ascii_case("y") => {}
+            _ => {
+                writeln!(out, "  Save cancelled.").unwrap();
+                return;
+            }
+        }
+    }
+
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(state, &view);
+    match save_to_file(&data, slot_path(SAVE_DIR, slot)) {
+        Ok(()) => writeln!(out, "  Saved to slot {slot}.").unwrap(),
+        Err(e) => writeln!(out, "  Save failed: {e}").unwrap(),
     }
 }
 

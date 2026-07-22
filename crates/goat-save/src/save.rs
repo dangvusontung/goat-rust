@@ -286,6 +286,53 @@ pub fn load_from_file(path: impl AsRef<Path>) -> Result<SaveData, SaveError> {
     from_bytes(&bytes)
 }
 
+// ── Save slots (Design round 1, Slice 3) ────────────────────────────────────────
+//
+// Numbered slots (1-9), not free-text-named ones — avoids filename
+// sanitization/path-traversal surface for a text UI that would otherwise need to
+// validate arbitrary user-typed strings. Pure save-data logic, no game-loop
+// concerns, so it lives here rather than in goat-tui — reusable later by
+// goat-bridge for a Flutter multi-slot UI.
+
+/// Summary of one save slot, cheap enough to compute for every slot up front.
+pub struct SaveSlotSummary {
+    pub slot: u8,
+    pub occupied: bool,
+    /// Empty string / 0 when `occupied` is false.
+    pub pc_name: String,
+    pub season_number: u32,
+    pub pc_age_weeks: u32,
+}
+
+/// The file path for a given numbered slot inside `dir`.
+pub fn slot_path(dir: impl AsRef<Path>, slot: u8) -> std::path::PathBuf {
+    dir.as_ref().join(format!("slot-{slot}.sav"))
+}
+
+/// List slots 1..=num_slots in `dir`. Reads every existing file to summarize it — cheap:
+/// each save is a few hundred bytes (tiny-save principle), so reading up to `num_slots` of
+/// them stays well inside CALENDAR.md's NFR-02 "load under 1s" budget.
+pub fn list_slots(dir: impl AsRef<Path>, num_slots: u8) -> Vec<SaveSlotSummary> {
+    (1..=num_slots)
+        .map(|slot| match load_from_file(slot_path(&dir, slot)) {
+            Ok(data) => SaveSlotSummary {
+                slot,
+                occupied: true,
+                pc_name: data.pc_name,
+                season_number: data.season_number,
+                pc_age_weeks: data.pc_age_weeks,
+            },
+            Err(_) => SaveSlotSummary {
+                slot,
+                occupied: false,
+                pc_name: String::new(),
+                season_number: 0,
+                pc_age_weeks: 0,
+            },
+        })
+        .collect()
+}
+
 /// Reconstruct a `WorldState` from saved data.
 ///
 /// Potentials are re-derived from the world seed (they are never stored).
