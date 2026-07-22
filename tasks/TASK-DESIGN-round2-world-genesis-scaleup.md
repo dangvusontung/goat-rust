@@ -695,6 +695,28 @@ rendered but has zero effect on `WorldState`. See that doc for the full slice br
 anchors, and the list of numbers (tier count, split percentages, multiplier magnitudes) still
 needing Tùng's sign-off before Dev starts.
 
+**BL5 — "Wasted potential" narrative (Pogba/Neymar archetype) — raised by Tùng, 2026-07-22, not
+yet designed.**
+
+Tùng's framing: a player whose ceiling (`potential`) is very high but who never actually closes
+the gap to it over their career — the bittersweet "what could have been" story, distinct from
+simply declining or being loyal/disloyal. Verified: no code or bible text for this exists today
+(`grep`'d — only unrelated "wasted opportunity" match-flavor strings in
+`crates/goat-match/src/library.rs`). The raw ingredients already exist, though: every player has
+tracked `current` vs `potential`, and lifestyle already creates a real mechanism for
+under-realizing potential — `lifestyle_ceiling` caps a Flashy player at 96% of potential (never
+100%), and `lifestyle_decline` makes a Flashy player's attributes erode faster once decline
+starts (`crates/goat-core/src/tuning.rs`, `week.rs`). What's missing is a narrative/legacy layer
+that specifically recognizes a large, persistent current-vs-potential gap and gives it story
+weight (a Legacy label like existing "Iconic"/"Cult Hero", and/or a new signal for Eye-Test
+Romantics, who are already the school most oriented toward "moments over numbers" per round-4's
+distinct-signals work). Confirmed by Tùng as a genuinely new idea (not a restatement of anything
+already parked). Not designed here — needs its own round to decide: is this a new Legacy label,
+a new Eye-Test Romantics input, a pundit narrative thread, or some combination; what "large,
+persistent gap" threshold triggers it; does it apply to background/rival players too (they don't
+currently have full attribute-level `current` tracked, only a formula-derived headline
+`potential_ovr`) or PC-only.
+
 ## Decisions Design needs from Tùng before Dev starts (collected from above)
 
 1. **A2.1**: uniform 20-clubs-per-tier across all nations (low risk — `CLUBS_PER_DIV` moves
