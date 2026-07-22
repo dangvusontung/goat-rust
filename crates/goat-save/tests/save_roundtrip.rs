@@ -470,6 +470,69 @@ fn old_v10_save_with_zero_suspension_scalar_migrates_to_an_empty_ledger() {
     let _ = pc_id;
 }
 
+// ── Club economy (Design round 5, Doc A §Slice 1) ────────────────────────────
+
+#[test]
+fn save_load_restores_club_budgets_through_bytes() {
+    // v12+: club_budgets must survive a full byte round-trip, including a legitimately
+    // negative war-chest (an overspent club — 1.1's explicit "not a bug to clamp away").
+    let mut state = setup_state();
+    state.club_budgets = vec![23_760, 0, -4_200, 12_000];
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join(format!(
+        "goat_save_club_budgets_roundtrip_{}.gsav",
+        std::process::id()
+    ));
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap(), &test_world());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(restored.club_budgets, vec![23_760, 0, -4_200, 12_000]);
+}
+
+#[test]
+fn old_v11_save_without_club_budgets_defaults_to_empty() {
+    // A real v11 binary never wrote the trailing v12 `club_budgets` bytes (length prefix +
+    // entries). Simulate that by truncating those bytes off a real v12 buffer — exercises
+    // the actual `.unwrap_or(0)` backward-compat reads in `from_bytes`, not just the
+    // in-memory struct default (same idiom as the v8/v9 Pantheon-signal truncation test).
+    let state = setup_state();
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let mut data = from_world_state(&state, &view);
+    data.club_budgets = vec![100, 200, 300];
+
+    let full_path = std::env::temp_dir().join(format!(
+        "goat_save_v12_full_{}.gsav",
+        std::process::id()
+    ));
+    save_to_file(&data, &full_path).unwrap();
+    let mut bytes = std::fs::read(&full_path).unwrap();
+    std::fs::remove_file(&full_path).ok();
+
+    // Trailing encoding: 4-byte count + 3 * 8-byte entries.
+    let v11_len = bytes.len() - (4 + 3 * 8);
+    bytes.truncate(v11_len);
+
+    let v11_path = std::env::temp_dir().join(format!(
+        "goat_save_v11_truncated_{}.gsav",
+        std::process::id()
+    ));
+    std::fs::write(&v11_path, &bytes).unwrap();
+    let loaded = load_from_file(&v11_path).unwrap();
+    std::fs::remove_file(&v11_path).ok();
+
+    assert!(
+        loaded.club_budgets.is_empty(),
+        "a pre-v12 save must default club_budgets to empty, not panic or fabricate entries"
+    );
+    let restored = to_world_state(&loaded, &test_world());
+    assert!(restored.club_budgets.is_empty());
+}
+
 // ── Save slots (Design round 1, Slice 3) ─────────────────────────────────────
 
 #[test]
