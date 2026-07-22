@@ -18,6 +18,7 @@ pub mod promotion;
 pub mod rival;
 pub mod scouting;
 pub mod season;
+pub mod transfers;
 pub mod world;
 
 pub use calendar::{
@@ -46,6 +47,7 @@ pub use scouting::{
     candidates_by_position, gem_hunt_target, gem_targets_by_position, weakest_position_target,
 };
 pub use season::{sim_team_match, Table, TableEntry};
+pub use transfers::{run_transfer_pass, TransferLane};
 pub use world::{
     Club, ClubId, DivLevel, GeneratedNation, League, LeagueId, NationId, WorldGenesis,
     CLUBS_PER_DIV, NUM_CLUBS, NUM_DIVISIONS, NUM_NATIONS, PROMO_RELEGATION_N, TIERS_PER_NATION,
