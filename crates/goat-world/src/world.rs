@@ -69,6 +69,14 @@ pub struct Club {
     /// The club's style bias over the 14 outfield roles (Design round 2, Doc B §B.2) —
     /// one `TacticalIdentity` generated per club at genesis, seed-derived.
     pub tactical_identity: TacticalIdentity,
+    /// Running transfer/wage war-chest, £k (Design round 5, Doc A §Slice 1). A single
+    /// number by design — see `economy::total_income` for how future revenue sources plug
+    /// into it without touching the spending side. Persisted across seasons (not
+    /// recomputed from genesis each window): `WorldGenesis` itself is regenerated fresh
+    /// from `world_seed` on every load, so the live value lives in
+    /// `goat_core::state::WorldState::club_budgets` and is overlaid onto this genesis
+    /// starting point by save/load — this field only holds the *starting* war-chest.
+    pub budget: i64,
 }
 
 impl Club {
@@ -313,6 +321,9 @@ impl WorldGenesis {
                     let squad_size = (squad_base + squad_noise).clamp(18, 30) as u8;
                     let tactical_identity =
                         TacticalIdentity::generate(seed_mix(world_seed, 0xE5, club_id as u64));
+                    // ~one season's tier/strength-derived income as a starting war-chest
+                    // (Design round 5, Doc A §1.6).
+                    let budget = 2 * crate::economy::tier_baseline_income(strength, tier);
                     clubs.push(Club {
                         id: club_id,
                         name,
@@ -320,6 +331,7 @@ impl WorldGenesis {
                         strength,
                         squad_size,
                         tactical_identity,
+                        budget,
                     });
                     league_clubs.push(club_id);
                 }
@@ -475,6 +487,21 @@ mod tests {
             "top-quartile-strength clubs ({top_avg}) should average a materially higher \
              squad_size than bottom-quartile clubs ({bottom_avg})"
         );
+    }
+
+    #[test]
+    fn genesis_seeds_two_windows_of_income() {
+        let w = WorldGenesis::generate(31);
+        for league in &w.leagues {
+            for &cid in &league.clubs {
+                let club = &w.clubs[cid];
+                let expected = 2 * crate::economy::tier_baseline_income(club.strength, league.tier);
+                assert_eq!(
+                    club.budget, expected,
+                    "club {cid} genesis budget should be exactly 2x one window's income"
+                );
+            }
+        }
     }
 
     #[test]

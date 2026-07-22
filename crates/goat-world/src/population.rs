@@ -771,6 +771,7 @@ mod tests {
             strength: 60,
             squad_size: 20,
             tactical_identity,
+            budget: 0,
         };
         let world = WorldGenesis {
             nations: vec![GeneratedNation {

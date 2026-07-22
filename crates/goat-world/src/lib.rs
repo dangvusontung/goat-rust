@@ -9,6 +9,7 @@ pub mod batch_tick;
 pub mod calendar;
 pub mod continental;
 pub mod domestic_cup;
+pub mod economy;
 pub mod fixtures;
 pub mod history;
 pub mod national_tournament;
@@ -29,6 +30,7 @@ pub use continental::{
     KnockoutTie,
 };
 pub use domestic_cup::{simulate_domestic_cup, CupRoundResult, CupSeasonResult, CupTie};
+pub use economy::{market_valuation, open_transfer_window, total_income};
 pub use fixtures::{
     fixture_for_round, fixtures_for_club, generate_fixtures, round_fixtures, Fixture,
     ROUNDS_PER_SEASON,
