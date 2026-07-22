@@ -505,10 +505,8 @@ fn old_v11_save_without_club_budgets_defaults_to_empty() {
     let mut data = from_world_state(&state, &view);
     data.club_budgets = vec![100, 200, 300];
 
-    let full_path = std::env::temp_dir().join(format!(
-        "goat_save_v12_full_{}.gsav",
-        std::process::id()
-    ));
+    let full_path =
+        std::env::temp_dir().join(format!("goat_save_v12_full_{}.gsav", std::process::id()));
     save_to_file(&data, &full_path).unwrap();
     let mut bytes = std::fs::read(&full_path).unwrap();
     std::fs::remove_file(&full_path).ok();
