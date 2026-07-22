@@ -49,18 +49,6 @@ fn squads_by_club(pop: &Population, num_clubs: usize) -> Vec<Vec<usize>> {
     squads
 }
 
-/// Mean current OVR of a club's squad at `elapsed_weeks` → team strength (1–99).
-fn club_strength(pop: &Population, squad: &[usize], elapsed_weeks: u32) -> u8 {
-    if squad.is_empty() {
-        return 1;
-    }
-    let sum: u32 = squad
-        .iter()
-        .map(|&i| pop.current_ovr(i, elapsed_weeks) as u32)
-        .sum();
-    (sum / squad.len() as u32).clamp(1, 99) as u8
-}
-
 /// Advance every non-orbit league one season. Mutates the population's career accumulators
 /// and returns one `SeasonResult` per league. Deterministic in `(world_seed, season)` given
 /// a fixed `league_clubs` membership (the caller resolves promotion/relegation membership
@@ -80,7 +68,7 @@ pub fn batch_tick_season(
 ) -> (Vec<SeasonResult>, Vec<Table>) {
     let squads = squads_by_club(pop, world.clubs.len());
     let strengths: Vec<u8> = (0..world.clubs.len())
-        .map(|c| club_strength(pop, &squads[c], elapsed_weeks))
+        .map(|c| pop.live_strength_from_squad(&squads[c], elapsed_weeks))
         .collect();
 
     let mut results = Vec::with_capacity(world.leagues.len());

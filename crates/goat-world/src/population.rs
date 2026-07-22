@@ -8,7 +8,7 @@
 //! same universe on every platform: that is the Phase 9 determinism spine, pinned by the
 //! `fingerprint` golden.
 
-use crate::world::WorldGenesis;
+use crate::world::{ClubId, WorldGenesis};
 use goat_core::attrs::NUM_ATTRS;
 use goat_core::generation::{generate_player, CreationChoices};
 use goat_core::player::PlayerView;
@@ -220,6 +220,41 @@ impl Population {
         self.age_years_at(idx, elapsed_weeks) >= RETIRE_AGE_YEARS
     }
 
+    /// Live team strength (1-99): mean current OVR of a club's non-retired squad at
+    /// `elapsed_weeks`. O(pop.len()) — a linear scan filtered by club id; fine for an
+    /// occasional single-club query (e.g. a UI "opponent strength" lookup), but callers
+    /// simulating every club in one pass (batch-tick) should keep using a precomputed
+    /// squads-by-club grouping via `live_strength_from_squad`, not call this once per club.
+    pub fn live_strength(&self, club_id: ClubId, elapsed_weeks: u32) -> u8 {
+        let squad: Vec<usize> = (0..self.len())
+            .filter(|&i| self.club[i] as usize == club_id && !self.is_retired(i, elapsed_weeks))
+            .collect();
+        self.live_strength_from_squad(&squad, elapsed_weeks)
+    }
+
+    /// Same formula, given a precomputed squad (the batch-tick bulk path). Both
+    /// `live_strength` and `batch_tick::batch_tick_season` route through this — one
+    /// formula, not two. Excludes retired players: a club's live strength should reflect
+    /// only players who'd actually turn out for it (the "Verified" §3.2 correctness fix —
+    /// the pre-existing `batch_tick.rs::club_strength` this replaces did not filter
+    /// retirement, so a retired player's still-evaluated `current_ovr` curve kept dragging
+    /// on a club's live strength after the squad member could no longer actually play).
+    pub fn live_strength_from_squad(&self, squad: &[usize], elapsed_weeks: u32) -> u8 {
+        let active: Vec<usize> = squad
+            .iter()
+            .copied()
+            .filter(|&i| !self.is_retired(i, elapsed_weeks))
+            .collect();
+        if active.is_empty() {
+            return 1;
+        }
+        let sum: u32 = active
+            .iter()
+            .map(|&i| self.current_ovr(i, elapsed_weeks) as u32)
+            .sum();
+        (sum / active.len() as u32).clamp(1, 99) as u8
+    }
+
     /// Lazy-promote a background player into a full-fidelity `PlayerView` "on contact"
     /// (bible §245) — the moment he becomes relevant (you face him, a transfer links him).
     /// Returns `None` if he has retired. Pure & deterministic: same `(idx, date)` ⇒ the
@@ -405,5 +440,68 @@ mod tests {
                 "seed {seed}: anchor branch must match the pre-Slice-2 formula bit-for-bit"
             );
         }
+    }
+
+    #[test]
+    fn live_strength_matches_live_strength_from_squad() {
+        let world = WorldGenesis::generate(31);
+        let pop = genesis(31, &world);
+        let club_id = pop.club[0] as usize;
+        let elapsed = 5 * 52;
+        let squad: Vec<usize> = (0..pop.len())
+            .filter(|&i| pop.club[i] as usize == club_id && !pop.is_retired(i, elapsed))
+            .collect();
+        assert_eq!(
+            pop.live_strength(club_id, elapsed),
+            pop.live_strength_from_squad(&squad, elapsed)
+        );
+    }
+
+    #[test]
+    fn live_strength_excludes_retired_players() {
+        let mut pop = Population::default();
+        let mut push = |birth_age_weeks: u32, potential_ovr: u8| {
+            pop.seed.push(1);
+            pop.club.push(0);
+            pop.nation.push(0);
+            pop.position.push(0);
+            pop.birth_age_weeks.push(birth_age_weeks);
+            pop.potential_ovr.push(potential_ovr);
+            pop.career_goals.push(0);
+            pop.career_apps.push(0);
+            pop.career_titles.push(0);
+        };
+        push(20 * 52, 60); // active, age 20
+        push(25 * 52, 60); // active, age 25
+        push(45 * 52, 99); // already past RETIRE_AGE_YEARS, a sky-high potential
+
+        let elapsed = 0;
+        let squad = vec![0, 1, 2];
+        let naive_mean: u32 = squad
+            .iter()
+            .map(|&i| pop.current_ovr(i, elapsed) as u32)
+            .sum::<u32>()
+            / squad.len() as u32;
+        let filtered = pop.live_strength_from_squad(&squad, elapsed);
+        assert!(
+            (filtered as u32) < naive_mean,
+            "live_strength_from_squad ({filtered}) should be lower than the naive unfiltered \
+             mean ({naive_mean}) once the high-potential retiree is excluded"
+        );
+    }
+
+    #[test]
+    fn live_strength_changes_as_roster_ages() {
+        let world = WorldGenesis::generate(31);
+        let pop = genesis(31, &world);
+        let differs = world
+            .clubs
+            .iter()
+            .any(|c| pop.live_strength(c.id, 0) != pop.live_strength(c.id, 20 * 52));
+        assert!(
+            differs,
+            "at least one club's live strength should differ across a 20-season gap as its \
+             roster ages"
+        );
     }
 }
