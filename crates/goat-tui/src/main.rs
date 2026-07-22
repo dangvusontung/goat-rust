@@ -509,8 +509,6 @@ fn run_game_loop(
                 Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                     "Y" => {
                         pc_cup_alive = true; // fresh domestic-cup run each season
-                        pc_qualifying = None; // fresh national-team cycle each season
-                        pc_tournament = None;
                         let next_div_idx = state.pc_div_idx as usize;
                         let next_club_id = state.pc_club_idx as usize;
 
@@ -555,6 +553,26 @@ fn run_game_loop(
                             Intent::StartSeason { fixtures },
                             &mut GoatRng::new(0),
                         );
+
+                        // `StartSeason`'s off-season back-fill (goat-core) just
+                        // elapsed the calendar through the season that JUST ENDED's
+                        // remaining weeks — including its `OffSeason` window if it
+                        // was a tournament season — accumulating any flashpoints
+                        // into `state.last_week_flashpoints`. Dispatch those (the
+                        // PC's tournament-proper run, if their nation qualified)
+                        // using the STILL-current `pc_qualifying`/`pc_tournament`
+                        // from that season, before resetting them for the new one.
+                        state = dispatch_national_flashpoints(
+                            out,
+                            state,
+                            world,
+                            beat_lib,
+                            pc_traits,
+                            &mut pc_qualifying,
+                            &mut pc_tournament,
+                        );
+                        pc_qualifying = None; // fresh national-team cycle each season
+                        pc_tournament = None;
                         continue;
                     }
                     "G" => {
@@ -665,6 +683,8 @@ fn run_game_loop(
                         world,
                         &mut pc_cup_alive,
                         &mut pc_continental,
+                        &mut pc_qualifying,
+                        &mut pc_tournament,
                     )
                 }
                 "K" if has_season => {
@@ -678,6 +698,8 @@ fn run_game_loop(
                         world,
                         &mut pc_cup_alive,
                         &mut pc_continental,
+                        &mut pc_qualifying,
+                        &mut pc_tournament,
                     )
                 }
                 "T" if has_season => render_table(out, &state, world),
@@ -719,6 +741,8 @@ fn run_next_round(
     world: &WorldGenesis,
     pc_cup_alive: &mut bool,
     pc_continental: &mut Option<ContinentalRun>,
+    pc_qualifying: &mut Option<QualifyingCampaign>,
+    pc_tournament: &mut Option<TournamentRun>,
 ) -> WorldState {
     let pc_id = match state.pc_player_id {
         Some(id) => id,
@@ -797,7 +821,7 @@ fn run_next_round(
             world_seed,
             pc_cup_alive,
         );
-        return maybe_play_continental_fixture(
+        state = maybe_play_continental_fixture(
             out,
             state,
             world,
@@ -808,6 +832,15 @@ fn run_next_round(
             pc_club_id,
             world_seed,
             pc_continental,
+        );
+        return dispatch_national_flashpoints(
+            out,
+            state,
+            world,
+            beat_lib,
+            pc_traits,
+            pc_qualifying,
+            pc_tournament,
         );
     }
 
@@ -1007,7 +1040,7 @@ fn run_next_round(
         world_seed,
         pc_cup_alive,
     );
-    maybe_play_continental_fixture(
+    state = maybe_play_continental_fixture(
         out,
         state,
         world,
@@ -1018,6 +1051,15 @@ fn run_next_round(
         pc_club_id,
         world_seed,
         pc_continental,
+    );
+    dispatch_national_flashpoints(
+        out,
+        state,
+        world,
+        beat_lib,
+        pc_traits,
+        pc_qualifying,
+        pc_tournament,
     )
 }
 

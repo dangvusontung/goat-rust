@@ -1015,9 +1015,29 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             // season N the invariant holds: age == START_AGE + (N−1)·52.
             if let Some(pc_id) = state.pc_player_id {
                 let target = START_AGE_WEEKS + (state.season_number - 1) * 52;
+                // These backfilled weeks are the tail of the season that JUST ended
+                // (calendar-year summer, roughly day ~266-364), not the new one
+                // `season_number` was already bumped to above — a tournament
+                // season's `OffSeason` window (Design round 4, Slice 4/5; day
+                // 300-329, mid-June-mid-July) sits in exactly this range, so the
+                // calendar tick below must use the OLD season number for window
+                // cadence, or `WindowKind::OffSeason` would check the wrong
+                // (always-non-tournament, since WC/CC seasons never sit next to
+                // each other) season and never fire.
+                let just_ended_season = state.season_number - 1;
+                let new_season = state.season_number;
+                state.season_number = just_ended_season;
+                // Accumulate flashpoints across every backfilled week (mirrors
+                // `Intent::AdvanceWeeks`) — a single overwrite would lose an
+                // earlier window (e.g. `OffSeason` at day 300) to a later one
+                // (`TransferSummer` at day 330) in the same backfill.
+                let mut all_flashpoints = Vec::new();
                 while state.players.get_age_weeks(pc_id) < target {
                     state = tick_one_rest_week(state);
+                    all_flashpoints.append(&mut state.last_week_flashpoints);
                 }
+                state.last_week_flashpoints = all_flashpoints;
+                state.season_number = new_season;
                 state.pc_week_training_done = false;
             }
             state
@@ -1451,5 +1471,38 @@ mod tests {
         let energy = s.players.get_energy(0);
         assert!(energy >= Fixed::ZERO);
         assert!(energy <= Fixed::from_int(100));
+    }
+
+    /// Design round 4, Slice 5 follow-up: the live national-team dispatcher fires this
+    /// intent when the PC's nation wins the tournament their qualifying/knockout run
+    /// just concluded — this is the one new season-live accumulator this slice adds
+    /// (`season_world_cups_won`/`season_continental_championships_won`'s fold into the
+    /// career totals at `ApplySeasonEndLegacy` was already covered by
+    /// `season_end_legacy_folds_national_tournament_wins` in
+    /// `tests/golden_phases_8_10.rs`; this test covers the accumulator itself).
+    #[test]
+    fn national_tournament_win_increments_the_right_season_counter_only() {
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        let s = reduce(
+            s,
+            Intent::ApplyNationalTournamentWin { is_world_cup: true },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_season_world_cups_won, 1);
+        assert_eq!(s.pc_season_continental_championships_won, 0);
+
+        let s = reduce(
+            s,
+            Intent::ApplyNationalTournamentWin {
+                is_world_cup: false,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(
+            s.pc_season_world_cups_won, 1,
+            "a continental-championship win must not also bump the World Cup counter"
+        );
+        assert_eq!(s.pc_season_continental_championships_won, 1);
     }
 }
