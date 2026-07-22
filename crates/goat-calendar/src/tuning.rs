@@ -14,3 +14,11 @@ pub const SIM_VERSION: u32 = 1;
 /// is a design open question from the spec (§2.2). This constant is the Phase 1 stand-in.
 /// Do not finalise the rule here; iterate against a prototype.
 pub const SOFT_FLUSH_THRESHOLD: usize = 3;
+
+/// Minimum days between two of the PC's orbit fixtures — conflict-resolution reschedules
+/// (`resolveFixturesForDay`, `docs/MAIN.md:1090-1117`) never place a bumped fixture closer
+/// than this to another already-scheduled orbit fixture.
+///
+/// TUNABLE — no bible-specified value; a real fixture-congestion feel pass belongs to a
+/// later round. 3 days is a conservative floor (never a next-day replay).
+pub const MIN_REST_GAP_DAYS: u32 = 3;
