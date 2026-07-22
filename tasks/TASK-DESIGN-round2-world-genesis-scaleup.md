@@ -641,30 +641,21 @@ doc's "Out of scope"). `season.rs`'s existing ephemeral fixture/table simulation
 as this doc (A3) already designed it. This paragraph is superseded; see the round-3 doc for the
 actual design, not this placeholder.
 
-**Multi-competition: domestic cups + continental competitions (raised by Tùng, 2026-07-22 —
-explicitly deferred, not designed here).**
+**Multi-competition: domestic cups + continental competitions — now designed in its own doc,
+`tasks/TASK-DESIGN-round4-competitions.md` (2026-07-22).**
 
 Tùng also asked about cup competitions (domestic cups, continental cups like a
-Champions-League-style tournament) and schedule-conflict handling between competitions. Unlike
-the item above, this one is **already substantially designed on paper** in `docs/MAIN.md`
-(marked `[ASSUMED]`/`[DECISION NEEDED]`, not yet ratified or built) — `Competition` entity
-(`kind: league | domesticCup | continental | international`, `priority` for conflict
-resolution), `Fixture` with `scheduledDay` vs `originalDay` (reschedule audit trail) and
-`legForId` (two-legged ties), `FixtureImportance` (`deadRubber < league < derby < cupKnockout <
-continental < final`, used to decide which fixture wins a same-day clash), and
-`SuspensionLedger` scoped per-`Competition` (a cup ban doesn't bleed into league availability).
-Verified against real code: `crates/goat-world/src/fixtures.rs` implements exactly one
-competition (the league) end to end — zero `Competition`/cup/continental code exists anywhere
-in the workspace today.
-
-**Why this is parked, not folded into this doc:** same reasoning as the player-driven-strength
-item above — it's a large, separate subsystem (this time touching the whole
-fixture/calendar/suspension layer, not club/league/nation structure) that would make this doc's
-scope unreviewable if merged in. The difference is this one doesn't need a design pass from
-scratch — the bible's `Competition`/`Fixture`/`FixtureImportance` shape is a solid starting
-point — it needs someone to pick it up, confirm the still-`[DECISION NEEDED]` bits (e.g. exact
-priority ladder, whether continental qualification ties to league position), and implement it
-against the post-scale-up club/league/nation shapes this doc produces.
+Champions-League-style tournament), World Cup / continental national-team championships, and
+schedule-conflict handling between competitions. This was originally parked here as a short
+placeholder pointing at the bible's already-sketched `Competition`/`Fixture`/
+`FixtureImportance`/`SuspensionLedger` shape — it has since been designed properly in its own
+round (round 4), covering: domestic cup structure (single-elimination, tier-staggered entry,
+random round-by-round redraw), 3-tier continental club competitions (stature-ranked
+qualification), World Cup + continental national-team championships (real-world cadence,
+scheduled in the existing off-season calendar gap), and the `FixtureImportance`/
+`SuspensionLedger` wiring that ties all of it together. See
+`tasks/TASK-DESIGN-round4-competitions.md` for the full spec, numbered slices, and the list of
+numbers still needing Tùng's sign-off before Dev starts.
 
 **AI-run club economy: transfer market between AI clubs, managers, club finances (raised by
 Tùng, 2026-07-22 — explicitly deferred, not designed here).**
