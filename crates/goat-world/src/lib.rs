@@ -13,6 +13,7 @@ pub mod domestic_cup;
 pub mod economy;
 pub mod fixtures;
 pub mod history;
+pub mod manager;
 pub mod national_tournament;
 pub mod population;
 pub mod promotion;
@@ -38,6 +39,10 @@ pub use economy::{market_valuation, open_transfer_window, total_income};
 pub use fixtures::{
     fixture_for_round, fixtures_for_club, generate_fixtures, round_fixtures, Fixture,
     ROUNDS_PER_SEASON,
+};
+pub use manager::{
+    apply_manager_identity_shift, hire_replacement, should_fire, Manager, ManagerId, ManagerPool,
+    MANAGER_FORM_WINDOW, MANAGER_POOL_SIZE,
 };
 pub use national_tournament::{
     is_continental_championship_season, is_world_cup_season, national_team_strength,
