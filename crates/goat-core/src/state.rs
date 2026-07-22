@@ -924,7 +924,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 }
             }
             const N: usize = 20; // CLUBS_PER_DIV (goat-core stays headless — can't import
-                                  // goat_world::CLUBS_PER_DIV — kept in sync by hand)
+                                 // goat_world::CLUBS_PER_DIV — kept in sync by hand)
 
             // Update PC season stats.
             state.pc_season_goals += pc_goals;

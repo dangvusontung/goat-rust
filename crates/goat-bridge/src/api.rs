@@ -31,8 +31,7 @@ use goat_rng::{GoatRng, RngSource};
 use goat_traits::PlayerTraits;
 use goat_world::{
     format_match_date, format_week_header, is_break_week, round_to_week, week_to_rounds,
-    world::WorldGenesis, Table, BASE_CAREER_YEAR, ROUNDS_PER_SEASON,
-    SEASON_CALENDAR_WEEKS,
+    world::WorldGenesis, Table, BASE_CAREER_YEAR, ROUNDS_PER_SEASON, SEASON_CALENDAR_WEEKS,
 };
 
 // ── Global singleton ──────────────────────────────────────────────────────────
@@ -1094,26 +1093,32 @@ pub fn get_full_season_fixtures() -> Vec<WeekFixtureDto> {
         let world = get_world(s.world_seed);
         let div_clubs = &world.leagues[div_idx].clubs;
 
-        goat_world::fixtures_for_club(s.world_seed, s.season_number, div_idx, div_clubs, pc_club_id)
-            .into_iter()
-            .map(|f| {
-                let cal_week = round_to_week(f.round);
-                let slot = week_to_rounds(cal_week)
-                    .position(|r| r == f.round)
-                    .unwrap_or(0);
-                let is_home = f.home == pc_club_id;
-                let opp_id = if is_home { f.away } else { f.home };
-                WeekFixtureDto {
-                    round: f.round as u32,
-                    calendar_week: cal_week as u32,
-                    opponent: world.clubs[opp_id].name.to_string(),
-                    opp_strength: world.clubs[opp_id].strength,
-                    is_home,
-                    played: (f.round as u32) < s.season_round,
-                    date: format_match_date(season_year, cal_week, slot),
-                }
-            })
-            .collect()
+        goat_world::fixtures_for_club(
+            s.world_seed,
+            s.season_number,
+            div_idx,
+            div_clubs,
+            pc_club_id,
+        )
+        .into_iter()
+        .map(|f| {
+            let cal_week = round_to_week(f.round);
+            let slot = week_to_rounds(cal_week)
+                .position(|r| r == f.round)
+                .unwrap_or(0);
+            let is_home = f.home == pc_club_id;
+            let opp_id = if is_home { f.away } else { f.home };
+            WeekFixtureDto {
+                round: f.round as u32,
+                calendar_week: cal_week as u32,
+                opponent: world.clubs[opp_id].name.to_string(),
+                opp_strength: world.clubs[opp_id].strength,
+                is_home,
+                played: (f.round as u32) < s.season_round,
+                date: format_match_date(season_year, cal_week, slot),
+            }
+        })
+        .collect()
     })
 }
 
@@ -1618,8 +1623,9 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
         let world = get_world(world_seed);
         let div_clubs = &world.leagues[div_idx].clubs;
 
-        let pc_fixture =
-            goat_world::fixture_for_round(world_seed, season, div_idx, div_clubs, pc_club_id, round)?;
+        let pc_fixture = goat_world::fixture_for_round(
+            world_seed, season, div_idx, div_clubs, pc_club_id, round,
+        )?;
         let is_home = pc_fixture.home == pc_club_id;
         let opp_id = if is_home {
             pc_fixture.away
@@ -1771,16 +1777,12 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
         let gs = {
             let state = take_state();
             let old_cal_week = round_to_week(round.min(ROUNDS_PER_SEASON - 1));
-            let all_fixtures = goat_world::round_fixtures(world_seed, season, div_idx, &div_clubs, round);
+            let all_fixtures =
+                goat_world::round_fixtures(world_seed, season, div_idx, &div_clubs, round);
             let sim_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
             let mut sim_rng = GoatRng::new(sim_seed);
             let pc_fixture = goat_world::fixture_for_round(
-                world_seed,
-                season,
-                div_idx,
-                &div_clubs,
-                pc_club_id,
-                round,
+                world_seed, season, div_idx, &div_clubs, pc_club_id, round,
             );
 
             let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();

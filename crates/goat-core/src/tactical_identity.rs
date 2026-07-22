@@ -64,7 +64,8 @@ pub fn team_fit(
     // but weighted by `identity.role_weight` instead of a neutral pick.
     let mut best = Fixed::ZERO;
     for &r in &RoleId::ALL {
-        let score = role_rating(current, r, familiarity[r as usize]) * identity.role_weight[r as usize];
+        let score =
+            role_rating(current, r, familiarity[r as usize]) * identity.role_weight[r as usize];
         if score > best {
             best = score;
         }

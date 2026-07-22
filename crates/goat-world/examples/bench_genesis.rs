@@ -25,11 +25,21 @@ fn main() {
     let hist = history::backfill_history(seed, 30, &world);
     let genesis_history = t2.elapsed();
 
-    println!("world genesis:      {genesis_world:?}  ({} clubs, {} nations, {} leagues)",
-        world.clubs.len(), world.nations.len(), world.leagues.len());
-    println!("population genesis: {genesis_pop:?}  ({} players)", pop.len());
-    println!("history backfill:   {genesis_history:?}  ({} seasons, {} greats)",
-        hist.seasons.len(), hist.greats.len());
+    println!(
+        "world genesis:      {genesis_world:?}  ({} clubs, {} nations, {} leagues)",
+        world.clubs.len(),
+        world.nations.len(),
+        world.leagues.len()
+    );
+    println!(
+        "population genesis: {genesis_pop:?}  ({} players)",
+        pop.len()
+    );
+    println!(
+        "history backfill:   {genesis_history:?}  ({} seasons, {} greats)",
+        hist.seasons.len(),
+        hist.greats.len()
+    );
     println!(
         "TOTAL genesis:       {:?}",
         genesis_world + genesis_pop + genesis_history
