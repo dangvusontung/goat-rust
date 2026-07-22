@@ -16,8 +16,8 @@ fn full_career_to_retirement_holds_invariants() {
     let choices = CreationChoices {
         name: "Lifer".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "Brazilian",
-        club: "Riverside Town",
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     let mut s = WorldState::new();
     s = reduce(

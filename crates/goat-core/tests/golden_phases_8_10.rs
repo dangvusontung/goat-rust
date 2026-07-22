@@ -18,8 +18,8 @@ fn base_state() -> WorldState {
     let choices = CreationChoices {
         name: "Test Legend".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "England",
-        club: "Burnley",
+        nationality: "England".to_string(),
+        club: "Burnley".to_string(),
     };
     let mut s = WorldState::new();
     s = reduce(
@@ -133,7 +133,7 @@ fn make_peers() -> Vec<PeerState> {
         .map(|i| PeerState {
             seed: i as u64 * 12345,
             name: format!("Peer {i}"),
-            nationality: "England",
+            nationality: "England".to_string(),
             career_goals: 0,
             career_matches: 0,
             avg_output: 0,

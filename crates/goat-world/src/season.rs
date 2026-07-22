@@ -52,14 +52,19 @@ impl TableEntry {
     }
 }
 
-/// Full division table (16 entries).
+/// Full division table (`CLUBS_PER_DIV` entries — every league is uniformly sized this
+/// round, so a fixed-size-derived count still holds even though league membership itself
+/// is a `Vec<ClubId>` that promotion/relegation mutates between seasons).
 #[derive(Debug, Clone)]
 pub struct Table {
     pub entries: [TableEntry; CLUBS_PER_DIV],
 }
 
 impl Table {
-    pub fn new(div_club_ids: &[ClubId; CLUBS_PER_DIV]) -> Self {
+    /// `div_club_ids` must have exactly `CLUBS_PER_DIV` entries — true for every league by
+    /// construction (promotion/relegation always swaps equal counts in and out).
+    pub fn new(div_club_ids: &[ClubId]) -> Self {
+        debug_assert_eq!(div_club_ids.len(), CLUBS_PER_DIV);
         let mut entries = [TableEntry::default(); CLUBS_PER_DIV];
         for (i, &id) in div_club_ids.iter().enumerate() {
             entries[i].club_id = id;
@@ -124,10 +129,7 @@ impl Table {
     }
 
     /// Restore from `to_raw` output, with the same club_id ordering.
-    pub fn from_raw(
-        raw: &[u32; 5 * CLUBS_PER_DIV],
-        div_club_ids: &[ClubId; CLUBS_PER_DIV],
-    ) -> Self {
+    pub fn from_raw(raw: &[u32; 5 * CLUBS_PER_DIV], div_club_ids: &[ClubId]) -> Self {
         let mut t = Self::new(div_club_ids);
         for (i, e) in t.entries.iter_mut().enumerate() {
             e.w = raw[i];

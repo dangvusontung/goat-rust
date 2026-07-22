@@ -19,5 +19,6 @@ pub mod player;
 pub mod positions;
 pub mod roles;
 pub mod state;
+pub mod tactical_identity;
 pub mod tuning;
 pub mod week;

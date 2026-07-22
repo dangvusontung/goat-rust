@@ -10,7 +10,7 @@ use crate::fixtures::{round_fixtures, ROUNDS_PER_SEASON};
 use crate::population::Population;
 use crate::season::Table;
 use crate::sim_team_match;
-use crate::world::{ClubId, DIV_CLUBS, NUM_CLUBS, NUM_DIVISIONS};
+use crate::world::{ClubId, WorldGenesis};
 use goat_rng::GoatRng;
 
 /// League appearances credited to a regular (top-OVR) squad member per season.
@@ -30,7 +30,7 @@ fn goal_weight_x10(position: u8) -> u32 {
     }
 }
 
-/// One division's resolved season, for records / world screens.
+/// One league's resolved season, for records / world screens.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SeasonResult {
     pub division: usize,
@@ -41,8 +41,8 @@ pub struct SeasonResult {
 }
 
 /// Build `club_id -> Vec<population index>` for the whole population (one pass).
-fn squads_by_club(pop: &Population) -> Vec<Vec<usize>> {
-    let mut squads: Vec<Vec<usize>> = vec![Vec::new(); NUM_CLUBS];
+fn squads_by_club(pop: &Population, num_clubs: usize) -> Vec<Vec<usize>> {
+    let mut squads: Vec<Vec<usize>> = vec![Vec::new(); num_clubs];
     for idx in 0..pop.len() {
         squads[pop.club[idx] as usize].push(idx);
     }
@@ -62,26 +62,36 @@ fn club_strength(pop: &Population, squad: &[usize], elapsed_weeks: u32) -> u8 {
 }
 
 /// Advance every non-orbit league one season. Mutates the population's career accumulators
-/// and returns one `SeasonResult` per division. Deterministic in `(world_seed, season)`.
+/// and returns one `SeasonResult` per league. Deterministic in `(world_seed, season)` given
+/// a fixed `league_clubs` membership (the caller resolves promotion/relegation membership
+/// for this season before calling — this function just simulates it).
+///
+/// `league_clubs[league_id]` must line up with `world.leagues[league_id]` (same length,
+/// same id space) — pass `world.static_league_clubs()` for genesis-static membership (fine
+/// for flavor/replay screens that don't need real promotion/relegation drift), or a
+/// promotion/relegation-advanced membership for the PC's real season-end pipeline.
 pub fn batch_tick_season(
     pop: &mut Population,
+    world: &WorldGenesis,
+    league_clubs: &[Vec<ClubId>],
     world_seed: u64,
     season: u32,
     elapsed_weeks: u32,
-) -> Vec<SeasonResult> {
-    let squads = squads_by_club(pop);
-    let strengths: Vec<u8> = (0..NUM_CLUBS)
+) -> (Vec<SeasonResult>, Vec<Table>) {
+    let squads = squads_by_club(pop, world.clubs.len());
+    let strengths: Vec<u8> = (0..world.clubs.len())
         .map(|c| club_strength(pop, &squads[c], elapsed_weeks))
         .collect();
 
-    let mut results = Vec::with_capacity(NUM_DIVISIONS);
+    let mut results = Vec::with_capacity(world.leagues.len());
+    let mut tables = Vec::with_capacity(world.leagues.len());
 
-    for (div, div_clubs) in DIV_CLUBS.iter().enumerate() {
+    for (div, div_clubs) in league_clubs.iter().enumerate() {
         // Resolve the division season via the shared fixture + match machinery.
         let mut table = Table::new(div_clubs);
         let mut rng = GoatRng::new(world_seed ^ ((season as u64) << 20) ^ (div as u64));
         for round in 0..ROUNDS_PER_SEASON {
-            for f in round_fixtures(world_seed, season, div, round) {
+            for f in round_fixtures(world_seed, season, div, div_clubs, round) {
                 let (gf, ga) = sim_team_match(strengths[f.home], strengths[f.away], &mut rng);
                 table.apply_result(f.home, f.away, gf, ga);
             }
@@ -150,30 +160,36 @@ pub fn batch_tick_season(
             top_scorer_idx: div_top_idx,
             top_scorer_goals: div_top_goals,
         });
+        tables.push(table);
     }
 
-    results
+    (results, tables)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::population::genesis;
+    use crate::world::WorldGenesis;
 
     #[test]
     fn batch_tick_returns_one_result_per_division() {
-        let mut pop = genesis(7);
-        let results = batch_tick_season(&mut pop, 7, 1, 52);
-        assert_eq!(results.len(), NUM_DIVISIONS);
+        let world = WorldGenesis::generate(7);
+        let league_clubs = world.static_league_clubs();
+        let mut pop = genesis(7, &world);
+        let (results, _tables) = batch_tick_season(&mut pop, &world, &league_clubs, 7, 1, 52);
+        assert_eq!(results.len(), world.leagues.len());
         for (div, r) in results.iter().enumerate() {
             assert_eq!(r.division, div);
-            assert!(DIV_CLUBS[div].contains(&r.champion_club));
+            assert!(world.leagues[div].clubs.contains(&r.champion_club));
         }
     }
 
     #[test]
     fn career_totals_are_monotonic_across_seasons() {
-        let mut pop = genesis(11);
+        let world = WorldGenesis::generate(11);
+        let league_clubs = world.static_league_clubs();
+        let mut pop = genesis(11, &world);
         let sum = |p: &Population| -> (u64, u64, u64) {
             (
                 p.career_goals.iter().map(|&x| x as u64).sum(),
@@ -183,7 +199,7 @@ mod tests {
         };
         let mut prev = sum(&pop);
         for season in 1..=10u32 {
-            batch_tick_season(&mut pop, 11, season, season * 52);
+            batch_tick_season(&mut pop, &world, &league_clubs, 11, season, season * 52);
             let now = sum(&pop);
             assert!(now.0 >= prev.0, "goals decreased");
             assert!(now.1 >= prev.1, "apps decreased");
@@ -196,11 +212,13 @@ mod tests {
 
     #[test]
     fn one_champion_per_division_per_season() {
-        let mut pop = genesis(3);
+        let world = WorldGenesis::generate(3);
+        let league_clubs = world.static_league_clubs();
+        let mut pop = genesis(3, &world);
         let titles_before: u64 = pop.career_titles.iter().map(|&x| x as u64).sum();
-        let results = batch_tick_season(&mut pop, 3, 1, 52);
-        // Exactly NUM_DIVISIONS champions named.
-        assert_eq!(results.len(), NUM_DIVISIONS);
+        let (results, _tables) = batch_tick_season(&mut pop, &world, &league_clubs, 3, 1, 52);
+        // Exactly one champion named per league.
+        assert_eq!(results.len(), world.leagues.len());
         let titles_after: u64 = pop.career_titles.iter().map(|&x| x as u64).sum();
         // Titles added = sum of each champion's non-retired squad size — bounded & > 0.
         assert!(titles_after > titles_before);

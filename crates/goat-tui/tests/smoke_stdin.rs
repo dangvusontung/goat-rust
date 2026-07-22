@@ -298,8 +298,8 @@ fn seed_save_at_age_weeks(dir: &std::path::Path, age_weeks: u32) {
     let choices = CreationChoices {
         name: "Veteran".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "Brazilian",
-        club: "Riverside Town",
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     let mut state = WorldState::new();
     state.world_seed = 42;
@@ -366,8 +366,8 @@ fn seed_save_at_season_end(dir: &std::path::Path) {
     let choices = CreationChoices {
         name: "Prospect".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "Brazilian",
-        club: "Riverside Town",
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     let mut state = WorldState::new();
     state.world_seed = 42;

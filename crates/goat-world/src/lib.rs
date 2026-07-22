@@ -10,6 +10,7 @@ pub mod calendar;
 pub mod fixtures;
 pub mod history;
 pub mod population;
+pub mod promotion;
 pub mod rival;
 pub mod season;
 pub mod world;
@@ -23,9 +24,9 @@ pub use fixtures::{
     fixture_for_round, fixtures_for_club, generate_fixtures, round_fixtures, Fixture,
     ROUNDS_PER_SEASON,
 };
+pub use promotion::{apply_season_end, PromoRelegationEvent, ReplayCache, TransitionType};
 pub use season::{sim_team_match, Table, TableEntry};
 pub use world::{
-    club_div_pos, club_division, clubs_for_nation, Club, ClubId, DivLevel, Nation, CLUBS,
-    CLUBS_PER_DIV, DIV_BRA_SEC, DIV_BRA_TOP, DIV_CLUBS, DIV_ENG_SEC, DIV_ENG_TOP, DIV_LEVELS,
-    DIV_NAMES, DIV_NATIONS, NUM_CLUBS, NUM_DIVISIONS,
+    Club, ClubId, DivLevel, GeneratedNation, League, LeagueId, NationId, WorldGenesis,
+    CLUBS_PER_DIV, NUM_CLUBS, NUM_DIVISIONS, NUM_NATIONS, PROMO_RELEGATION_N, TIERS_PER_NATION,
 };

@@ -24,8 +24,8 @@ fn forward_attrs() -> [Fixed; NUM_ATTRS] {
     let c = CreationChoices {
         name: "Test".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "Brazilian",
-        club: "Riverside Town",
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     generate_player(12345, &c).current
 }
@@ -34,8 +34,8 @@ fn forward_fam() -> [goat_core::roles::FamiliarityTier; goat_core::roles::NUM_RO
     let c = CreationChoices {
         name: "Test".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "Brazilian",
-        club: "Riverside Town",
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     generate_player(12345, &c).familiarity
 }
@@ -47,7 +47,7 @@ fn balanced_setup() -> MatchSetup {
         player_familiarity: forward_fam(),
         own_strength: 50,
         opp_strength: 50,
-        opp_name: "Test FC",
+        opp_name: "Test FC".to_string(),
         form: Fixed::from_int(50),
         player_aggression: 50,
         ref_personality: RefPersonality::Balanced,

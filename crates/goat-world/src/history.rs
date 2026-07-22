@@ -7,7 +7,7 @@
 //! don't store). The same seed yields the same canon on every platform, pinned by
 //! `History::fingerprint`.
 
-use crate::world::{Nation, CLUBS, DIV_CLUBS};
+use crate::world::WorldGenesis;
 use goat_rng::{GoatRng, RngSource};
 
 /// The "present" — backfilled seasons run in the years immediately before this.
@@ -85,15 +85,16 @@ pub fn name_from_seed(seed: u64) -> String {
 }
 
 /// Backfill `num_seasons` of consistent past history from `world_seed`. Pure & deterministic.
-pub fn backfill_history(world_seed: u64, num_seasons: u32) -> History {
+pub fn backfill_history(world_seed: u64, num_seasons: u32, world: &WorldGenesis) -> History {
     let start_year = PRESENT_YEAR - num_seasons;
+    let num_nations = world.nations.len() as u32;
 
     // 1. Generate the pool of greats, each with a career span inside the window.
     let mut greats: Vec<HistoricGreat> = Vec::with_capacity(NUM_GREATS);
     for g in 0..NUM_GREATS {
         let mut rng = GoatRng::new(great_seed(world_seed, g));
         let name = make_name(&mut rng);
-        let nationality = rng.next_range_u32(0, 1) as u8;
+        let nationality = rng.next_range_u32(0, num_nations.saturating_sub(1)) as u8;
         // Debut spread across the window; ~12–16 year careers, peak mid-career.
         let debut_year = start_year + rng.next_range_u32(0, num_seasons.saturating_sub(8).max(1));
         let career_len = rng.next_range_u32(12, 16);
@@ -115,14 +116,16 @@ pub fn backfill_history(world_seed: u64, num_seasons: u32) -> History {
     let mut seasons = Vec::with_capacity(num_seasons as usize);
     for year in start_year..PRESENT_YEAR {
         // Champions: strongest club per division + a per-(year,club) shake-up.
-        let champions: Vec<usize> = DIV_CLUBS
+        let champions: Vec<usize> = world
+            .leagues
             .iter()
-            .map(|div_clubs| {
-                *div_clubs
+            .map(|league| {
+                *league
+                    .clubs
                     .iter()
                     .max_by_key(|&&c| {
                         let mut rng = GoatRng::new(world_seed ^ (year as u64) ^ ((c as u64) << 16));
-                        CLUBS[c].strength as i32 + rng.next_range_u32(0, 20) as i32
+                        world.clubs[c].strength as i32 + rng.next_range_u32(0, 20) as i32
                     })
                     .unwrap()
             })
@@ -193,31 +196,34 @@ impl History {
 }
 
 /// Nationality name for a historic great (for display / canon dump).
-pub fn great_nation_name(nationality: u8) -> &'static str {
-    Nation::from_idx(nationality as usize)
-        .map(|n| n.name())
-        .unwrap_or("England")
+pub fn great_nation_name(nationality: u8, world: &WorldGenesis) -> &str {
+    world.nation_name(nationality as usize)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::WorldGenesis;
 
     #[test]
     fn history_is_deterministic() {
+        let w7 = WorldGenesis::generate(7);
         assert_eq!(
-            backfill_history(7, 30).fingerprint(),
-            backfill_history(7, 30).fingerprint()
+            backfill_history(7, 30, &w7).fingerprint(),
+            backfill_history(7, 30, &w7).fingerprint()
         );
+        let w1 = WorldGenesis::generate(1);
+        let w2 = WorldGenesis::generate(2);
         assert_ne!(
-            backfill_history(1, 30).fingerprint(),
-            backfill_history(2, 30).fingerprint()
+            backfill_history(1, 30, &w1).fingerprint(),
+            backfill_history(2, 30, &w2).fingerprint()
         );
     }
 
     #[test]
     fn backfill_is_internally_consistent() {
-        let h = backfill_history(42, 30);
+        let world = WorldGenesis::generate(42);
+        let h = backfill_history(42, 30, &world);
         assert_eq!(h.seasons.len(), 30);
         assert_eq!(h.greats.len(), NUM_GREATS);
         // Total Ballon d'Ors awarded == number of seasons (exactly one per year).
@@ -229,7 +235,7 @@ mod tests {
             assert!(s.year >= g.debut_year && s.year <= g.final_year);
             // Champions are real clubs in their division.
             for (div, &champ) in s.champions.iter().enumerate() {
-                assert!(DIV_CLUBS[div].contains(&champ));
+                assert!(world.leagues[div].clubs.contains(&champ));
             }
         }
         // The canon has a clear leader (someone won multiple awards over their arc).

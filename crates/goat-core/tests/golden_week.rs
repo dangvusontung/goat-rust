@@ -15,8 +15,8 @@ fn forward_state() -> WorldState {
     let choices = CreationChoices {
         name: "Golden Fwd".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "Brazilian",
-        club: "Riverside Town",
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     let s = WorldState::new();
     reduce(

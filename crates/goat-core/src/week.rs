@@ -453,8 +453,8 @@ mod tests {
         let choices = CreationChoices {
             name: "Test".into(),
             primary_position,
-            nationality: "English",
-            club: "Riverside Town",
+            nationality: "English".to_string(),
+            club: "Riverside Town".to_string(),
         };
         let view = generate_player(seed, &choices);
         let mut store = PlayerStore::new();
