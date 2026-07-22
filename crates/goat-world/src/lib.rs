@@ -16,6 +16,7 @@ pub mod national_tournament;
 pub mod population;
 pub mod promotion;
 pub mod rival;
+pub mod scouting;
 pub mod season;
 pub mod world;
 
@@ -41,6 +42,9 @@ pub use national_tournament::{
     NationalTournamentResult, QualifyingCycleResult, QualifyingGroupResult,
 };
 pub use promotion::{apply_season_end, PromoRelegationEvent, ReplayCache, TransitionType};
+pub use scouting::{
+    candidates_by_position, gem_hunt_target, gem_targets_by_position, weakest_position_target,
+};
 pub use season::{sim_team_match, Table, TableEntry};
 pub use world::{
     Club, ClubId, DivLevel, GeneratedNation, League, LeagueId, NationId, WorldGenesis,
