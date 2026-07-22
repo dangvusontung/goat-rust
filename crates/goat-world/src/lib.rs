@@ -11,6 +11,7 @@ pub mod continental;
 pub mod domestic_cup;
 pub mod fixtures;
 pub mod history;
+pub mod national_tournament;
 pub mod population;
 pub mod promotion;
 pub mod rival;
@@ -31,6 +32,11 @@ pub use domestic_cup::{simulate_domestic_cup, CupRoundResult, CupSeasonResult, C
 pub use fixtures::{
     fixture_for_round, fixtures_for_club, generate_fixtures, round_fixtures, Fixture,
     ROUNDS_PER_SEASON,
+};
+pub use national_tournament::{
+    is_continental_championship_season, is_world_cup_season, national_team_strength,
+    simulate_national_tournament, NationStanding, NationalKnockoutRoundResult, NationalKnockoutTie,
+    NationalTournamentResult, QualifyingCycleResult, QualifyingGroupResult,
 };
 pub use promotion::{apply_season_end, PromoRelegationEvent, ReplayCache, TransitionType};
 pub use season::{sim_team_match, Table, TableEntry};
