@@ -21,7 +21,7 @@ use goat_core::{
     week::{Intensity, Routine},
 };
 use goat_rng::{GoatRng, RngSource};
-use goat_world::{world::club_division, CLUBS, CLUBS_PER_DIV, DIV_NATIONS, ROUNDS_PER_SEASON};
+use goat_world::{world::WorldGenesis, CLUBS_PER_DIV, ROUNDS_PER_SEASON};
 
 static TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -90,7 +90,8 @@ fn new_game_snapshot_is_sane() {
     assert!(api::has_active_game());
     assert_eq!(s.player_name, NAME);
     assert_eq!(s.position, POS_FWD);
-    assert_eq!(s.club_name, CLUBS[CLUB_ID as usize].name);
+    let world = WorldGenesis::generate(SEED);
+    assert_eq!(s.club_name, world.clubs[CLUB_ID as usize].name);
     assert_eq!(s.season_number, 1);
     assert_eq!(s.season_round, 0);
     assert_eq!(s.rounds_per_season, ROUNDS_PER_SEASON as u32);
@@ -170,17 +171,12 @@ fn direct_build_peers(world_seed: u64, nationality: &str) -> Vec<PeerState> {
     } else {
         &eng_names
     };
-    let nat: &'static str = if nationality == "Brazil" {
-        "Brazil"
-    } else {
-        "England"
-    };
     let mut rng = GoatRng::new(world_seed ^ 0x00C0_CAFE_BEEF_u64);
     (0..8)
         .map(|i| PeerState {
             seed: rng.next_u64(),
             name: names[i].to_string(),
-            nationality: nat,
+            nationality: nationality.to_string(),
             career_goals: 0,
             career_matches: 0,
             avg_output: 0,
@@ -191,15 +187,16 @@ fn direct_build_peers(world_seed: u64, nationality: &str) -> Vec<PeerState> {
 
 /// Same intent sequence `new_game` performs, applied via direct reduce.
 fn direct_new_game(seed: u64, club_id: usize) -> WorldState {
-    let club = &CLUBS[club_id];
-    let div_idx = club_division(club_id);
-    let nationality = DIV_NATIONS[div_idx].name();
+    let world = WorldGenesis::generate(seed);
+    let club = &world.clubs[club_id];
+    let div_idx = world.club_league(club_id);
+    let nationality = world.nation_name(club.nation).to_string();
 
     let choices = CreationChoices {
         name: NAME.to_string(),
         primary_position: PrimaryPosition::ST,
-        nationality,
-        club: club.name,
+        nationality: nationality.clone(),
+        club: club.name.clone(),
     };
 
     let mut state = WorldState::new();
@@ -215,7 +212,7 @@ fn direct_new_game(seed: u64, club_id: usize) -> WorldState {
             pc_club_idx: club_id as u16,
             pc_div_idx: div_idx as u8,
             facilities_mult: club.facilities_mult(),
-            initial_table: Box::new([0u32; 80]),
+            initial_table: Box::new([0u32; 100]),
         },
         &mut GoatRng::new(0),
     );
@@ -223,7 +220,7 @@ fn direct_new_game(seed: u64, club_id: usize) -> WorldState {
     // `new_game(..., lifestyle)` param is likewise now ignored — both paths leave the
     // career at the default Balanced score, so no lifestyle nudge is needed here to
     // keep this direct-reduce mirror in parity with the bridge.
-    let peers = direct_build_peers(seed, nationality);
+    let peers = direct_build_peers(seed, &nationality);
     state = reduce(state, Intent::InitPeers { peers }, &mut GoatRng::new(0));
     reduce(state, Intent::StartSeason, &mut GoatRng::new(0))
 }
