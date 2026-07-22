@@ -66,6 +66,39 @@ pub fn batch_tick_season(
     season: u32,
     elapsed_weeks: u32,
 ) -> (Vec<SeasonResult>, Vec<Table>) {
+    let (results, tables, _match_points) = batch_tick_season_with_match_points(
+        pop,
+        world,
+        league_clubs,
+        world_seed,
+        season,
+        elapsed_weeks,
+    );
+    (results, tables)
+}
+
+/// Points (3/1/0) awarded to each side of a match result, home first.
+fn points_from_result(gf: u32, ga: u32) -> (u8, u8) {
+    match gf.cmp(&ga) {
+        std::cmp::Ordering::Greater => (3, 0),
+        std::cmp::Ordering::Equal => (1, 1),
+        std::cmp::Ordering::Less => (0, 3),
+    }
+}
+
+/// Identical body to `batch_tick_season`, plus: inside the existing per-round loop,
+/// immediately after each `table.apply_result(...)`, captures this match's points for both
+/// sides into the returned `Vec` — a zero-ripple sibling (Design round 5, Slice 7-8 §8.1),
+/// same pattern round-3 Slice 5 used for `generate_player`/`generate_player_biased`. Every
+/// existing caller/test of `batch_tick_season` stays byte-identical.
+pub fn batch_tick_season_with_match_points(
+    pop: &mut Population,
+    world: &WorldGenesis,
+    league_clubs: &[Vec<ClubId>],
+    world_seed: u64,
+    season: u32,
+    elapsed_weeks: u32,
+) -> (Vec<SeasonResult>, Vec<Table>, Vec<(ClubId, u8)>) {
     let squads = squads_by_club(pop, world.clubs.len());
     let strengths: Vec<u8> = (0..world.clubs.len())
         .map(|c| pop.live_strength_from_squad(&squads[c], elapsed_weeks))
@@ -73,6 +106,7 @@ pub fn batch_tick_season(
 
     let mut results = Vec::with_capacity(world.leagues.len());
     let mut tables = Vec::with_capacity(world.leagues.len());
+    let mut match_points = Vec::new();
 
     for (div, div_clubs) in league_clubs.iter().enumerate() {
         // Resolve the division season via the shared fixture + match machinery.
@@ -82,6 +116,9 @@ pub fn batch_tick_season(
             for f in round_fixtures(world_seed, season, div, div_clubs, round) {
                 let (gf, ga) = sim_team_match(strengths[f.home], strengths[f.away], &mut rng);
                 table.apply_result(f.home, f.away, gf, ga);
+                let (home_pts, away_pts) = points_from_result(gf, ga);
+                match_points.push((f.home, home_pts));
+                match_points.push((f.away, away_pts));
             }
         }
 
@@ -151,7 +188,7 @@ pub fn batch_tick_season(
         tables.push(table);
     }
 
-    (results, tables)
+    (results, tables, match_points)
 }
 
 #[cfg(test)]
@@ -210,5 +247,55 @@ mod tests {
         let titles_after: u64 = pop.career_titles.iter().map(|&x| x as u64).sum();
         // Titles added = sum of each champion's non-retired squad size — bounded & > 0.
         assert!(titles_after > titles_before);
+    }
+
+    // ── Slice 8 TDD anchor (Design round 5, §8.1) ───────────────────────────────
+
+    #[test]
+    fn match_points_sum_matches_table_points() {
+        use crate::manager::ManagerPool;
+
+        let world = WorldGenesis::generate(41);
+        let league_clubs = world.static_league_clubs();
+        let mut pop = genesis(41, &world);
+        let (_results, tables, match_points) =
+            batch_tick_season_with_match_points(&mut pop, &world, &league_clubs, 41, 1, 52);
+
+        // Sum every match's captured points per club directly — this is the "faithful
+        // capture" claim: `match_points`' per-club total must equal the same season's
+        // `Table`'s own points column, computed independently by `apply_result`.
+        let mut summed: std::collections::HashMap<ClubId, u32> = std::collections::HashMap::new();
+        for &(club_id, pts) in &match_points {
+            *summed.entry(club_id).or_insert(0) += pts as u32;
+        }
+        for (div, div_clubs) in league_clubs.iter().enumerate() {
+            for &club_id in div_clubs {
+                let table_points = tables[div]
+                    .entries
+                    .iter()
+                    .find(|e| e.club_id == club_id)
+                    .unwrap()
+                    .points();
+                assert_eq!(
+                    summed.get(&club_id).copied().unwrap_or(0),
+                    table_points,
+                    "club {club_id}: match_points' per-club total must match the table's own points column"
+                );
+            }
+        }
+
+        // Corroborate with `record_match_points` itself via the non-lossy `matches_played`
+        // counter (unlike `recent_points`, a `MANAGER_FORM_WINDOW`-deep ring buffer, this
+        // never truncates) — every club's manager must have recorded exactly one entry per
+        // match played this season.
+        let mut pool = ManagerPool::genesis(41, &world);
+        pool.record_match_points(&match_points);
+        for &club_id in league_clubs.iter().flatten() {
+            let mgr_id = pool.club_manager[club_id];
+            assert_eq!(
+                pool.managers[mgr_id as usize].matches_played as usize, ROUNDS_PER_SEASON,
+                "club {club_id}: every round's match must be recorded exactly once"
+            );
+        }
     }
 }
