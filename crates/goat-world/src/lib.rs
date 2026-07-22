@@ -5,6 +5,7 @@
 //! This crate depends on `goat-core` but is NOT depended on by it.
 //! The TUI links goat-world and goat-core together; goat-core stays headless.
 
+pub mod academy;
 pub mod batch_tick;
 pub mod calendar;
 pub mod continental;
@@ -21,6 +22,7 @@ pub mod season;
 pub mod transfers;
 pub mod world;
 
+pub use academy::{apply_academy_investment, decay_academy_boost, run_academy_investment_pass};
 pub use calendar::{
     format_match_date, format_week_header, is_break_week, match_date, rest_weeks_after_round,
     round_to_week, week_day_offset, week_ends_after_round, week_to_rounds, BASE_CAREER_YEAR,
@@ -50,5 +52,6 @@ pub use season::{sim_team_match, Table, TableEntry};
 pub use transfers::{run_transfer_pass, TransferLane};
 pub use world::{
     Club, ClubId, DivLevel, GeneratedNation, League, LeagueId, NationId, WorldGenesis,
-    CLUBS_PER_DIV, NUM_CLUBS, NUM_DIVISIONS, NUM_NATIONS, PROMO_RELEGATION_N, TIERS_PER_NATION,
+    ACADEMY_BOOST_MAX, CLUBS_PER_DIV, NUM_CLUBS, NUM_DIVISIONS, NUM_NATIONS, PROMO_RELEGATION_N,
+    TIERS_PER_NATION,
 };

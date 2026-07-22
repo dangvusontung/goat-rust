@@ -28,18 +28,18 @@ use crate::world::{ClubId, WorldGenesis};
 const LANE_WEAKEST_POSITION_PCT: i64 = 50;
 /// Share of a club's *current* budget the gem-hunt lane may draw on this pass.
 const LANE_GEM_HUNT_PCT: i64 = 30;
-/// Reserved share for the academy slice's youth-investment lane — not spent here. Kept
-/// alongside its two siblings purely as documentation that 50 + 30 + 20 accounts for the
-/// whole budget across all three lanes; the academy slice reads its own copy of this number.
-#[allow(dead_code)]
-const LANE_YOUTH_INVESTMENT_PCT: i64 = 20;
+/// Share of a club's *current* budget the academy slice's youth-investment lane may draw on
+/// this pass — spent by `academy::run_academy_investment_pass`, not here. Kept alongside its
+/// two siblings purely as documentation that 50 + 30 + 20 accounts for the whole budget
+/// across all three lanes.
+pub(crate) const LANE_YOUTH_INVESTMENT_PCT: i64 = 20;
 
 /// One lane's spending cap this pass: a share of the club's *current* budget, computed
 /// fresh each time a lane runs — not a separate reserved sub-ledger. Passes execute
 /// strictly in priority order (weakest-position, then gem-hunt, then the academy slice's
 /// youth-investment), so a club that spends in an earlier pass automatically has a smaller
 /// `budget` — and therefore smaller caps — for the next one, with no double-booking risk.
-fn lane_cap(club_budget: i64, pct: i64) -> i64 {
+pub(crate) fn lane_cap(club_budget: i64, pct: i64) -> i64 {
     (club_budget.max(0) * pct) / 100
 }
 
