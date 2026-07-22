@@ -242,8 +242,11 @@ impl CalendarEngine {
             reports.push(report);
         }
 
-        // Decrement match-scoped suspension counters for matches played today.
-        // Phase 1 stub: SuspensionLedger (per-competition, counts by match not day) added in Phase 2.
+        // Suspension counters live in `goat-core`'s `WorldState::pc_suspensions`
+        // (`SuspensionLedger`, Design round 4 Slice 5 §5.1), decremented by the
+        // renderer via `Intent::ApplyRoundResult`/`ApplyOrbitMatchResult` when a match
+        // of that exact competition is played — not here. This engine only surfaces
+        // fixtures/windows/congestion; it has no reference to player-level state.
 
         // The ONLY increment of epoch_day.
         self.clock.epoch_day += 1;
