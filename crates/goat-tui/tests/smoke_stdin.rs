@@ -323,10 +323,8 @@ fn seed_save_at_age_weeks(dir: &std::path::Path, age_weeks: u32) {
 fn hard_retirement_age_is_forced_not_offered() {
     use goat_core::tuning::RETIRE_AGE_HARD;
 
-    let dir = std::env::temp_dir().join(format!(
-        "goat_tui_smoke_hard_retire_{}",
-        std::process::id()
-    ));
+    let dir =
+        std::env::temp_dir().join(format!("goat_tui_smoke_hard_retire_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("scratch dir");
     // One week before the hard cap, still under contract — the pre-existing
     // age>=35 && form<40 suggestion wouldn't reliably fire here (form defaults

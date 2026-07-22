@@ -34,7 +34,9 @@ fn lifestyle_tier_word(stdout: &str) -> &str {
     let line = stdout
         .lines()
         .find(|l| l.contains("Lifestyle"))
-        .unwrap_or_else(|| panic!("expected a Lifestyle line in the CAREER VERDICT box:\n{stdout}"));
+        .unwrap_or_else(|| {
+            panic!("expected a Lifestyle line in the CAREER VERDICT box:\n{stdout}")
+        });
     line.split(':')
         .nth(1)
         .and_then(|rest| rest.split_whitespace().next())
