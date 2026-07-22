@@ -108,6 +108,31 @@ pub fn run_transfer_pass(
     window: u8, // 0 = winter, 1 = summer — folded into the auction seed (5.4)
     lane: TransferLane,
 ) {
+    run_transfer_pass_with_log(pop, world, world_seed, season, window, lane);
+}
+
+/// One resolved transfer: the moved player's population index, the winning (buying) club,
+/// the selling club, the fee paid, and the target's `market_valuation` at the time of the
+/// auction — `fee > valuation` is exactly the signal a *contested* auction leaves behind
+/// (an uncontested one always settles at `fee == valuation`, `resolve_auction`'s own doc
+/// comment).
+pub type TransferLogEntry = (usize, ClubId, ClubId, i64, i64, TransferLane);
+
+/// Identical body to `run_transfer_pass`, plus: returns every transfer this pass executed,
+/// for callers (the season-tick integration slice, telemetry, tests) that need to observe
+/// individual outcomes — e.g. confirming a contested auction actually paid above
+/// valuation, or that a gem-hunt lane transfer moved a high-ceiling prospect — without
+/// threading a return value through the pass every other caller ignores. Same zero-ripple
+/// sibling idiom `batch_tick.rs`'s `batch_tick_season_with_match_points` already uses for
+/// per-match manager-form data (Design round 5, Slice 7-8 §8.1).
+pub fn run_transfer_pass_with_log(
+    pop: &mut Population,
+    world: &mut WorldGenesis,
+    world_seed: u64,
+    season: u32,
+    window: u8, // 0 = winter, 1 = summer — folded into the auction seed (5.4)
+    lane: TransferLane,
+) -> Vec<TransferLogEntry> {
     let elapsed_weeks = season * 52;
     let candidates = candidates_by_position(pop, elapsed_weeks);
     let gem_lists = gem_targets_by_position(pop, &candidates, elapsed_weeks);
@@ -164,11 +189,12 @@ pub fn run_transfer_pass(
             pop.seed[player_idx],
         ));
         if let Some((winner, fee)) = resolve_auction(&bidders, valuation, &mut rng) {
-            transfers.push((player_idx, winner, fee));
+            transfers.push((player_idx, winner, fee, valuation));
         }
     }
 
-    for (player_idx, winner, fee) in transfers {
+    let mut log = Vec::with_capacity(transfers.len());
+    for (player_idx, winner, fee, valuation) in transfers {
         let seller = pop.club[player_idx] as usize;
         pop.club[player_idx] = winner as u16;
         // Conservation: money moves within the closed club economy, never created/destroyed
@@ -176,7 +202,9 @@ pub fn run_transfer_pass(
         // the fee sums to zero across (buyer, seller), the invariant TDD anchor 5.5 checks.
         world.clubs[winner].budget -= fee;
         world.clubs[seller].budget += fee;
+        log.push((player_idx, winner, seller, fee, valuation, lane));
     }
+    log
 }
 
 // ── 5.4 — Auction resolution: deterministic ascending rounds ────────────────────────────
