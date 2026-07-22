@@ -11,7 +11,7 @@
 
 use goat_world::batch_tick::batch_tick_season;
 use goat_world::history::backfill_history;
-use goat_world::population::{genesis, SQUAD_SIZE};
+use goat_world::population::genesis;
 use goat_world::rival::{crystallise_rival, RivalVerdict};
 use goat_world::world::{WorldGenesis, NUM_CLUBS};
 
@@ -37,7 +37,9 @@ fn genesis_fingerprint_is_stable() {
 #[test]
 fn genesis_headcount_is_fixed() {
     let world = WorldGenesis::generate(99);
-    assert_eq!(genesis(99, &world).len(), NUM_CLUBS * SQUAD_SIZE);
+    assert_eq!(world.clubs.len(), NUM_CLUBS);
+    let expected: usize = world.clubs.iter().map(|c| c.squad_size as usize).sum();
+    assert_eq!(genesis(99, &world).len(), expected);
 }
 
 /// Batch-ticking the outer world is deterministic: a fixed seed + season sequence yields
