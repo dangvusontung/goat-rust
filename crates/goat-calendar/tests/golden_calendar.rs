@@ -5,7 +5,8 @@
 //! A failing expected value means the change is wrong, not the test.
 
 use goat_calendar::{
-    CalendarEngine, DayContext, DayReport, Fixture, Season, StopClass, Subsystem, SubsystemId,
+    CalendarEngine, Competition, CompetitionKind, DayContext, DayReport, Fixture,
+    FixtureImportance, Season, StopClass, Subsystem, SubsystemId,
 };
 use goat_rng::RngSource;
 
@@ -86,12 +87,23 @@ fn make_engine(seed: u64, fixture_days: &[u32]) -> CalendarEngine {
             scheduled_day: day,
             original_day: day,
             is_orbit: true,
+            importance: FixtureImportance::League,
+            leg_for_id: None,
         })
         .collect();
-    let mut engine = CalendarEngine::new(seed, season, fixtures);
+    let mut engine = CalendarEngine::new(seed, season, fixtures, test_competitions());
     engine.register(Box::new(MatchStub));
     engine.register(Box::new(TrainingStub));
     engine
+}
+
+fn test_competitions() -> Vec<Competition> {
+    vec![Competition {
+        id: 1,
+        kind: CompetitionKind::League,
+        priority: 100,
+        is_orbit: true,
+    }]
 }
 
 // ── Golden-seed tests (FROZEN) ────────────────────────────────────────────────
@@ -229,7 +241,7 @@ fn soft_flashpoint_flushes_at_threshold() {
         windows: vec![],
         competition_ids: vec![1],
     };
-    let mut engine = CalendarEngine::new(42, season, vec![]);
+    let mut engine = CalendarEngine::new(42, season, vec![], vec![]);
     // MediaStub fires soft events on days 1, 3, 5 (threshold = 3).
     engine.register(Box::new(MediaStub {
         fire_on_days: vec![1, 3, 5],
@@ -269,8 +281,10 @@ fn hard_stop_flushes_pending_softs() {
         scheduled_day: 5,
         original_day: 5,
         is_orbit: true,
+        importance: FixtureImportance::League,
+        leg_for_id: None,
     };
-    let mut engine = CalendarEngine::new(42, season, vec![fixture]);
+    let mut engine = CalendarEngine::new(42, season, vec![fixture], test_competitions());
     // Soft events on days 1 and 3 (below flush threshold), then a hard match on day 5.
     engine.register(Box::new(MatchStub));
     engine.register(Box::new(MediaStub {
