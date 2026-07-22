@@ -20,6 +20,30 @@ use goat_rng::{GoatRng, RngSource};
 /// retired identity can never re-enter the live world as an active player.
 pub const RETIRE_AGE_YEARS: u32 = 38;
 
+/// Chance (out of 100) that a genesis/intake player's potential ignores `club.strength`
+/// entirely and rolls from the full valid band instead (Design round 3, Doc C §Slice 2).
+/// Tùng's own example figure, adopted directly — a first-pass constant, not re-derived.
+const OUTLIER_CHANCE_PCT: u32 = 2;
+/// Lower bound of the valid `potential_ovr` band (both the anchor clamp and the outlier
+/// roll's own full range reuse this — one pair of bounds, not two).
+const POTENTIAL_MIN: u8 = 30;
+/// Upper bound of the valid `potential_ovr` band.
+const POTENTIAL_MAX: u8 = 99;
+
+/// Roll a background player's headline `potential_ovr`: usually anchored to `club_strength`
+/// ± variance (the pre-existing formula), but with a small (`OUTLIER_CHANCE_PCT`) chance of
+/// ignoring the club anchor entirely and rolling uniformly across the full band — the
+/// "unearthed at a nobody club" outlier (Design round 3, Doc C §Slice 2). Shared by
+/// `genesis` and Slice 4's youth intake — one formula, not duplicated.
+fn roll_potential_ovr(rng: &mut GoatRng, club_strength: u8) -> u8 {
+    if rng.next_range_u32(0, 99) < OUTLIER_CHANCE_PCT {
+        return rng.next_range_u32(POTENTIAL_MIN as u32, POTENTIAL_MAX as u32) as u8;
+    }
+    let base = club_strength as i32;
+    let variance = rng.next_range_u32(0, 30) as i32 - 15;
+    (base + variance).clamp(POTENTIAL_MIN as i32, POTENTIAL_MAX as i32) as u8
+}
+
 /// Background population as parallel columns. Index `i` identifies one player across all
 /// columns — there is no per-player struct.
 #[derive(Debug, Clone, Default)]
@@ -130,10 +154,8 @@ pub fn genesis(world_seed: u64, world: &WorldGenesis) -> Population {
             let age_years = rng.next_range_u32(16, 33);
             let birth_age_weeks = age_years * 52;
 
-            // Potential anchored to club strength ± variance, clamped to a sane band.
-            let base = club.strength as i32;
-            let variance = rng.next_range_u32(0, 30) as i32 - 15;
-            let potential_ovr = (base + variance).clamp(30, 99) as u8;
+            // Potential anchored to club strength ± variance, with a rare outlier roll.
+            let potential_ovr = roll_potential_ovr(&mut rng, club.strength);
 
             pop.seed.push(pseed);
             pop.club.push(club_id as u16);
@@ -325,5 +347,63 @@ mod tests {
             pop.promote(idx, elapsed, "Veteran", &world).is_none(),
             "a retired player must never promote to an active view"
         );
+    }
+
+    #[test]
+    fn outlier_roll_breaks_the_weak_club_ceiling() {
+        // strength <= 14 => the anchor branch alone always floors to exactly 30 (see the
+        // TDD anchor for "Verified" ceiling math). Search for a seed whose outlier roll
+        // breaks that ceiling.
+        let weak_strength: u8 = 1;
+        let found = (0u64..10_000).find_map(|seed| {
+            let mut rng = GoatRng::new(seed);
+            let v = roll_potential_ovr(&mut rng, weak_strength);
+            (v > 30).then_some(v)
+        });
+        assert!(
+            found.is_some(),
+            "expected at least one outlier roll to exceed the flat-30 ceiling for a strength=1 club"
+        );
+    }
+
+    #[test]
+    fn outlier_rate_is_roughly_two_percent() {
+        // For a weak club (strength <= 14) the anchor branch is deterministically exactly
+        // 30 every time; any other value can only come from the outlier branch. Counting
+        // "not exactly 30" over a large sample directly measures the outlier rate.
+        let weak_strength: u8 = 5;
+        let mut rng = GoatRng::new(0xC0FF_EE);
+        let n = 100_000;
+        let outliers = (0..n)
+            .filter(|_| roll_potential_ovr(&mut rng, weak_strength) != 30)
+            .count();
+        let rate_pct = outliers as f64 / n as f64 * 100.0;
+        assert!(
+            (0.5..4.0).contains(&rate_pct),
+            "outlier rate {rate_pct}% should be roughly {OUTLIER_CHANCE_PCT}% (wide statistical tolerance)"
+        );
+    }
+
+    #[test]
+    fn anchor_branch_unchanged_when_no_outlier() {
+        let strength: u8 = 40;
+        for seed in 0u64..500 {
+            // Replay the same rng stream independently to compute what the pre-Slice-2
+            // anchor-only formula would have produced from the same draws.
+            let mut probe = GoatRng::new(seed);
+            let check = probe.next_range_u32(0, 99);
+            if check < OUTLIER_CHANCE_PCT {
+                continue; // this seed hits the outlier branch; not covered by this test
+            }
+            let variance = probe.next_range_u32(0, 30) as i32 - 15;
+            let expected = (strength as i32 + variance).clamp(30, 99) as u8;
+
+            let mut rng = GoatRng::new(seed);
+            let actual = roll_potential_ovr(&mut rng, strength);
+            assert_eq!(
+                actual, expected,
+                "seed {seed}: anchor branch must match the pre-Slice-2 formula bit-for-bit"
+            );
+        }
     }
 }
