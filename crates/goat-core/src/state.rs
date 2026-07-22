@@ -285,7 +285,10 @@ impl WorldState {
 
     /// Matches remaining on the PC's suspension in `competition_id` (0 = available in
     /// that competition, regardless of any ban held in a different one).
-    pub fn pc_suspension_matches_remaining(&self, competition_id: goat_calendar::CompetitionId) -> u32 {
+    pub fn pc_suspension_matches_remaining(
+        &self,
+        competition_id: goat_calendar::CompetitionId,
+    ) -> u32 {
         self.pc_suspensions
             .iter()
             .find(|l| l.competition_id == competition_id)

@@ -323,6 +323,153 @@ fn old_v8_save_without_pantheon_signals_defaults_to_zero() {
     assert_eq!(restored.pc_career_transfer_requests, 0);
 }
 
+// ── SuspensionLedger (Design round 4, Slice 5 §5.1/§5.2) ─────────────────────
+
+#[test]
+fn save_load_restores_multiple_competition_suspensions_through_bytes() {
+    // v11+: a Vec<SuspensionLedger>, not a single scalar — must round-trip more than
+    // one simultaneous ban (league + domestic cup) through the full byte path.
+    let mut state = setup_state();
+    state.pc_suspensions = vec![
+        goat_calendar::SuspensionLedger {
+            player_id: state.pc_player_id.unwrap(),
+            competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
+            matches_remaining: 2,
+        },
+        goat_calendar::SuspensionLedger {
+            player_id: state.pc_player_id.unwrap(),
+            competition_id: goat_core::calendar_loop::DOMESTIC_CUP_COMPETITION_ID,
+            matches_remaining: 1,
+        },
+    ];
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join(format!(
+        "goat_save_suspensions_roundtrip_{}.gsav",
+        std::process::id()
+    ));
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap(), &test_world());
+    std::fs::remove_file(&path).ok();
+
+    let mut suspensions = restored.pc_suspensions.clone();
+    suspensions.sort_by_key(|l| l.competition_id);
+    assert_eq!(suspensions.len(), 2);
+    assert_eq!(
+        suspensions[0].competition_id,
+        goat_core::calendar_loop::LEAGUE_COMPETITION_ID
+    );
+    assert_eq!(suspensions[0].matches_remaining, 2);
+    assert_eq!(
+        suspensions[1].competition_id,
+        goat_core::calendar_loop::DOMESTIC_CUP_COMPETITION_ID
+    );
+    assert_eq!(suspensions[1].matches_remaining, 1);
+}
+
+#[test]
+fn old_v10_save_with_bare_suspension_scalar_migrates_to_a_league_scoped_ledger_entry() {
+    // Pre-v11 saves wrote `pc_suspension_weeks` as a single bare u32 at this exact
+    // position (a mid-stream field, not a tail-append — same break as v10's table_raw
+    // widening). Build a real v11 buffer with an EMPTY suspensions list (encodes as a
+    // 4-byte `count = 0`, the same width as the old bare scalar occupied), locate that
+    // 4-byte slot by diffing against a second buffer whose only difference is a
+    // non-empty suspensions list (both share an identical byte prefix up to exactly
+    // where the suspensions encoding begins), then splice in an old-style nonzero
+    // scalar at that slot and rewrite the version tag to 10 — reconstructing exactly
+    // what a real v10 writer would have produced, without hand-counting the other ~60
+    // fields' byte layout.
+    let state = setup_state();
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+
+    let mut empty_data = from_world_state(&state, &view);
+    empty_data.pc_suspensions = vec![];
+    let mut marker_data = from_world_state(&state, &view);
+    marker_data.pc_suspensions = vec![(999, 999)];
+
+    let empty_path =
+        std::env::temp_dir().join(format!("goat_save_v11_empty_{}.gsav", std::process::id()));
+    let marker_path =
+        std::env::temp_dir().join(format!("goat_save_v11_marker_{}.gsav", std::process::id()));
+    save_to_file(&empty_data, &empty_path).unwrap();
+    save_to_file(&marker_data, &marker_path).unwrap();
+    let empty_bytes = std::fs::read(&empty_path).unwrap();
+    let marker_bytes = std::fs::read(&marker_path).unwrap();
+    std::fs::remove_file(&empty_path).ok();
+    std::fs::remove_file(&marker_path).ok();
+
+    let divergence = empty_bytes
+        .iter()
+        .zip(marker_bytes.iter())
+        .position(|(a, b)| a != b)
+        .expect("a non-empty suspensions list must change the encoded bytes");
+
+    // Splice an old-style bare-u32 scalar (value 3) into the 4-byte `count = 0` slot,
+    // then rewrite the version tag (bytes [4..8], right after the b"GOAT" magic) to 10.
+    let mut v10_bytes = empty_bytes.clone();
+    v10_bytes[divergence..divergence + 4].copy_from_slice(&3u32.to_le_bytes());
+    v10_bytes[4..8].copy_from_slice(&10u32.to_le_bytes());
+
+    let v10_path = std::env::temp_dir().join(format!(
+        "goat_save_v10_synthetic_{}.gsav",
+        std::process::id()
+    ));
+    std::fs::write(&v10_path, &v10_bytes).unwrap();
+    let loaded = load_from_file(&v10_path).unwrap();
+    std::fs::remove_file(&v10_path).ok();
+
+    assert_eq!(
+        loaded.pc_suspensions,
+        vec![(goat_core::calendar_loop::LEAGUE_COMPETITION_ID, 3)],
+        "a pre-v11 nonzero suspension scalar must migrate to a single League-scoped entry"
+    );
+
+    let restored = to_world_state(&loaded, &test_world());
+    assert_eq!(restored.pc_suspensions.len(), 1);
+    assert_eq!(
+        restored.pc_suspensions[0].competition_id,
+        goat_core::calendar_loop::LEAGUE_COMPETITION_ID
+    );
+    assert_eq!(restored.pc_suspensions[0].matches_remaining, 3);
+    let _ = pc_id;
+}
+
+#[test]
+fn old_v10_save_with_zero_suspension_scalar_migrates_to_an_empty_ledger() {
+    let state = setup_state();
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join(format!(
+        "goat_save_v11_zero_suspension_{}.gsav",
+        std::process::id()
+    ));
+    save_to_file(&data, &path).unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+
+    // `data.pc_suspensions` is empty by default, so this is already a "count = 0" v11
+    // buffer — retagging it as v10 exercises the `old == 0` migration branch.
+    bytes[4..8].copy_from_slice(&10u32.to_le_bytes());
+    let v10_path = std::env::temp_dir().join(format!(
+        "goat_save_v10_zero_synthetic_{}.gsav",
+        std::process::id()
+    ));
+    std::fs::write(&v10_path, &bytes).unwrap();
+    let loaded = load_from_file(&v10_path).unwrap();
+    std::fs::remove_file(&v10_path).ok();
+
+    assert!(
+        loaded.pc_suspensions.is_empty(),
+        "a zero pre-v11 scalar must migrate to an empty ledger, not a phantom entry"
+    );
+    let _ = pc_id;
+}
+
 // ── Save slots (Design round 1, Slice 3) ─────────────────────────────────────
 
 #[test]
