@@ -64,6 +64,13 @@ pub struct WorldState {
     /// it (genesis) or writes to it (a transfer window tick) — both are a later slice's
     /// season-tick wiring, not this foundation slice's job.
     pub club_budgets: Vec<i64>,
+    /// Every club's academy-boost lever, 0..=`goat_world::world::ACADEMY_BOOST_MAX` (Design
+    /// round 5, Doc A §Slice 6), indexed by `goat_world::world::ClubId`. Path-dependent like
+    /// `club_budgets` — accumulated by youth-investment spend and season-end decay, cannot be
+    /// regenerated from `world_seed` on load. Empty until a caller seeds it (genesis) or
+    /// writes to it (an investment pass / season-end decay) — both are a later slice's
+    /// season-tick wiring, not this slice's job.
+    pub academy_boosts: Vec<u8>,
     // ── Phase 6 discipline fields ─────────────────────────────────────────────
     /// Yellow cards in the current season (resets each season). 5 = ban.
     pub pc_yellow_cards_season: u32,
@@ -239,6 +246,7 @@ impl WorldState {
             pc_season_output: 0,
             table_raw: [0u32; 100],
             club_budgets: Vec::new(),
+            academy_boosts: Vec::new(),
             pc_yellow_cards_season: 0,
             pc_suspensions: Vec::new(),
             pc_discipline_rep: 50,

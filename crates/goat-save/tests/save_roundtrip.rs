@@ -496,9 +496,11 @@ fn save_load_restores_club_budgets_through_bytes() {
 #[test]
 fn old_v11_save_without_club_budgets_defaults_to_empty() {
     // A real v11 binary never wrote the trailing v12 `club_budgets` bytes (length prefix +
-    // entries). Simulate that by truncating those bytes off a real v12 buffer — exercises
-    // the actual `.unwrap_or(0)` backward-compat reads in `from_bytes`, not just the
-    // in-memory struct default (same idiom as the v8/v9 Pantheon-signal truncation test).
+    // entries) or the v13 `academy_boosts` bytes (an empty-list length prefix here, since
+    // this test leaves it unset). Simulate that by truncating those bytes off a real v13
+    // buffer — exercises the actual `.unwrap_or(0)` backward-compat reads in `from_bytes`,
+    // not just the in-memory struct default (same idiom as the v8/v9 Pantheon-signal
+    // truncation test).
     let state = setup_state();
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
@@ -511,8 +513,9 @@ fn old_v11_save_without_club_budgets_defaults_to_empty() {
     let mut bytes = std::fs::read(&full_path).unwrap();
     std::fs::remove_file(&full_path).ok();
 
-    // Trailing encoding: 4-byte count + 3 * 8-byte entries.
-    let v11_len = bytes.len() - (4 + 3 * 8);
+    // Trailing encoding: club_budgets (4-byte count + 3 * 8-byte entries) followed by
+    // academy_boosts's empty-list 4-byte length prefix.
+    let v11_len = bytes.len() - (4 + 3 * 8) - 4;
     bytes.truncate(v11_len);
 
     let v11_path = std::env::temp_dir().join(format!(
@@ -527,8 +530,69 @@ fn old_v11_save_without_club_budgets_defaults_to_empty() {
         loaded.club_budgets.is_empty(),
         "a pre-v12 save must default club_budgets to empty, not panic or fabricate entries"
     );
+    assert!(
+        loaded.academy_boosts.is_empty(),
+        "a pre-v13 save must default academy_boosts to empty too"
+    );
     let restored = to_world_state(&loaded, &test_world());
     assert!(restored.club_budgets.is_empty());
+    assert!(restored.academy_boosts.is_empty());
+}
+
+#[test]
+fn save_load_restores_academy_boosts_through_bytes() {
+    // v13+: academy_boosts must survive a full byte round-trip.
+    let mut state = setup_state();
+    state.academy_boosts = vec![0, 20, 7, 15];
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join(format!(
+        "goat_save_academy_boosts_roundtrip_{}.gsav",
+        std::process::id()
+    ));
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap(), &test_world());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(restored.academy_boosts, vec![0, 20, 7, 15]);
+}
+
+#[test]
+fn old_v12_save_without_academy_boosts_defaults_to_empty() {
+    // A real v12 binary never wrote the trailing v13 `academy_boosts` bytes (length prefix +
+    // entries). Simulate that by truncating those bytes off a real v13 buffer.
+    let state = setup_state();
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let mut data = from_world_state(&state, &view);
+    data.academy_boosts = vec![5, 10, 15];
+
+    let full_path =
+        std::env::temp_dir().join(format!("goat_save_v13_full_{}.gsav", std::process::id()));
+    save_to_file(&data, &full_path).unwrap();
+    let mut bytes = std::fs::read(&full_path).unwrap();
+    std::fs::remove_file(&full_path).ok();
+
+    // Trailing encoding: 4-byte count + 3 * 1-byte entries.
+    let v12_len = bytes.len() - (4 + 3);
+    bytes.truncate(v12_len);
+
+    let v12_path = std::env::temp_dir().join(format!(
+        "goat_save_v12_truncated_{}.gsav",
+        std::process::id()
+    ));
+    std::fs::write(&v12_path, &bytes).unwrap();
+    let loaded = load_from_file(&v12_path).unwrap();
+    std::fs::remove_file(&v12_path).ok();
+
+    assert!(
+        loaded.academy_boosts.is_empty(),
+        "a pre-v13 save must default academy_boosts to empty, not panic or fabricate entries"
+    );
+    let restored = to_world_state(&loaded, &test_world());
+    assert!(restored.academy_boosts.is_empty());
 }
 
 // ── Save slots (Design round 1, Slice 3) ─────────────────────────────────────
