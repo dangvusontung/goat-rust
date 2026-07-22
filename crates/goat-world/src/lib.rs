@@ -54,7 +54,9 @@ pub use scouting::{
     candidates_by_position, gem_hunt_target, gem_targets_by_position, weakest_position_target,
 };
 pub use season::{sim_team_match, Table, TableEntry};
-pub use transfers::{run_transfer_pass, run_transfer_pass_with_log, TransferLane, TransferLogEntry};
+pub use transfers::{
+    run_transfer_pass, run_transfer_pass_with_log, TransferLane, TransferLogEntry,
+};
 pub use world::{
     Club, ClubId, DivLevel, GeneratedNation, League, LeagueId, NationId, WorldGenesis,
     ACADEMY_BOOST_MAX, CLUBS_PER_DIV, NUM_CLUBS, NUM_DIVISIONS, NUM_NATIONS, PROMO_RELEGATION_N,
