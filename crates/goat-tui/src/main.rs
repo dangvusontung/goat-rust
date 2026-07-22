@@ -45,9 +45,14 @@ use goat_save::save::{
 };
 use goat_traits::PlayerTraits;
 use goat_world::{
-    continental::ContinentalTier, domestic_cup::break_tie, fixture_for_round, format_week_header,
-    round_fixtures, round_to_week, sim_team_match, world::WorldGenesis, Table, BASE_CAREER_YEAR,
-    CLUBS_PER_DIV, NUM_NATIONS, ROUNDS_PER_SEASON, TIERS_PER_NATION,
+    continental::ContinentalTier,
+    domestic_cup::break_tie,
+    fixture_for_round, format_week_header,
+    national_tournament::national_team_strength,
+    population::Population,
+    round_fixtures, round_to_week, sim_team_match,
+    world::{NationId, WorldGenesis},
+    Table, BASE_CAREER_YEAR, CLUBS_PER_DIV, NUM_NATIONS, ROUNDS_PER_SEASON, TIERS_PER_NATION,
 };
 
 #[path = "orbit_fixtures.rs"]
@@ -61,6 +66,10 @@ use cup_dispatch::cup_fixture_due;
 #[path = "continental_dispatch.rs"]
 mod continental_dispatch;
 use continental_dispatch::{qualified_tier, ContinentalPhase, ContinentalRun};
+
+#[path = "national_dispatch.rs"]
+mod national_dispatch;
+use national_dispatch::{QualifyingCampaign, TournamentKind, TournamentPhase, TournamentRun};
 
 const SAVE_DIR: &str = "saves";
 const NUM_SLOTS: u8 = 9;
@@ -385,6 +394,14 @@ fn run_game_loop(
     // `None` until qualification is checked at the first season boundary (season 1 has
     // no prior season to qualify from), and again whenever the current run finishes.
     let mut pc_continental: Option<ContinentalRun> = None;
+    // Session-local: the PC's national-team tournament cycle for the current season,
+    // if it's a World Cup / continental-championship year (Design round 4, Slice 5
+    // follow-up — see `national_dispatch.rs`'s doc comment). Both fields are reset to
+    // `None` at every `StartSeason` boundary; `qualifying` is populated at that
+    // season's own `InternationalBreak` flashpoint, `tournament` only if `qualifying`
+    // concludes with the PC's nation in the top 2 of its group.
+    let mut pc_qualifying: Option<QualifyingCampaign> = None;
+    let mut pc_tournament: Option<TournamentRun> = None;
 
     loop {
         let pc_id = match state.pc_player_id {
@@ -492,6 +509,8 @@ fn run_game_loop(
                 Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                     "Y" => {
                         pc_cup_alive = true; // fresh domestic-cup run each season
+                        pc_qualifying = None; // fresh national-team cycle each season
+                        pc_tournament = None;
                         let next_div_idx = state.pc_div_idx as usize;
                         let next_club_id = state.pc_club_idx as usize;
 
@@ -598,6 +617,15 @@ fn run_game_loop(
                     } else {
                         display_events(out, &state.last_week_events);
                         display_flashpoints(out, &state.last_week_flashpoints);
+                        state = dispatch_national_flashpoints(
+                            out,
+                            state,
+                            world,
+                            beat_lib,
+                            pc_traits,
+                            &mut pc_qualifying,
+                            &mut pc_tournament,
+                        );
                     }
                 }
                 "F" => {
@@ -615,6 +643,15 @@ fn run_game_loop(
                     );
                     display_events(out, &state.last_week_events);
                     display_flashpoints(out, &state.last_week_flashpoints);
+                    state = dispatch_national_flashpoints(
+                        out,
+                        state,
+                        world,
+                        beat_lib,
+                        pc_traits,
+                        &mut pc_qualifying,
+                        &mut pc_tournament,
+                    );
                 }
                 "S" => state = run_set_routine(lines, out, state),
                 "P" if has_season => {
@@ -1496,6 +1533,414 @@ fn render_continental_group_table(
     }
 }
 
+/// Roll the PC's national-team call-up chance for one fixture (Design round 2, Doc
+/// B §B.3's call-up layer, finally wired to a live trigger — see `national_dispatch.rs`'s
+/// doc comment for why club-tier `team_fit`'s tiered odds don't apply here: there's no
+/// national-squad tactical-identity concept, so this uses the PC's own OVR directly as
+/// a percent chance, floored/ceilinged so neither a bench player nor a legend is ever
+/// fully guaranteed or fully excluded).
+fn national_call_up_roll(state: &WorldState, seed: u64) -> bool {
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return false,
+    };
+    let view = state.players.snapshot(pc_id);
+    let position = state.players.get_primary_position(pc_id);
+    let pct = ovr(&view.current, position).to_int().clamp(10, 95) as u32;
+    let mut rng = GoatRng::new(seed);
+    rng.next_range_u32(0, 99) < pct
+}
+
+/// Play one national-team fixture: suspension-gated and call-up-gated. A card here
+/// suspends the PC from `competition_id` (World Cup or continental championship) only
+/// — never a club competition, and vice versa. Fires `Intent::NationalTeamCallUp` every
+/// time (Design round 2, Doc B §B.3), including a `called_up: false` no-op when the PC
+/// wasn't selected, so `pc_season_caps`/`pc_season_international_goals` stay accurate.
+#[allow(clippy::too_many_arguments)]
+fn play_national_fixture(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    pop: &Population,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    pc_nation: NationId,
+    opp_nation: NationId,
+    elapsed_weeks: u32,
+    competition_id: goat_calendar::CompetitionId,
+    seed: u64,
+) -> (WorldState, u32, u32) {
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return (state, 0, 0),
+    };
+    let own_str = national_team_strength(
+        pop,
+        world.nations[pc_nation].stature,
+        pc_nation,
+        elapsed_weeks,
+    );
+    let opp_str = national_team_strength(
+        pop,
+        world.nations[opp_nation].stature,
+        opp_nation,
+        elapsed_weeks,
+    );
+    let opp_name = world.nation_name(opp_nation).to_string();
+    let suspended = state.pc_suspension_matches_remaining(competition_id) > 0;
+    let called_up = !suspended && national_call_up_roll(&state, seed ^ 0x0000_0000_0000_CA11);
+
+    if !suspended && !called_up {
+        writeln!(
+            out,
+            "  Not called up this window ({}) — {} play on without you.",
+            competition_label(competition_id),
+            world.nation_name(pc_nation)
+        )
+        .unwrap();
+        let mut rng = GoatRng::new(seed);
+        let (gf, ga) = sim_team_match(own_str, opp_str, &mut rng);
+        writeln!(
+            out,
+            "  {} {}–{} {}",
+            world.nation_name(pc_nation),
+            gf,
+            ga,
+            opp_name
+        )
+        .unwrap();
+        state = reduce(
+            state,
+            Intent::NationalTeamCallUp {
+                called_up: false,
+                started: false,
+                goals: 0,
+            },
+            &mut GoatRng::new(0),
+        );
+        return (state, gf, ga);
+    }
+
+    if called_up {
+        writeln!(
+            out,
+            "  *** Called up for {}! ***",
+            competition_label(competition_id)
+        )
+        .unwrap();
+    }
+    let (new_state, gf, ga) = play_orbit_match(
+        out,
+        state,
+        pc_id,
+        beat_lib,
+        pc_traits,
+        own_str,
+        opp_str,
+        &opp_name,
+        competition_id,
+        seed,
+    );
+    state = new_state;
+    state = reduce(
+        state,
+        Intent::NationalTeamCallUp {
+            called_up,
+            started: called_up,
+            goals: if called_up { gf } else { 0 },
+        },
+        &mut GoatRng::new(0),
+    );
+    (state, gf, ga)
+}
+
+/// If an `InternationalBreak` or `OffSeason` flashpoint fired this week, dispatch the
+/// PC's national-team tournament cycle (Design round 4, Slice 4/5 follow-up — see
+/// `national_dispatch.rs`'s doc comment for why an entire cycle — qualifying, group
+/// stage, knockout — resolves within one tournament season rather than spread across
+/// several real seasons like the engine's own doc comment describes).
+#[allow(clippy::too_many_arguments)]
+fn dispatch_national_flashpoints(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    pc_qualifying: &mut Option<QualifyingCampaign>,
+    pc_tournament: &mut Option<TournamentRun>,
+) -> WorldState {
+    let flashpoints = state.last_week_flashpoints.clone();
+    for fp in flashpoints {
+        match fp.window {
+            goat_calendar::WindowKind::InternationalBreak => {
+                state = maybe_run_qualifying_campaign(
+                    out,
+                    state,
+                    world,
+                    beat_lib,
+                    pc_traits,
+                    pc_qualifying,
+                    pc_tournament,
+                );
+            }
+            goat_calendar::WindowKind::OffSeason => {
+                state =
+                    maybe_play_tournament(out, state, world, beat_lib, pc_traits, pc_tournament);
+            }
+            _ => {}
+        }
+    }
+    state
+}
+
+/// Resolve the PC's entire qualifying campaign (all 5 rounds) at this tournament
+/// season's `InternationalBreak` flashpoint, if one is due and hasn't already run this
+/// season.
+#[allow(clippy::too_many_arguments)]
+fn maybe_run_qualifying_campaign(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    pc_qualifying: &mut Option<QualifyingCampaign>,
+    pc_tournament: &mut Option<TournamentRun>,
+) -> WorldState {
+    if pc_qualifying.is_some() {
+        return state; // already resolved this season
+    }
+    let season = state.season_number;
+    let kind = match TournamentKind::for_season(season) {
+        Some(k) => k,
+        None => return state,
+    };
+    let pc_nation = match world
+        .nations
+        .iter()
+        .find(|n| n.name == state.pc_nationality)
+    {
+        Some(n) => n.id,
+        None => return state,
+    };
+
+    writeln!(out, "\n*** {} QUALIFYING CAMPAIGN ***", kind.label()).unwrap();
+    let pop = goat_world::population::genesis(state.world_seed, world);
+    let competition_id = if kind.is_world_cup() {
+        WORLD_CUP_COMPETITION_ID
+    } else {
+        CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID
+    };
+    let elapsed_weeks = national_dispatch::elapsed_weeks_for(season);
+    let mut campaign = QualifyingCampaign::start(state.world_seed, season, pc_nation);
+
+    while !campaign.is_complete() {
+        let seed = state.world_seed
+            ^ ((season as u64) << 40)
+            ^ ((campaign.round as u64) << 4)
+            ^ 0x0000_0000_0000_FB01;
+        if let Some(opp_nation) = campaign.play_round(world, &pop, seed) {
+            writeln!(
+                out,
+                "\n--- {} QUALIFYING: {} vs {} ---",
+                kind.label(),
+                world.nation_name(pc_nation),
+                world.nation_name(opp_nation)
+            )
+            .unwrap();
+            let (new_state, gf, ga) = play_national_fixture(
+                out,
+                state,
+                world,
+                &pop,
+                beat_lib,
+                pc_traits,
+                pc_nation,
+                opp_nation,
+                elapsed_weeks,
+                competition_id,
+                seed,
+            );
+            state = new_state;
+            campaign.record_pc_result(gf, ga);
+        }
+        campaign.advance_round();
+    }
+
+    let tiebreak_seed = state.world_seed ^ (season as u64).rotate_left(31) ^ 0x0000_0000_0000_FB02;
+    if campaign.pc_qualifies(tiebreak_seed) {
+        writeln!(
+            out,
+            "  *** {} qualify for the {}! ***",
+            world.nation_name(pc_nation),
+            kind.label()
+        )
+        .unwrap();
+        *pc_tournament = Some(TournamentRun::start(
+            state.world_seed,
+            kind,
+            season,
+            pc_nation,
+        ));
+    } else {
+        writeln!(
+            out,
+            "  {} fail to qualify for the {}.",
+            world.nation_name(pc_nation),
+            kind.label()
+        )
+        .unwrap();
+    }
+    *pc_qualifying = Some(campaign);
+    state
+}
+
+/// Resolve the PC's entire tournament-proper run (group stage + knockout) at this
+/// tournament season's `OffSeason` flashpoint, if their nation qualified.
+fn maybe_play_tournament(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    pc_tournament: &mut Option<TournamentRun>,
+) -> WorldState {
+    let mut run = match pc_tournament.take() {
+        Some(r) => r,
+        None => return state,
+    };
+    let pc_nation = run.standings[0].nation;
+    let kind = run.kind;
+    let season = run.tournament_season;
+    let competition_id = if kind.is_world_cup() {
+        WORLD_CUP_COMPETITION_ID
+    } else {
+        CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID
+    };
+    let pop = goat_world::population::genesis(state.world_seed, world);
+    let elapsed_weeks = national_dispatch::elapsed_weeks_for(season);
+    writeln!(out, "\n*** THE {} BEGINS ***", kind.label()).unwrap();
+
+    loop {
+        match run.phase {
+            TournamentPhase::GroupMatchday(md) => {
+                run.sim_other_pair(world, &pop, state.world_seed ^ ((season as u64) << 44), md);
+                let opp_nation = run.group_opponent(md);
+                let seed = state.world_seed
+                    ^ ((season as u64) << 40)
+                    ^ ((md as u64) << 4)
+                    ^ 0x0000_0000_0000_FB03;
+                writeln!(
+                    out,
+                    "\n--- {} GROUP MATCHDAY {}: {} vs {} ---",
+                    kind.label(),
+                    md + 1,
+                    world.nation_name(pc_nation),
+                    world.nation_name(opp_nation)
+                )
+                .unwrap();
+                let (new_state, gf, ga) = play_national_fixture(
+                    out,
+                    state,
+                    world,
+                    &pop,
+                    beat_lib,
+                    pc_traits,
+                    pc_nation,
+                    opp_nation,
+                    elapsed_weeks,
+                    competition_id,
+                    seed,
+                );
+                state = new_state;
+                run.record_pc_group_result(gf, ga);
+                run.advance_group(state.world_seed);
+            }
+            TournamentPhase::Semifinal | TournamentPhase::Final => {
+                let is_final = matches!(run.phase, TournamentPhase::Final);
+                let round_label = if is_final { "FINAL" } else { "SEMIFINAL" };
+                let opp_nation = run.knockout_opponent.unwrap();
+                let seed = state.world_seed
+                    ^ ((season as u64) << 40)
+                    ^ (is_final as u64)
+                    ^ 0x0000_0000_0000_FB04;
+                writeln!(
+                    out,
+                    "\n--- {} {round_label}: {} vs {} ---",
+                    kind.label(),
+                    world.nation_name(pc_nation),
+                    world.nation_name(opp_nation)
+                )
+                .unwrap();
+                let (new_state, gf, ga) = play_national_fixture(
+                    out,
+                    state,
+                    world,
+                    &pop,
+                    beat_lib,
+                    pc_traits,
+                    pc_nation,
+                    opp_nation,
+                    elapsed_weeks,
+                    competition_id,
+                    seed,
+                );
+                state = new_state;
+                let mut tiebreak_rng = GoatRng::new(seed ^ 0xBEEF);
+                let pc_wins = run.resolve_knockout_match(
+                    state.world_seed,
+                    pc_nation,
+                    gf,
+                    ga,
+                    &mut tiebreak_rng,
+                );
+                if pc_wins && is_final {
+                    writeln!(
+                        out,
+                        "  *** {} ARE CROWNED {} CHAMPIONS! ***",
+                        world.nation_name(pc_nation),
+                        kind.label()
+                    )
+                    .unwrap();
+                    state = reduce(
+                        state,
+                        Intent::ApplyNationalTournamentWin {
+                            is_world_cup: kind.is_world_cup(),
+                        },
+                        &mut GoatRng::new(0),
+                    );
+                } else if pc_wins {
+                    writeln!(
+                        out,
+                        "  {} advance to the final!",
+                        world.nation_name(pc_nation)
+                    )
+                    .unwrap();
+                } else if is_final {
+                    writeln!(
+                        out,
+                        "  Runners-up. {} are crowned {} champions.",
+                        world.nation_name(opp_nation),
+                        kind.label()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        out,
+                        "  {} are eliminated in the semifinal.",
+                        world.nation_name(pc_nation)
+                    )
+                    .unwrap();
+                }
+            }
+            TournamentPhase::Done => break,
+        }
+        if matches!(run.phase, TournamentPhase::Done) {
+            break;
+        }
+    }
+    state
+}
+
 fn club_div_pos_in(div_clubs: &[usize], club_id: usize) -> usize {
     div_clubs
         .iter()
@@ -1830,6 +2275,10 @@ fn run_awards_and_pundits(
     let s_output = state.pc_season_output;
     let s_standout_matches = state.pc_season_standout_matches;
     let s_transfer_requests = state.pc_season_transfer_requests;
+    let s_caps = state.pc_season_caps;
+    let s_international_goals = state.pc_season_international_goals;
+    let s_world_cups_won = state.pc_season_world_cups_won;
+    let s_continental_championships_won = state.pc_season_continental_championships_won;
 
     // Update legacy evidence via intent.
     state = reduce(
@@ -1846,18 +2295,13 @@ fn run_awards_and_pundits(
             new_club_fan_rep: new_club_fan,
             season_standout_matches: s_standout_matches,
             season_transfer_requests: s_transfer_requests,
-            // National-team call-ups (Design round 2, Doc B §B.3) aren't wired into the
-            // TUI yet — the international-break window is still flavor-text-only (see
-            // the calendar-event renderer), so nothing accrues caps this season.
-            season_caps: 0,
-            season_international_goals: 0,
-            // National-team tournaments (Design round 4, Slice 4) are simulated by
-            // `goat-world::national_tournament` but not yet dispatched from the live TUI
-            // loop (no day-driven "a tournament fixture is due" dispatcher exists yet,
-            // same deferred-to-Slice-5 gap as the domestic-cup/continental club
-            // competitions) -- so nothing accrues here yet either.
-            season_world_cups_won: 0,
-            season_continental_championships_won: 0,
+            // National-team call-ups (Design round 2, Doc B §B.3) and tournaments
+            // (Design round 4, Slice 4) are now live-dispatched from `national_dispatch`
+            // (see its doc comment) — these season-live accumulators are real.
+            season_caps: s_caps,
+            season_international_goals: s_international_goals,
+            season_world_cups_won: s_world_cups_won,
+            season_continental_championships_won: s_continental_championships_won,
         },
         &mut GoatRng::new(0),
     );

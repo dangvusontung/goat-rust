@@ -451,6 +451,15 @@ pub enum Intent {
         goals: u32,
     },
 
+    // ── Design round 4, Slice 4/5 — national-team tournament win ──────────────
+    /// Record that the PC's nation won the tournament (World Cup or continental
+    /// championship) their live qualifying/knockout run just concluded. Live-season
+    /// counterpart to `pc_career_world_cups_won`/`pc_career_continental_
+    /// championships_won` — folded into those career totals via
+    /// `ApplySeasonEndLegacy`'s `season_world_cups_won`/`season_continental_
+    /// championships_won` fields exactly like every other season-live accumulator.
+    ApplyNationalTournamentWin { is_world_cup: bool },
+
     // ── Phase 10 intents ──────────────────────────────────────────────────────
     // Lifestyle is no longer a settable intent (bible §8.5/§8.6) — it is derived
     // weekly from `pc_lifestyle_score`, nudged by routine intensity, dev-investment
@@ -924,6 +933,15 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 if started {
                     state.pc_season_international_goals += goals;
                 }
+            }
+            state
+        }
+
+        Intent::ApplyNationalTournamentWin { is_world_cup } => {
+            if is_world_cup {
+                state.pc_season_world_cups_won += 1;
+            } else {
+                state.pc_season_continental_championships_won += 1;
             }
             state
         }
