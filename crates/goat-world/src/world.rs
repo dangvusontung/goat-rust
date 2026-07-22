@@ -77,7 +77,17 @@ pub struct Club {
     /// `goat_core::state::WorldState::club_budgets` and is overlaid onto this genesis
     /// starting point by save/load — this field only holds the *starting* war-chest.
     pub budget: i64,
+    /// How much this club's own academy currently out-punches its genesis `strength` for
+    /// intake purposes, 0..=`ACADEMY_BOOST_MAX` (Design round 5, Doc A §Slice 6). Decays
+    /// without reinvestment (`academy::decay_academy_boost`) — an ongoing commitment, not a
+    /// one-time purchase. Path-dependent like `budget`: the live value lives in
+    /// `goat_core::state::WorldState::academy_boosts` and is overlaid onto this genesis
+    /// starting point (0) by save/load — this field only holds the starting value.
+    pub academy_boost: u8,
 }
+
+/// Upper clamp on `Club::academy_boost` (Design round 5, Doc A §Slice 6.1).
+pub const ACADEMY_BOOST_MAX: u8 = 20;
 
 impl Club {
     /// Facilities development multiplier (stronger clubs invest more in youth).
@@ -332,6 +342,7 @@ impl WorldGenesis {
                         squad_size,
                         tactical_identity,
                         budget,
+                        academy_boost: 0,
                     });
                     league_clubs.push(club_id);
                 }
