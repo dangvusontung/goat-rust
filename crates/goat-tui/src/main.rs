@@ -283,6 +283,15 @@ fn run_game_loop(
     beat_lib: &BeatLibrary,
     pc_traits: PlayerTraits,
 ) {
+    // Season number for which the season-end pipeline (wage collection, awards,
+    // legacy accrual, peer batch-tick, transfer window, contract renewal, retirement
+    // suggestion) has already run. The end-of-season gate below re-enters every loop
+    // iteration while `season_round` stays at the cap (e.g. after a `G` Legacy view,
+    // which must be a read-only side trip) — this guard keeps the pipeline itself to
+    // exactly one run per season boundary while still letting the post-pipeline menu
+    // (and read-only views from it) redisplay freely.
+    let mut season_end_done_for: Option<u32> = None;
+
     loop {
         let pc_id = match state.pc_player_id {
             Some(id) => id,
@@ -307,67 +316,75 @@ fn run_game_loop(
 
         // End-of-season gate
         if state.season_number > 0 && state.season_round >= ROUNDS_PER_SEASON as u32 {
-            let view = state.players.snapshot(pc_id);
-            render_season_review(out, &state, &view);
+            // Run the season-end pipeline itself at most once per season boundary —
+            // re-entering this branch (e.g. via a `G` Legacy read from the menu below)
+            // must not re-collect wages, re-roll transfer/contract offers, or
+            // double-credit career legacy stats.
+            if season_end_done_for != Some(state.season_number) {
+                let view = state.players.snapshot(pc_id);
+                render_season_review(out, &state, &view);
 
-            // Collect annual wage.
-            state = reduce(state, Intent::CollectWage, &mut GoatRng::new(0));
+                // Collect annual wage.
+                state = reduce(state, Intent::CollectWage, &mut GoatRng::new(0));
 
-            // Awards night + pundit reactions + legacy update.
-            state = run_awards_and_pundits(out, state, &view);
+                // Awards night + pundit reactions + legacy update.
+                state = run_awards_and_pundits(out, state, &view);
 
-            // Phase 9: batch-tick peers and check rival crystallisation.
-            let season = state.season_number;
-            state = reduce(
-                state,
-                Intent::BatchTickPeers { season },
-                &mut GoatRng::new(0),
-            );
-            if season >= 5 && state.pc_rival_idx.is_none() {
-                if let Some(rival_idx) = find_rival_candidate(&state) {
-                    writeln!(out, "\n  *** RIVALRY CRYSTALLISES ***").unwrap();
-                    writeln!(
-                        out,
-                        "  The media has finally named your generation's great debate: {} vs {}.",
-                        view.name, state.pc_peers[rival_idx].name
-                    )
-                    .unwrap();
-                    state = reduce(
-                        state,
-                        Intent::DeclareRival {
-                            peer_idx: rival_idx,
-                            season,
-                        },
-                        &mut GoatRng::new(0),
-                    );
-                }
-            }
-
-            // Phase 8: transfer window and contract renewal.
-            state = run_transfer_window(lines, out, state, &view);
-            if state.pc_contract_seasons_left == 0 {
-                state = run_contract_negotiation(lines, out, state);
-            }
-
-            // Phase 10: auto-retirement suggestion.
-            let view2 = state.players.snapshot(pc_id);
-            let age_years = view2.age_weeks / 52;
-            if age_years >= 35 && state.pc_form.to_int() < 40 {
-                writeln!(
-                    out,
-                    "\n  At {age_years} years old with form {}, the end may be near.",
-                    state.pc_form.to_int()
-                )
-                .unwrap();
-                writeln!(out, "  [R] Retire now   [C] Continue playing").unwrap();
-                write!(out, "  > ").unwrap();
-                out.flush().unwrap();
-                if let Some(Ok(l)) = lines.next() {
-                    if l.trim().eq_ignore_ascii_case("R") {
-                        state = reduce(state, Intent::Retire, &mut GoatRng::new(0));
-                        continue;
+                // Phase 9: batch-tick peers and check rival crystallisation.
+                let season = state.season_number;
+                state = reduce(
+                    state,
+                    Intent::BatchTickPeers { season },
+                    &mut GoatRng::new(0),
+                );
+                if season >= 5 && state.pc_rival_idx.is_none() {
+                    if let Some(rival_idx) = find_rival_candidate(&state) {
+                        writeln!(out, "\n  *** RIVALRY CRYSTALLISES ***").unwrap();
+                        writeln!(
+                            out,
+                            "  The media has finally named your generation's great debate: {} vs {}.",
+                            view.name, state.pc_peers[rival_idx].name
+                        )
+                        .unwrap();
+                        state = reduce(
+                            state,
+                            Intent::DeclareRival {
+                                peer_idx: rival_idx,
+                                season,
+                            },
+                            &mut GoatRng::new(0),
+                        );
                     }
                 }
+
+                // Phase 8: transfer window and contract renewal.
+                state = run_transfer_window(lines, out, state, &view);
+                if state.pc_contract_seasons_left == 0 {
+                    state = run_contract_negotiation(lines, out, state);
+                }
+
+                // Phase 10: auto-retirement suggestion.
+                let view2 = state.players.snapshot(pc_id);
+                let age_years = view2.age_weeks / 52;
+                if age_years >= 35 && state.pc_form.to_int() < 40 {
+                    writeln!(
+                        out,
+                        "\n  At {age_years} years old with form {}, the end may be near.",
+                        state.pc_form.to_int()
+                    )
+                    .unwrap();
+                    writeln!(out, "  [R] Retire now   [C] Continue playing").unwrap();
+                    write!(out, "  > ").unwrap();
+                    out.flush().unwrap();
+                    if let Some(Ok(l)) = lines.next() {
+                        if l.trim().eq_ignore_ascii_case("R") {
+                            state = reduce(state, Intent::Retire, &mut GoatRng::new(0));
+                            continue;
+                        }
+                    }
+                }
+
+                season_end_done_for = Some(state.season_number);
             }
 
             writeln!(
