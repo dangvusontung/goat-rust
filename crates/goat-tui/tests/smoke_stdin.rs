@@ -347,3 +347,76 @@ fn hard_retirement_age_is_forced_not_offered() {
         "the hard cap must not go through the optional [R]/[C] suggestion prompt:\n{stdout}"
     );
 }
+
+// ── Round 3, Slice 3: idempotent season-end pipeline (Legacy is read-only) ────
+
+/// Write a `goat.sav` for a player exactly at the end-of-season gate
+/// (`season_round == ROUNDS_PER_SEASON`), with known season totals and zeroed
+/// career totals, so the season-end pipeline's credit into career totals is
+/// checkable by exact value. Form stays at the default 50 (below the transfer-offer
+/// threshold of 55) and the contract has 2 seasons left, so no extra interactive
+/// prompt (transfer window / contract renewal / retirement suggestion) fires.
+fn seed_save_at_season_end(dir: &std::path::Path) {
+    use goat_core::generation::CreationChoices;
+    use goat_core::positions::PrimaryPosition;
+    use goat_core::state::{reduce, Intent, WorldState};
+    use goat_rng::GoatRng;
+    use goat_world::ROUNDS_PER_SEASON;
+
+    let choices = CreationChoices {
+        name: "Prospect".into(),
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian",
+        club: "Riverside Town",
+    };
+    let mut state = WorldState::new();
+    state.world_seed = 42;
+    state = reduce(
+        state,
+        Intent::CreatePlayer { seed: 42, choices },
+        &mut GoatRng::new(0),
+    );
+    let pc = state.pc_player_id.unwrap();
+    state.players.set_age_weeks(pc, 20 * 52);
+    state.season_number = 2;
+    state.season_round = ROUNDS_PER_SEASON as u32;
+    state.pc_season_goals = 5;
+    state.pc_season_matches = 10;
+    state.pc_season_output = 500;
+    state.pc_wage_annual = 100;
+    state.pc_contract_seasons_left = 2;
+
+    let view = state.players.snapshot(pc);
+    let data = goat_save::from_world_state(&state, &view);
+    goat_save::save_to_file(&data, dir.join("goat.sav")).expect("save should write");
+}
+
+#[test]
+fn viewing_legacy_twice_at_season_end_does_not_double_credit_career_totals() {
+    let dir = std::env::temp_dir().join(format!(
+        "goat_tui_smoke_legacy_idempotent_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    seed_save_at_season_end(&dir);
+
+    // Load straight into the end-of-season gate (which runs the pipeline once),
+    // then take the read-only Legacy side trip from the post-pipeline menu twice
+    // before moving on.
+    let script = "L\nG\nG\nQ\nQ\n";
+    let stdout = run_scripted_in(script, Some(&dir)).expect("process should exit cleanly");
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let expected_line = format!(
+        "║  Goals: {:4}   Matches: {:4}   Seasons: {:2}   ║",
+        5, 10, 1
+    );
+    let occurrences = stdout.matches(expected_line.as_str()).count();
+    assert_eq!(
+        occurrences, 2,
+        "opening Legacy twice at the same season boundary must show the same, \
+         single-credited career totals both times (not double-credited on the \
+         second view) — expected line {expected_line:?}:\n{stdout}"
+    );
+}
