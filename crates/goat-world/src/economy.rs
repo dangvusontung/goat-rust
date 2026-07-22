@@ -42,7 +42,7 @@ pub fn total_income(club: &Club, tier: DivLevel) -> i64 {
 /// and squad size. Elite squads cost more to run, not just to buy into. No new `Population`
 /// column — wages stay a per-window deduction against `total_income`, not per-player
 /// contract data (Ground rules).
-fn window_wage_deduction(pop: &Population, squad: &[usize], elapsed_weeks: u32) -> i64 {
+pub(crate) fn window_wage_deduction(pop: &Population, squad: &[usize], elapsed_weeks: u32) -> i64 {
     if squad.is_empty() {
         return 0;
     }
