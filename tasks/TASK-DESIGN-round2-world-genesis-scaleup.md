@@ -657,19 +657,27 @@ scheduled in the existing off-season calendar gap), and the `FixtureImportance`/
 `tasks/TASK-DESIGN-round4-competitions.md` for the full spec, numbered slices, and the list of
 numbers still needing Tùng's sign-off before Dev starts.
 
-**AI-run club economy: transfer market between AI clubs, managers, club finances (raised by
-Tùng, 2026-07-22 — explicitly deferred, not designed here).**
+**AI-run club economy: transfer market between AI clubs, managers, club finances — now designed
+in its own doc, `tasks/TASK-DESIGN-round5-club-economy.md` (2026-07-22).**
 
 Bible §7.3 ("Transfer Market & AI Clubs") already commits to AI clubs being "deep agents, not
 backdrops": each with its own strategy, finances/budget, squad-building plan, and manager, with
 clubs trading *each other* (not just trading with the PC) so teammates arrive/leave and shift
 squad chemistry around the player. Bible §7.2 item 2 also wants clubs to carry "rich identity:
 history, rivalries, philosophy, stature, finances" beyond today's name+strength-number shape.
-Verified against real code: `crates/goat-core/src/state.rs`'s "Phase 8" transfer/contract
-machinery is entirely PC-facing (the player negotiating their own moves) — there is no
-`Manager` type, no AI-club-initiated transfer, and no club-level finance/budget anywhere in the
-workspace. Same parking rationale as the two items above: a large, separate subsystem (club AI
-agent behavior, not club/league/nation structure), deliberately left for its own future round.
+This was originally parked here as a short placeholder noting that `crates/goat-core/src/
+state.rs`'s "Phase 8" transfer/contract machinery is entirely PC-facing and that no `Manager`
+type or club-level finance/budget exists anywhere in the workspace — it has since been designed
+properly in its own round (round 5), covering: a single-number club budget fed by an additive
+income-contributor abstraction (today: tier/strength-derived baseline, built to accept
+sponsorship/matchday/shirt-sales/prize-money contributors later without a spending-side
+rewrite), a deterministic seeded ascending-round transfer auction with three competing spend
+lanes (fill-weakest-position, gem-hunting off round-3's outlier mechanic, own-youth-academy
+investment composing with round-3's intake formula), and a new lightweight `Manager` entity
+type with a tactical-identity blend on appointment (reusing round-2 Doc B's `TacticalIdentity`)
+and a rolling-form-based firing/rehire cycle. See `tasks/TASK-DESIGN-round5-club-economy.md`
+for the full spec, numbered slices, and the list of numbers still needing Tùng's sign-off
+before Dev starts.
 
 **Pundits & Media, credibility/influence axis per pundit — now designed in its own doc,
 `tasks/TASK-DESIGN-round6-pundit-credibility.md` (2026-07-22).**
