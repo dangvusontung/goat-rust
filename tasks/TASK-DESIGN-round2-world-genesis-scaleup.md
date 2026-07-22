@@ -671,22 +671,21 @@ machinery is entirely PC-facing (the player negotiating their own moves) — the
 workspace. Same parking rationale as the two items above: a large, separate subsystem (club AI
 agent behavior, not club/league/nation structure), deliberately left for its own future round.
 
-**Pundits & Media, including a credibility/influence axis per pundit (raised by Tùng,
-2026-07-22 — explicitly deferred, not designed here).**
+**Pundits & Media, credibility/influence axis per pundit — now designed in its own doc,
+`tasks/TASK-DESIGN-round6-pundit-credibility.md` (2026-07-22).**
 
-Bible §8.7 already specifies 4 named recurring pundits (doubter, champion, stats nerd, eye-test
-romantic) as "the voice of the plural pantheon (§8.1)" — i.e. one pundit per existing Pantheon
-school, not an independently-sized roster. Confirmed with Tùng this round: the 4-personality
-count itself is fine (it's intentionally tied to the 4 schools); what's missing is that **each
-individual pundit needs their own credibility/influence stat**, separate from which of the 4
-personalities they represent — a green rookie writer's hot take should barely move public
-perception, while a veteran pundit's opinion should carry real weight. Tùng also specified this
-credibility should **grow over time** (with tenure and/or being proven right), the same way a
-player's attributes develop. None of this exists in the bible today (`grep`'d — zero mentions of
-pundit credibility/influence/growth in `docs/MAIN.md`) or in code (§8.7's pundit system itself is
-0% implemented — no pundit-related struct anywhere in the workspace). Parked alongside the AI
-club economy item above for the same reason: a distinct subsystem (media/narrative layer, not
-club/league/nation structure) that would blow up this doc's scope if designed here.
+What was parked here (a short placeholder, including an incorrect claim that §8.7's pundit
+system was "0% implemented in code" — it was already real and committed, `crates/goat-meta/
+src/pundits.rs`/`reputation.rs`, at the time that placeholder was written) has since been
+designed in full, against the real code: the existing 4-pundit/4-school mapping stays exactly
+as-is (no new personalities, no new schools); each pundit gets a discrete `PunditTier`
+(Rookie/Established/Legend) computed by a deliberately simple, isolated `tier_for` function
+(the real tenure/proven-right growth mechanic is explicit future work behind that one function
+boundary); and the tier multiplies how much a pundit's season-end comment moves the player's
+Sporting reputation facet (bible §8.2), closing the gap where pundit commentary today is
+rendered but has zero effect on `WorldState`. See that doc for the full slice breakdown, TDD
+anchors, and the list of numbers (tier count, split percentages, multiplier magnitudes) still
+needing Tùng's sign-off before Dev starts.
 
 ## Decisions Design needs from Tùng before Dev starts (collected from above)
 
