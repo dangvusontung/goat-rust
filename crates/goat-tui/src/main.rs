@@ -11,6 +11,7 @@ use goat_core::{
         AttrId, ATTR_NAMES, DEFENDING_ATTRS, DRIBBLING_ATTRS, PACE_ATTRS, PASSING_ATTRS,
         PHYSICAL_ATTRS, SHOOTING_ATTRS,
     },
+    calendar_loop::{DOMESTIC_CUP_COMPETITION_ID, LEAGUE_COMPETITION_ID},
     derive::{derive_attrs, ovr, role_rating},
     generation::{generate_player, CreationChoices},
     player::PlayerView,
@@ -634,11 +635,11 @@ fn run_next_round(
     // Suspension check: serve ban, auto-skip. `reduce(ApplyRoundResult)` below
     // is the one that actually decrements the ban (bible AC-06) — this branch
     // only skips the PC's personal match participation.
-    if state.pc_suspension_weeks > 0 {
+    if state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0 {
         writeln!(
             out,
             "  You are SUSPENDED. {} match(es) remaining after this.",
-            state.pc_suspension_weeks - 1
+            state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) - 1
         )
         .unwrap();
         // Still need to sim other matches and advance the round.
@@ -659,6 +660,7 @@ fn run_next_round(
         return reduce(
             state,
             Intent::ApplyRoundResult {
+                competition_id: LEAGUE_COMPETITION_ID,
                 pc_goals: 0,
                 pc_output: 0,
                 pc_result: 0,
@@ -770,6 +772,7 @@ fn run_next_round(
                 state = reduce(
                     state,
                     Intent::ApplyCardResult {
+                        competition_id: LEAGUE_COMPETITION_ID,
                         yellow_cards: result.yellow_cards as u32,
                         red_card: result.red_card,
                     },
@@ -841,6 +844,7 @@ fn run_next_round(
     state = reduce(
         state,
         Intent::ApplyRoundResult {
+            competition_id: LEAGUE_COMPETITION_ID,
             pc_goals,
             pc_output,
             pc_result,
@@ -859,6 +863,17 @@ fn club_div_pos_in(div_clubs: &[usize], club_id: usize) -> usize {
         .iter()
         .position(|&c| c == club_id)
         .expect("club in division")
+}
+
+/// Human-readable competition name for suspension display (Design round 4, Slice 5).
+fn competition_label(competition_id: goat_calendar::CompetitionId) -> &'static str {
+    if competition_id == LEAGUE_COMPETITION_ID {
+        "League"
+    } else if competition_id == DOMESTIC_CUP_COMPETITION_ID {
+        "Domestic Cup"
+    } else {
+        "Competition"
+    }
 }
 
 /// Family-representative match role for a 0..7 PrimaryPosition discriminant
@@ -1834,10 +1849,14 @@ fn render_game_sheet(out: &mut impl Write, view: &PlayerView, state: &WorldState
                 state.pc_yellow_cards_season,
             ),
         );
-        if state.pc_suspension_weeks > 0 {
+        for ledger in &state.pc_suspensions {
+            let label = competition_label(ledger.competition_id);
             box_line(
                 out,
-                &format!("  SUSPENDED ({} match(es) left)", state.pc_suspension_weeks),
+                &format!(
+                    "  SUSPENDED — {label} ({} match(es) left)",
+                    ledger.matches_remaining
+                ),
             );
         }
     }

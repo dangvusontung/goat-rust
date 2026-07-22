@@ -7,6 +7,7 @@
 ///   career-sim --scan                   — print top 20 seeds ranked by key attr potential
 use goat_core::{
     attrs::{AttrId, NUM_ATTRS},
+    calendar_loop::LEAGUE_COMPETITION_ID,
     derive::ovr,
     generation::{generate_player, CreationChoices},
     positions::{PrimaryPosition, POSITION_WEIGHT_TABLE},
@@ -465,6 +466,7 @@ fn main() {
                 state = reduce(
                     state,
                     Intent::ApplyCardResult {
+                        competition_id: LEAGUE_COMPETITION_ID,
                         yellow_cards: r.yellow_cards as u32,
                         red_card: r.red_card,
                     },
@@ -520,6 +522,7 @@ fn main() {
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: LEAGUE_COMPETITION_ID,
                     pc_goals: goals,
                     pc_output: r.player_output,
                     pc_result: res_int,
@@ -1075,6 +1078,7 @@ fn main() {
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: LEAGUE_COMPETITION_ID,
                     pc_goals: player_goals,
                     pc_output,
                     pc_result,

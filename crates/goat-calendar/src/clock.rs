@@ -142,6 +142,25 @@ pub enum FixtureImportance {
     ContinentalTier1Final,
 }
 
+/// One player's suspension in one specific competition (Design round 4, Slice 5 §5.1).
+///
+/// Replaces a single global "matches remaining" scalar: a ban is scoped to the exact
+/// `CompetitionKind` it was earned in (League, DomesticCup, a continental tier, …), so a
+/// suspension picked up in a cup tie never blocks selection in a league fixture and vice
+/// versa. `matches_remaining` decrements only when a match of THIS competition is played
+/// (bible AC-06: counted by matches actually played, not by elapsed calendar days or
+/// rounds of any other competition).
+///
+/// `player_id` is a bare index rather than `goat_core::player::PlayerId` — this crate
+/// stays independent of `goat-core` (which depends on it, not the reverse); the two
+/// types are structurally the same (`usize`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuspensionLedger {
+    pub player_id: usize,
+    pub competition_id: CompetitionId,
+    pub matches_remaining: u32,
+}
+
 /// An orbit fixture: a match relevant to the player's club or nation.
 ///
 /// `scheduled_day` may shift from `original_day` via same-day conflict resolution

@@ -19,7 +19,7 @@ pub mod tuning;
 
 pub use clock::{
     CalendarWindow, Competition, CompetitionId, CompetitionKind, Fixture, FixtureId,
-    FixtureImportance, GameClock, Season, SeasonId, WindowKind,
+    FixtureImportance, GameClock, Season, SeasonId, SuspensionLedger, WindowKind,
 };
 pub use engine::{should_flush_soft, CalendarEngine, StopResult};
 pub use rng_stream::RngStream;

@@ -23,6 +23,11 @@ pub const SEASON_DAYS: u32 = 365;
 /// builds the season's `Fixture`s to hand into `Intent::StartSeason`.
 pub const LEAGUE_COMPETITION_ID: CompetitionId = 1;
 
+/// The PC's domestic-cup competition id (Design round 4, Slices 2-3/5). Same
+/// headless-`goat-core` rationale as `LEAGUE_COMPETITION_ID`: the TUI bridge is where
+/// this id is actually attached to real cup fixtures/results.
+pub const DOMESTIC_CUP_COMPETITION_ID: CompetitionId = 2;
+
 /// The competitions active this season. Slice 1: just the league; sibling slices append
 /// domestic-cup/continental/national-team competitions to this same list.
 fn standard_competitions() -> Vec<Competition> {

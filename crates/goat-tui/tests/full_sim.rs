@@ -10,6 +10,7 @@
 
 use goat_core::{
     attrs::{AttrId, NUM_ATTRS},
+    calendar_loop::LEAGUE_COMPETITION_ID,
     derive::ovr,
     generation::CreationChoices,
     positions::PrimaryPosition,
@@ -245,6 +246,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                 state = reduce(
                     state,
                     Intent::ApplyCardResult {
+                        competition_id: LEAGUE_COMPETITION_ID,
                         yellow_cards: result.yellow_cards as u32,
                         red_card: result.red_card,
                     },
@@ -308,6 +310,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
         state = reduce(
             state,
             Intent::ApplyRoundResult {
+                competition_id: LEAGUE_COMPETITION_ID,
                 pc_goals,
                 pc_output,
                 pc_result,
@@ -647,18 +650,19 @@ fn form_stays_in_range() {
 #[test]
 fn red_card_triggers_suspension() {
     let mut state = make_state(11, Position::Midfielder, DIV_ENG_SEC);
-    assert_eq!(state.pc_suspension_weeks, 0);
+    assert_eq!(state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID), 0);
 
     state = reduce(
         state,
         Intent::ApplyCardResult {
+            competition_id: LEAGUE_COMPETITION_ID,
             yellow_cards: 0,
             red_card: true,
         },
         &mut GoatRng::new(0),
     );
     assert!(
-        state.pc_suspension_weeks >= 1,
+        state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) >= 1,
         "red card must set a suspension"
     );
     // Discipline rep should tighten.

@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use goat_core::{
     attrs::{AttrId, ATTR_NAMES, NUM_ATTRS},
+    calendar_loop::LEAGUE_COMPETITION_ID,
     derive::{derive_attrs, ovr, role_rating},
     generation::CreationChoices,
     positions::PrimaryPosition,
@@ -400,7 +401,7 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
                 form: s.pc_form.to_int(),
                 season_goals: s.pc_season_goals,
                 season_matches: s.pc_season_matches,
-                is_suspended: s.pc_suspension_weeks > 0,
+                is_suspended: s.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0,
                 contract_seasons_left: s.pc_contract_seasons_left,
                 wage_annual: s.pc_wage_annual,
                 savings: s.pc_savings,
@@ -541,7 +542,7 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
         form: s.pc_form.to_int(),
         season_goals: s.pc_season_goals,
         season_matches: s.pc_season_matches,
-        is_suspended: s.pc_suspension_weeks > 0,
+        is_suspended: s.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0,
         contract_seasons_left: s.pc_contract_seasons_left,
         wage_annual: s.pc_wage_annual,
         savings: s.pc_savings,
@@ -882,7 +883,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
     // A suspended player's club still plays the fixture, but the PC doesn't
     // personally take part (bible AC-06: the ban is served by the round being
     // played, not by the PC's own participation).
-    let is_suspended = state.pc_suspension_weeks > 0;
+    let is_suspended = state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0;
 
     // Sim PC match.
     let pc_fixture =
@@ -1050,6 +1051,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
         state = reduce(
             state,
             Intent::ApplyCardResult {
+                competition_id: LEAGUE_COMPETITION_ID,
                 yellow_cards: match_dto.yellow_cards,
                 red_card: match_dto.red_card,
             },
@@ -1059,6 +1061,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
     state = reduce(
         state,
         Intent::ApplyRoundResult {
+            competition_id: LEAGUE_COMPETITION_ID,
             pc_goals,
             pc_output,
             pc_result,
@@ -1625,7 +1628,7 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
     let session = with_state(|s| -> Option<ActiveMatchSession> {
         if s.season_number == 0
             || s.season_round >= ROUNDS_PER_SEASON as u32
-            || s.pc_suspension_weeks > 0
+            || s.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0
         {
             return None;
         }
@@ -1838,6 +1841,7 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
                 state = reduce(
                     state,
                     Intent::ApplyCardResult {
+                        competition_id: LEAGUE_COMPETITION_ID,
                         yellow_cards: yc as u32,
                         red_card: rc,
                     },
@@ -1847,6 +1851,7 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: LEAGUE_COMPETITION_ID,
                     pc_goals,
                     pc_output,
                     pc_result,

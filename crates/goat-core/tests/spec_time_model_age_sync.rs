@@ -98,6 +98,7 @@ fn untrained_rounds_still_sync_to_the_calendar() {
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
                     pc_goals: 0,
                     pc_output: 0,
                     pc_result: 0,
@@ -154,6 +155,7 @@ fn trained_every_round_still_hits_exact_target() {
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
                     pc_goals: 0,
                     pc_output: 60,
                     pc_result: 0,

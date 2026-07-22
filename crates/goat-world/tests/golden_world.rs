@@ -232,6 +232,7 @@ fn twenty_seasons_full_career_no_panic() {
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
                     pc_goals: 0,
                     pc_output: 60,
                     pc_result,
@@ -395,6 +396,7 @@ fn five_headless_seasons_no_panic() {
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
                     pc_goals: 0,
                     pc_output: 60,
                     pc_result,
