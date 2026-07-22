@@ -197,7 +197,7 @@ const CLUB_WORD_B: [&str; 32] = [
     "Litorio",
 ];
 
-fn seed_mix(world_seed: u64, salt: u64, idx: u64) -> u64 {
+pub(crate) fn seed_mix(world_seed: u64, salt: u64, idx: u64) -> u64 {
     world_seed
         ^ salt.wrapping_mul(0x9E37_79B9_7F4A_7C15)
         ^ (idx.rotate_left(23)).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)

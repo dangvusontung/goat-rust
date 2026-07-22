@@ -7,6 +7,8 @@
 
 pub mod batch_tick;
 pub mod calendar;
+pub mod continental;
+pub mod domestic_cup;
 pub mod fixtures;
 pub mod history;
 pub mod population;
@@ -20,6 +22,7 @@ pub use calendar::{
     round_to_week, week_day_offset, week_ends_after_round, week_to_rounds, BASE_CAREER_YEAR,
     SEASON_CALENDAR_WEEKS, WEEK_MATCH_COUNTS,
 };
+pub use domestic_cup::{simulate_domestic_cup, CupRoundResult, CupSeasonResult, CupTie};
 pub use fixtures::{
     fixture_for_round, fixtures_for_club, generate_fixtures, round_fixtures, Fixture,
     ROUNDS_PER_SEASON,
