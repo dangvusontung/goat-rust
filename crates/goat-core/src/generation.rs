@@ -9,7 +9,10 @@ use goat_rng::{GoatRng, RngSource};
 use crate::attrs::{AgeCurveArchetype, ATTR_ARCHETYPES, NUM_ATTRS};
 use crate::player::PlayerView;
 use crate::positions::{PrimaryPosition, POSITION_WEIGHT_TABLE};
-use crate::roles::{FamiliarityTier, PositionFamily, RoleId, NUM_ROLES, ROLE_POSITION_FAMILY};
+use crate::roles::{
+    FamiliarityTier, PositionFamily, RoleId, NUM_ROLES, ROLE_POSITION_FAMILY, ROLE_WEIGHT_TABLE,
+};
+use crate::tactical_identity::TacticalIdentity;
 use crate::tuning::{
     CEILING_MAX, CEILING_MIN, IMP_BASE_PCT, KEY_BASE_PCT, MENTAL_START_PCT, NOISE_SALT,
     NOISE_WIDTH_PER_SPIKE, NONE_POT_ABS_LOW, NONE_POT_HIGH_PCT, PHYSICAL_START_PCT, SEC_BASE_PCT,
@@ -57,16 +60,30 @@ pub const STUB_CLUBS: &[&str] = &[
     "Valley Rangers",
 ];
 
-/// Generate a player deterministically from a seed and creation choices.
+/// Generate a player deterministically from a seed and creation choices. Unbiased: the
+/// PC's own creation and every existing caller use this — byte-identical output to before
+/// Design round 3 (Doc C §5.5's zero-ripple guarantee).
+pub fn generate_player(seed: u64, choices: &CreationChoices) -> PlayerView {
+    generate_player_biased(seed, choices, None)
+}
+
+/// Generate a player deterministically from a seed and creation choices, with an optional
+/// tactical-identity bias on the per-attribute potential roll (Design round 3, Doc C §Slice
+/// 5) — used only by `Population::promote`'s lazy-promote path; `generate_player` above is
+/// the sibling entry point every other caller keeps using unchanged.
 ///
 /// Steps follow bible §5.3 + appendix C.5:
 /// 1. Roll the ceiling (talent band).
 /// 2. Roll spikiness (1–3) controlling noise width.
 /// 3. Roll role DNA (primary role, biased by position) — kept for familiarity seeding.
-/// 4. Roll per-attribute potentials shaped by position tier + bounded noise.
+/// 4. Roll per-attribute potentials shaped by position tier + bounded noise (+ tactical bias).
 /// 5. Set current values at age ~16 from age-curve archetype percentages.
 /// 6. Seed familiarity: natural for primary role, competent for same-family, awkward otherwise.
-pub fn generate_player(seed: u64, choices: &CreationChoices) -> PlayerView {
+pub fn generate_player_biased(
+    seed: u64,
+    choices: &CreationChoices,
+    tactical_identity: Option<&TacticalIdentity>,
+) -> PlayerView {
     let mut rng = GoatRng::new(seed);
 
     // Step 1 — ceiling (talent band)
@@ -81,7 +98,8 @@ pub fn generate_player(seed: u64, choices: &CreationChoices) -> PlayerView {
 
     // Step 4 — per-attribute potentials (C.5: position-shaped + bounded noise)
     let primary_pos = choices.primary_position;
-    let potential = roll_potentials(seed, ceiling, spikiness, primary_pos);
+    let potential =
+        roll_potentials_biased(seed, ceiling, spikiness, primary_pos, tactical_identity);
 
     // Step 5 — starting current values
     let current = derive_starting_current(&potential);
@@ -133,20 +151,63 @@ fn roll_primary_role(rng: &mut impl RngSource, family: PositionFamily) -> RoleId
     RoleId::ALL[0]
 }
 
-/// Roll attribute potentials per appendix C.5.
+/// Max magnitude (points of potential) the tactical-identity nudge (below) can apply to
+/// any one attribute — same order of magnitude as the existing per-attribute noise
+/// (`NOISE_WIDTH_PER_SPIKE=3` × spikiness 1–3 → ±3..±9, `tuning.rs`): a meaningful nudge,
+/// not an override (Design round 3, Doc C §5.4).
+const TACTICAL_BIAS_MAX_PTS: i32 = 5;
+
+/// Per-attribute ratio of "how much this team's tactical identity rewards attribute i"
+/// against a neutral (`role_weight` ≡ 1.0 for every role) baseline. 1.0 = neutral. Reuses
+/// `ROLE_WEIGHT_TABLE` (roles.rs) — no new per-attribute-per-team table (Design round 3,
+/// Doc C §5.3).
+fn attribute_bias_ratio(identity: &TacticalIdentity) -> [Fixed; NUM_ATTRS] {
+    let mut out = [Fixed::ONE; NUM_ATTRS];
+    for i in 0..NUM_ATTRS {
+        let mut weighted = Fixed::ZERO;
+        let mut neutral = Fixed::ZERO;
+        for (r, role_weight) in identity.role_weight.iter().enumerate() {
+            let w = ROLE_WEIGHT_TABLE[r][i];
+            weighted = weighted + *role_weight * w;
+            neutral = neutral + w;
+        }
+        if neutral != Fixed::ZERO {
+            out[i] = weighted / neutral;
+        }
+    }
+    out
+}
+
+/// Convert an `attribute_bias_ratio` value into a bounded additive nudge (points of
+/// potential) — a "this academy's graduates lean slightly toward the club's style" flavor,
+/// not an override of the position-tier base (Design round 3, Doc C §5.4).
+fn tactical_nudge(bias_ratio: Fixed) -> i32 {
+    // bias_ratio typically in ~[0.6, 1.6] given role_weight's own [0.400,1.600] generation
+    // band; clamp defensively regardless.
+    let delta_permille = (bias_ratio.to_raw() - Fixed::ONE.to_raw()).clamp(-600, 600);
+    (delta_permille * TACTICAL_BIAS_MAX_PTS) / 600
+}
+
+/// Roll attribute potentials per appendix C.5, plus an optional tactical-identity bias
+/// nudge on top of the existing per-attribute noise, applied only to position-relevant
+/// attributes (same `w > 0` guard the noise already uses) — Design round 3, Doc C
+/// §5.4/§5.5. `tactical_identity: None` (the `generate_player` path) is byte-identical to
+/// the pre-Slice-5 `roll_potentials`.
 ///
-/// Each attribute's potential is derived from the position tier (Key/Imp/Sec/Zero)
-/// plus per-attribute centre-weighted bounded noise seeded from `hash(seed, attr)`.
-/// The main RNG (`&mut impl RngSource`) is NOT used here — the noise is deterministic
-/// from the player seed and attribute index, keeping the main RNG stream clean.
-fn roll_potentials(
+/// Each attribute's potential is derived from the position tier (Key/Imp/Sec/Zero) plus
+/// per-attribute centre-weighted bounded noise seeded from `hash(seed, attr)`. The main RNG
+/// (`&mut impl RngSource`) is NOT used here — the noise is deterministic from the player
+/// seed and attribute index, keeping the main RNG stream clean.
+fn roll_potentials_biased(
     seed: u64,
     ceiling: u8,
     spikiness: i32,
     pos: PrimaryPosition,
+    tactical_identity: Option<&TacticalIdentity>,
 ) -> [Fixed; NUM_ATTRS] {
     let weights = &POSITION_WEIGHT_TABLE[pos as usize];
     let noise_half = spikiness * NOISE_WIDTH_PER_SPIKE;
+    let bias_ratio = tactical_identity.map(attribute_bias_ratio);
 
     let mut potential = [Fixed::ZERO; NUM_ATTRS];
     for i in 0..NUM_ATTRS {
@@ -173,7 +234,14 @@ fn roll_potentials(
             0
         };
 
-        let val = (base + noise).clamp(1, 99);
+        // Tactical-identity nudge — only for position-relevant attrs, same guard as noise.
+        let nudge = if w > 0 {
+            bias_ratio.map(|b| tactical_nudge(b[i])).unwrap_or(0)
+        } else {
+            0
+        };
+
+        let val = (base + noise + nudge).clamp(1, 99);
         potential[i] = Fixed::from_int(val);
     }
     potential
@@ -397,5 +465,90 @@ mod tests {
             has_natural_midfielder,
             "winger should have a natural Midfielder-family role"
         );
+    }
+
+    #[test]
+    fn tactical_bias_shifts_technical_club_toward_technical_attrs() {
+        use crate::attrs::AttrId;
+
+        // A heavily technical/playmaking-oriented identity: high weight on the
+        // deep-distributor roles that are ROLE_WEIGHT_TABLE Key/Important for both
+        // ShortPassing and Vision, low weight on the two heaviest Marking-Key roles —
+        // mirrors 5.3's own directional example, verified against the actual table
+        // (roles.rs) rather than assumed from role names alone.
+        let mut technical = TacticalIdentity {
+            role_weight: [Fixed::ONE; NUM_ROLES],
+        };
+        for &r in &[
+            RoleId::CentralMid,
+            RoleId::AttackingMid,
+            RoleId::Trequartista,
+            RoleId::DefensiveMid,
+            RoleId::Sweeper,
+        ] {
+            technical.role_weight[r as usize] = Fixed::raw(1_600);
+        }
+        for &r in &[RoleId::CentreBack, RoleId::FullBack] {
+            technical.role_weight[r as usize] = Fixed::raw(400);
+        }
+
+        let ratio = attribute_bias_ratio(&technical);
+        assert!(
+            ratio[AttrId::Vision as usize] > Fixed::ONE,
+            "a technically-oriented identity should bias Vision above neutral"
+        );
+        assert!(
+            ratio[AttrId::ShortPassing as usize] > Fixed::ONE,
+            "a technically-oriented identity should bias ShortPassing above neutral"
+        );
+        assert!(
+            ratio[AttrId::Marking as usize] < Fixed::ONE,
+            "a technically-oriented identity should bias Marking below neutral"
+        );
+    }
+
+    #[test]
+    fn tactical_bias_is_bounded() {
+        let c = choices(PrimaryPosition::CM);
+        for seed in 0u64..200 {
+            let identity = TacticalIdentity::generate(seed ^ 0xABCD);
+            let unbiased = generate_player(seed, &c);
+            let biased = generate_player_biased(seed, &c, Some(&identity));
+            for i in 0..NUM_ATTRS {
+                let delta = (biased.potential[i].to_raw() - unbiased.potential[i].to_raw()).abs();
+                assert!(
+                    delta <= TACTICAL_BIAS_MAX_PTS * 1_000,
+                    "seed {seed} attr {i}: deviated by {delta} raw units, more than the \
+                     {TACTICAL_BIAS_MAX_PTS}-pt nudge bound allows"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unbiased_path_is_byte_identical() {
+        for pos in [
+            PrimaryPosition::ST,
+            PrimaryPosition::CM,
+            PrimaryPosition::CB,
+        ] {
+            let c = choices(pos);
+            for seed in [1u64, 42, 999, 12345, 99999, 777] {
+                let a = generate_player(seed, &c);
+                let b = generate_player_biased(seed, &c, None);
+                assert_eq!(
+                    a.potential, b.potential,
+                    "seed {seed} pos {pos:?}: potential diverged"
+                );
+                assert_eq!(
+                    a.current, b.current,
+                    "seed {seed} pos {pos:?}: current diverged"
+                );
+                assert_eq!(
+                    a.familiarity, b.familiarity,
+                    "seed {seed} pos {pos:?}: familiarity diverged"
+                );
+            }
+        }
     }
 }

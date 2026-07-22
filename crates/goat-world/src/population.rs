@@ -10,7 +10,7 @@
 
 use crate::world::{ClubId, WorldGenesis};
 use goat_core::attrs::NUM_ATTRS;
-use goat_core::generation::{generate_player, CreationChoices};
+use goat_core::generation::{generate_player_biased, CreationChoices};
 use goat_core::player::PlayerView;
 use goat_core::positions::PrimaryPosition;
 use goat_fixed::Fixed;
@@ -277,15 +277,18 @@ impl Population {
         if self.is_retired(idx, elapsed_weeks) {
             return None;
         }
+        let club = &world.clubs[self.club[idx] as usize];
         let choices = CreationChoices {
             name: name.into(),
             primary_position: position_from_u8(self.position[idx]),
             nationality: world.nation_name(self.nation[idx] as usize).to_string(),
-            club: world.clubs[self.club[idx] as usize].name.clone(),
+            club: club.name.clone(),
         };
-        // generate_player gives the realistic per-attribute potential + shape + roles; we
-        // overwrite current to the age-appropriate fraction of that potential.
-        let mut view = generate_player(self.seed[idx], &choices);
+        // generate_player_biased gives the realistic per-attribute potential + shape +
+        // roles, nudged by the club's tactical identity (Design round 3, Doc C §Slice 5);
+        // we overwrite current to the age-appropriate fraction of that potential.
+        let mut view =
+            generate_player_biased(self.seed[idx], &choices, Some(&club.tactical_identity));
         let frac = development_fraction(self.age_years_at(idx, elapsed_weeks));
         for a in 0..NUM_ATTRS {
             view.current[a] = (view.potential[a] * frac).clamp(Fixed::MIN_ATTR, view.potential[a]);
@@ -501,7 +504,7 @@ mod tests {
         // 30 every time; any other value can only come from the outlier branch. Counting
         // "not exactly 30" over a large sample directly measures the outlier rate.
         let weak_strength: u8 = 5;
-        let mut rng = GoatRng::new(0xC0FF_EE);
+        let mut rng = GoatRng::new(0x00C0_FFEE);
         let n = 100_000;
         let outliers = (0..n)
             .filter(|_| roll_potential_ovr(&mut rng, weak_strength) != 30)
@@ -730,6 +733,88 @@ mod tests {
             pop2.fingerprint(),
             "two independent runs through the same intake must produce the same post-intake \
              fingerprint"
+        );
+    }
+
+    #[test]
+    fn promote_passes_club_tactical_identity() {
+        use crate::world::{DivLevel, GeneratedNation, League};
+        use goat_core::attrs::AttrId;
+        use goat_core::roles::{RoleId, NUM_ROLES};
+        use goat_core::tactical_identity::TacticalIdentity;
+
+        let neutral = TacticalIdentity {
+            role_weight: [Fixed::ONE; NUM_ROLES],
+        };
+        // Same lopsided identity verified in generation.rs's own
+        // tactical_bias_shifts_technical_club_toward_technical_attrs test to raise Vision.
+        let mut technical = TacticalIdentity {
+            role_weight: [Fixed::ONE; NUM_ROLES],
+        };
+        for &r in &[
+            RoleId::CentralMid,
+            RoleId::AttackingMid,
+            RoleId::Trequartista,
+            RoleId::DefensiveMid,
+            RoleId::Sweeper,
+        ] {
+            technical.role_weight[r as usize] = Fixed::raw(1_600);
+        }
+        for &r in &[RoleId::CentreBack, RoleId::FullBack] {
+            technical.role_weight[r as usize] = Fixed::raw(400);
+        }
+
+        let make_club = |id: usize, tactical_identity: TacticalIdentity| crate::world::Club {
+            id,
+            name: format!("Club{id}"),
+            nation: 0,
+            strength: 60,
+            squad_size: 20,
+            tactical_identity,
+        };
+        let world = WorldGenesis {
+            nations: vec![GeneratedNation {
+                id: 0,
+                name: "Testland".into(),
+                stature: 60,
+                tactical_identity: neutral.clone(),
+            }],
+            leagues: vec![League {
+                id: 0,
+                nation: 0,
+                tier: DivLevel::Top,
+                name: "Test League".into(),
+                clubs: vec![0, 1],
+                max_clubs: 2,
+            }],
+            clubs: vec![make_club(0, neutral), make_club(1, technical)],
+        };
+
+        let mut pop = Population::default();
+        let push = |pop: &mut Population, club_id: u16| {
+            pop.seed.push(555);
+            pop.club.push(club_id);
+            pop.nation.push(0);
+            pop.position.push(1); // Midfielder family -> CM primary position
+            pop.birth_age_weeks.push(20 * 52);
+            pop.potential_ovr.push(60);
+            pop.intake_week.push(0);
+            pop.career_goals.push(0);
+            pop.career_apps.push(0);
+            pop.career_titles.push(0);
+        };
+        push(&mut pop, 0);
+        push(&mut pop, 1);
+
+        // Same underlying seed, same everything else — only the club's tactical_identity
+        // differs. A statistically detectable skew end-to-end (Design round 3, Doc C §5.5).
+        let neutral_view = pop.promote(0, 0, "Neutral", &world).unwrap();
+        let technical_view = pop.promote(1, 0, "Technical", &world).unwrap();
+        assert!(
+            technical_view.potential[AttrId::Vision as usize]
+                > neutral_view.potential[AttrId::Vision as usize],
+            "the technically-biased club's promoted player should have a higher Vision \
+             potential than the neutral club's, same underlying seed"
         );
     }
 }
