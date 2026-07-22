@@ -5,9 +5,10 @@
 //! for a *real* measurement (not just an estimate) before committing to A3's replay
 //! architecture.
 
+use goat_world::batch_tick::batch_tick_season;
 use goat_world::promotion::ReplayCache;
 use goat_world::world::WorldGenesis;
-use goat_world::{history, population};
+use goat_world::{continental, history, population, ContinentalTier};
 use std::time::Instant;
 
 fn main() {
@@ -57,5 +58,28 @@ fn main() {
     println!(
         "\n{n_seasons} seasons of promotion/relegation replay: {replay_total:?}  (avg {:?}/season)",
         replay_total / n_seasons
+    );
+
+    // TASK-DESIGN-round4-competitions-slice2-3 §3.2/DoD#6: a *real* measurement of the
+    // continental qualification computation — full previous-season Tier-1 table data
+    // across all 20 nations, computed the same way a real season boundary would (via
+    // `batch_tick_season`, the existing "season boundary" machinery), not estimated.
+    let mut qual_pop = population::genesis(seed, &world);
+    let membership = world.static_league_clubs();
+    let t4 = Instant::now();
+    let (_results, tier1_tables) =
+        batch_tick_season(&mut qual_pop, &world, &membership, seed, 1, 52);
+    let season_boundary_tables = t4.elapsed();
+
+    let t5 = Instant::now();
+    for tier in ContinentalTier::ALL {
+        let qualified = continental::qualify_clubs(&world, &tier1_tables, tier);
+        assert_eq!(qualified.len(), tier.group_stage_size());
+    }
+    let qualification_total = t5.elapsed();
+    println!(
+        "\ncontinental qualification: {season_boundary_tables:?} to build all 20 nations' \
+         Tier-1 tables (one season boundary) + {qualification_total:?} to qualify all 3 tiers \
+         from them"
     );
 }
