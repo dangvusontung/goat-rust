@@ -166,6 +166,14 @@ pub struct WorldState {
     pub pc_epoch_day: u32,
     /// Calendar flashpoints (window openings) surfaced by the most recent week tick.
     pub last_week_flashpoints: Vec<CalendarFlashpoint>,
+    /// The PC's current-season orbit fixtures (league this slice; cup/continental/
+    /// national-team once sibling slices ship), fed into `CalendarEngine` by
+    /// `advance_calendar_week` every week tick. Set by `Intent::StartSeason` — the TUI
+    /// bridge builds these from `goat-world`, since `goat-core` stays headless with
+    /// respect to that crate. NOT persisted in the save (like `WorldGenesis`, this is
+    /// "generated but consistent": regenerated from `world_seed` + `season_number` +
+    /// `pc_div_idx`/`pc_club_idx` on load, never serialized).
+    pub pc_season_fixtures: Vec<goat_calendar::Fixture>,
 }
 
 /// Batch-ticked career state for one cohort peer (Phase 9).
@@ -252,6 +260,7 @@ impl WorldState {
             pc_week_training_done: false,
             pc_epoch_day: 0,
             last_week_flashpoints: Vec::new(),
+            pc_season_fixtures: Vec::new(),
         }
     }
 }
@@ -416,7 +425,11 @@ pub enum Intent {
     },
 
     /// Start a new season. Resets round counter, clears PC season stats.
-    StartSeason,
+    StartSeason {
+        /// The PC's orbit fixtures for the season about to start — built by the TUI
+        /// bridge from `goat-world` (see `pc_season_fixtures`'s doc comment).
+        fixtures: Vec<goat_calendar::Fixture>,
+    },
 
     /// Apply the results of one completed season round.
     ///
@@ -862,7 +875,8 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state
         }
 
-        Intent::StartSeason => {
+        Intent::StartSeason { fixtures } => {
+            state.pc_season_fixtures = fixtures;
             state.season_number += 1;
             state.season_round = 0;
             state.pc_season_goals = 0;
@@ -1014,7 +1028,11 @@ fn tick_one_rest_week(mut state: WorldState) -> WorldState {
 
     crate::week::advance_rest_week(&mut state.players, pc_id, state.pc_lifestyle);
 
-    let (new_epoch, flashpoints) = advance_calendar_week(state.pc_epoch_day, state.world_seed);
+    let (new_epoch, flashpoints) = advance_calendar_week(
+        state.pc_epoch_day,
+        state.world_seed,
+        &state.pc_season_fixtures,
+    );
     state.pc_epoch_day = new_epoch;
     state.last_week_flashpoints = flashpoints;
     state
@@ -1078,7 +1096,11 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
     // Advance the CalendarEngine 7 days on its OWN RNG stream (seeded from
     // world_seed) — independent of the growth RNG above, so attribute goldens are
     // untouched. Surfaces window-opening flashpoints for the renderer.
-    let (new_epoch, flashpoints) = advance_calendar_week(state.pc_epoch_day, state.world_seed);
+    let (new_epoch, flashpoints) = advance_calendar_week(
+        state.pc_epoch_day,
+        state.world_seed,
+        &state.pc_season_fixtures,
+    );
     state.pc_epoch_day = new_epoch;
     state.last_week_flashpoints = flashpoints;
 

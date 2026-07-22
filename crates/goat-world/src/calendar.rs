@@ -102,6 +102,17 @@ pub fn rest_weeks_after_round(round: usize) -> u32 {
     w1.saturating_sub(w0).saturating_sub(1) as u32
 }
 
+/// Day offset from the season's Monday-anchored week 0 (0-indexed, independent of the
+/// real-world calendar year — that anchor is a display-only concern layered on top by
+/// `match_date`). Exposed standalone so callers that need a season-relative day number
+/// (e.g. `goat-calendar`'s `Fixture::scheduled_day`) don't have to duplicate
+/// `MATCH_DAY_OFFSETS`.
+pub fn week_day_offset(week_offset: usize, slot: usize) -> u32 {
+    let count = WEEK_MATCH_COUNTS.get(week_offset).copied().unwrap_or(0) as usize;
+    let day_offset = MATCH_DAY_OFFSETS[count.min(2)][slot.min(1)];
+    week_offset as u32 * 7 + day_offset as u32
+}
+
 /// True when `round` is the last round of its calendar week — false means a
 /// second fixture follows in the same week (double-fixture weeks). Feed this
 /// to `Intent::ApplyRoundResult { week_ends }` so the same calendar week never
@@ -316,5 +327,33 @@ mod tests {
         let (y, m, _) = advance_from_aug15(2025, 140);
         assert_eq!(y, 2026);
         assert_eq!(m, 1);
+    }
+
+    #[test]
+    fn week_day_offset_matches_weekday_pattern() {
+        // Week 0 (1 match): Saturday slot, offset 5.
+        assert_eq!(week_day_offset(0, 0), 5);
+        // Week 1 (2 matches): Tuesday then Saturday, offsets 1 and 5, plus the week's
+        // own 7-day stride.
+        assert_eq!(week_day_offset(1, 0), 7 + 1);
+        assert_eq!(week_day_offset(1, 1), 7 + 5);
+    }
+
+    #[test]
+    fn week_day_offset_strictly_increases_with_week() {
+        // Every match in week N+1 must fall after every match in week N, so fixtures
+        // built from consecutive rounds never land on the same or an earlier day.
+        let mut last_max = 0u32;
+        for week in 0..SEASON_CALENDAR_WEEKS {
+            let count = WEEK_MATCH_COUNTS[week] as usize;
+            if count == 0 {
+                continue;
+            }
+            let first = week_day_offset(week, 0);
+            assert!(first > last_max || week == 0, "week {week} regressed");
+            for slot in 0..count {
+                last_max = last_max.max(week_day_offset(week, slot));
+            }
+        }
     }
 }

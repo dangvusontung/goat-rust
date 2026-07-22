@@ -180,7 +180,7 @@ fn twenty_seasons_full_career_no_panic() {
     let mut prev_career_matches = 0u32;
 
     for season in 1u32..=20 {
-        state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+        state = reduce(state, Intent::StartSeason { fixtures: vec![] }, &mut GoatRng::new(0));
         assert_eq!(state.season_number, season, "s{season}: season counter");
 
         let div_idx = state.pc_div_idx as usize;
@@ -337,7 +337,7 @@ fn five_headless_seasons_no_panic() {
     let mut final_positions: Vec<usize> = Vec::new();
 
     for season in 1u32..=5 {
-        state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+        state = reduce(state, Intent::StartSeason { fixtures: vec![] }, &mut GoatRng::new(0));
         assert_eq!(state.season_number, season, "season counter");
 
         let div_idx = state.pc_div_idx as usize;

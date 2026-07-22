@@ -23,7 +23,12 @@ pub struct Fixture {
 /// (post promotion/relegation, if applicable) — the caller resolves membership, this
 /// function only builds the round-robin off whatever list it's given.
 /// Returns a flat list sorted by round.
-pub fn generate_fixtures(world_seed: u64, season: u32, league_id: usize, clubs: &[ClubId]) -> Vec<Fixture> {
+pub fn generate_fixtures(
+    world_seed: u64,
+    season: u32,
+    league_id: usize,
+    clubs: &[ClubId],
+) -> Vec<Fixture> {
     let n = clubs.len();
     debug_assert!(n.is_multiple_of(2));
 
@@ -82,7 +87,11 @@ pub fn generate_fixtures(world_seed: u64, season: u32, league_id: usize, clubs: 
                 } else {
                     !swaps[local_round][i + 1]
                 };
-                let (home, away) = if swap { (team_b, team_a) } else { (team_a, team_b) };
+                let (home, away) = if swap {
+                    (team_b, team_a)
+                } else {
+                    (team_a, team_b)
+                };
                 fixtures.push(Fixture { home, away, round });
             }
 
