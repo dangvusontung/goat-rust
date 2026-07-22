@@ -56,6 +56,14 @@ pub struct WorldState {
     /// League table raw data: [W, D, L, GF, GA] × CLUBS_PER_DIV.
     /// Layout: table_raw[col * CLUBS_PER_DIV + row_in_div] where col ∈ {0..4}.
     pub table_raw: [u32; 100], // 5 × CLUBS_PER_DIV(20)
+    /// Every club's running transfer/wage war-chest, £k (Design round 5, Doc A §Slice 1),
+    /// indexed by `goat_world::world::ClubId`. Genuinely path-dependent (accumulated income
+    /// minus wages across windows, can legitimately go negative) — unlike `WorldGenesis`
+    /// itself, which is a pure function of `world_seed` and never persisted, this cannot be
+    /// regenerated on load and must round-trip through the save. Empty until a caller seeds
+    /// it (genesis) or writes to it (a transfer window tick) — both are a later slice's
+    /// season-tick wiring, not this foundation slice's job.
+    pub club_budgets: Vec<i64>,
     // ── Phase 6 discipline fields ─────────────────────────────────────────────
     /// Yellow cards in the current season (resets each season). 5 = ban.
     pub pc_yellow_cards_season: u32,
@@ -230,6 +238,7 @@ impl WorldState {
             pc_season_matches: 0,
             pc_season_output: 0,
             table_raw: [0u32; 100],
+            club_budgets: Vec::new(),
             pc_yellow_cards_season: 0,
             pc_suspensions: Vec::new(),
             pc_discipline_rep: 50,
