@@ -1383,7 +1383,10 @@ fn main() {
         "║  {:76} ║",
         format!("Career apps    : {}  Goals: {}", career_apps, career_goals)
     );
-    let lifestyle_label = match lifestyle {
+    // Lifestyle is an emergent, weekly-nudged readout (bible §8.6) — report the actual
+    // final tier (`state.pc_lifestyle`), not the CLI `--lifestyle` seed, which can and
+    // does drift away within the first few seasons.
+    let lifestyle_label = match state.pc_lifestyle {
         0 => "Professional",
         2 => "Flashy",
         _ => "Balanced",
