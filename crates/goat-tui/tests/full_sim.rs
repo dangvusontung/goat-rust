@@ -190,19 +190,20 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
         let season = state.season_number;
         let div_idx = state.pc_div_idx as usize;
         let pc_club_id = state.pc_club_idx as usize;
+        let div_clubs = &world.leagues[div_idx].clubs;
 
         // Simulate PC's own match via the beat engine.
         let (pc_goals, pc_output, match_result_goals) = if let Some(_fixture) =
-            fixture_for_round(seed, season, div_idx, pc_club_id, round)
+            fixture_for_round(seed, season, div_idx, div_clubs, pc_club_id, round)
         {
             let opp_club_id = {
-                let all = round_fixtures(seed, season, div_idx, round);
+                let all = round_fixtures(seed, season, div_idx, div_clubs, round);
                 all.iter()
                     .find(|f| f.home == pc_club_id || f.away == pc_club_id)
                     .map(|f| if f.home == pc_club_id { f.away } else { f.home })
                     .unwrap_or(0)
             };
-            let opp = &CLUBS[opp_club_id];
+            let opp = &world.clubs[opp_club_id];
             let view = state.players.snapshot(pc_id);
             let match_seed = seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
             let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
@@ -212,9 +213,9 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                 player_role: role_for_position(position),
                 player_attrs: view.current,
                 player_familiarity: view.familiarity,
-                own_strength: CLUBS[pc_club_id].strength,
+                own_strength: world.clubs[pc_club_id].strength,
                 opp_strength: opp.strength,
-                opp_name: opp.name,
+                opp_name: opp.name.clone(),
                 form: state.pc_form,
                 player_aggression: view.current[AttrId::Aggression as usize]
                     .to_int()
@@ -269,10 +270,9 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
         };
 
         // Sim all other rounds' matches.
-        let all_fixtures = round_fixtures(seed, season, div_idx, round);
+        let all_fixtures = round_fixtures(seed, season, div_idx, div_clubs, round);
         let sim_seed = seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
         let mut sim_rng = GoatRng::new(sim_seed);
-        let div_clubs = DIV_CLUBS[div_idx];
 
         let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
         for f in &all_fixtures {
@@ -289,7 +289,11 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                     None => (0, 0),
                 }
             } else {
-                sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng)
+                sim_team_match(
+                    world.clubs[f.home].strength,
+                    world.clubs[f.away].strength,
+                    &mut sim_rng,
+                )
             };
             let h_pos = div_clubs.iter().position(|&c| c == f.home).unwrap() as u8;
             let a_pos = div_clubs.iter().position(|&c| c == f.away).unwrap() as u8;
@@ -317,9 +321,10 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
 
 /// Apply end-of-season accounting and legacy update.
 fn end_season(mut state: WorldState) -> WorldState {
+    let world = WorldGenesis::generate(state.world_seed);
     let div_idx = state.pc_div_idx as usize;
-    let div_clubs = DIV_CLUBS[div_idx];
-    let table = Table::from_raw(&state.table_raw, &div_clubs);
+    let div_clubs = &world.leagues[div_idx].clubs;
+    let table = Table::from_raw(&state.table_raw, div_clubs);
     let finish_pos = table.position_of(state.pc_club_idx as usize) as u32;
     let won_title = finish_pos == 1;
 
@@ -353,6 +358,8 @@ fn end_season(mut state: WorldState) -> WorldState {
             new_club_fan_rep: new_club_fan,
             season_standout_matches: s_standout_matches,
             season_transfer_requests: s_transfer_requests,
+            season_caps: 0,
+            season_international_goals: 0,
         },
         &mut GoatRng::new(0),
     );
