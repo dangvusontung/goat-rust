@@ -16,7 +16,7 @@ fn main() {
     let seed = 42u64;
 
     let t0 = Instant::now();
-    let world = WorldGenesis::generate(seed);
+    let mut world = WorldGenesis::generate(seed);
     let genesis_world = t0.elapsed();
 
     let t1 = Instant::now();
@@ -53,7 +53,7 @@ fn main() {
     let n_seasons = 20u32;
     let t3 = Instant::now();
     for _ in 0..n_seasons {
-        cache.advance_one_season(&world);
+        cache.advance_one_season(&mut world);
     }
     let replay_total = t3.elapsed();
     println!(
