@@ -38,7 +38,10 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// running transfer/wage war-chest, £k, indexed by `ClubId`. A pure tail-append (a
 /// length-prefixed list, defaulting to empty for older saves), unlike v10/v11's mid-stream
 /// breaks.
-pub const VERSION: u32 = 12;
+/// v13+: (Design round 5, Doc A §Slice 6) adds `academy_boosts: Vec<u8>` — every AI club's
+/// youth-academy investment lever, indexed by `ClubId`. Another pure tail-append, same idiom
+/// as v12's `club_budgets`.
+pub const VERSION: u32 = 13;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -132,6 +135,10 @@ pub struct SaveData {
     /// Every AI club's running war-chest, £k, indexed by `ClubId`. Empty for saves that
     /// never seeded it (older saves, or a fresh game before genesis wiring).
     pub club_budgets: Vec<i64>,
+    // ── Club economy (v13+, Design round 5 Doc A §Slice 6) ────────────────────
+    /// Every AI club's academy-boost lever, indexed by `ClubId`. Empty for saves that never
+    /// seeded it (older saves, or a fresh game before genesis wiring).
+    pub academy_boosts: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -244,6 +251,7 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_career_international_goals: state.pc_career_international_goals,
         pc_season_international_goals: state.pc_season_international_goals,
         club_budgets: state.club_budgets.clone(),
+        academy_boosts: state.academy_boosts.clone(),
     }
 }
 
@@ -516,6 +524,7 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.pc_career_international_goals = data.pc_career_international_goals;
     state.pc_season_international_goals = data.pc_season_international_goals;
     state.club_budgets = data.club_budgets.clone();
+    state.academy_boosts = data.academy_boosts.clone();
 
     state
 }
@@ -622,6 +631,11 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     push_u32(&mut v, d.club_budgets.len() as u32);
     for &budget in &d.club_budgets {
         push_u64(&mut v, budget as u64);
+    }
+    // v13+ — academy investment (Design round 5 Doc A §Slice 6): length-prefixed boost list.
+    push_u32(&mut v, d.academy_boosts.len() as u32);
+    for &boost in &d.academy_boosts {
+        v.push(boost);
     }
     v
 }
@@ -790,6 +804,12 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     for _ in 0..club_budgets_len {
         club_budgets.push(read_u64(b, &mut cur).unwrap_or(0) as i64);
     }
+    // Academy investment (v13+; default empty for older saves).
+    let academy_boosts_len = read_u32(b, &mut cur).unwrap_or(0) as usize;
+    let mut academy_boosts = Vec::with_capacity(academy_boosts_len.min(4096));
+    for _ in 0..academy_boosts_len {
+        academy_boosts.push(read_u8(b, &mut cur).unwrap_or(0));
+    }
 
     Ok(SaveData {
         world_seed,
@@ -857,6 +877,7 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_career_international_goals,
         pc_season_international_goals,
         club_budgets,
+        academy_boosts,
     })
 }
 
