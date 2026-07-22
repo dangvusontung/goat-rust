@@ -1031,6 +1031,7 @@ fn tick_one_rest_week(mut state: WorldState) -> WorldState {
     let (new_epoch, flashpoints) = advance_calendar_week(
         state.pc_epoch_day,
         state.world_seed,
+        state.season_number,
         &state.pc_season_fixtures,
     );
     state.pc_epoch_day = new_epoch;
@@ -1099,6 +1100,7 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
     let (new_epoch, flashpoints) = advance_calendar_week(
         state.pc_epoch_day,
         state.world_seed,
+        state.season_number,
         &state.pc_season_fixtures,
     );
     state.pc_epoch_day = new_epoch;
