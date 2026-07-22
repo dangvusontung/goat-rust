@@ -41,14 +41,18 @@ use goat_save::save::{
 };
 use goat_traits::PlayerTraits;
 use goat_world::{
-    fixture_for_round, format_week_header, round_fixtures, round_to_week, sim_team_match,
-    world::WorldGenesis, Table, BASE_CAREER_YEAR, CLUBS_PER_DIV, NUM_NATIONS, ROUNDS_PER_SEASON,
-    TIERS_PER_NATION,
+    domestic_cup::break_tie, fixture_for_round, format_week_header, round_fixtures, round_to_week,
+    sim_team_match, world::WorldGenesis, Table, BASE_CAREER_YEAR, CLUBS_PER_DIV, NUM_NATIONS,
+    ROUNDS_PER_SEASON, TIERS_PER_NATION,
 };
 
 #[path = "orbit_fixtures.rs"]
 mod orbit_fixtures;
 use orbit_fixtures::build_season_orbit_fixtures;
+
+#[path = "cup_dispatch.rs"]
+mod cup_dispatch;
+use cup_dispatch::cup_fixture_due;
 
 const SAVE_DIR: &str = "saves";
 const NUM_SLOTS: u8 = 9;
@@ -362,6 +366,11 @@ fn run_game_loop(
     // exactly one run per season boundary while still letting the post-pipeline menu
     // (and read-only views from it) redisplay freely.
     let mut season_end_done_for: Option<u32> = None;
+    // Session-local: whether the PC's club is still alive in this season's domestic
+    // cup run (Design round 4, Slice 5's playable-gate dispatcher — see
+    // `cup_dispatch.rs`'s doc comment for why this is deliberately not persisted in
+    // `WorldState`/the save format).
+    let mut pc_cup_alive = true;
 
     loop {
         let pc_id = match state.pc_player_id {
@@ -468,6 +477,7 @@ fn run_game_loop(
             match lines.next() {
                 Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                     "Y" => {
+                        pc_cup_alive = true; // fresh domestic-cup run each season
                         let next_div_idx = state.pc_div_idx as usize;
                         let next_club_id = state.pc_club_idx as usize;
                         let fixtures = build_season_orbit_fixtures(
@@ -564,10 +574,28 @@ fn run_game_loop(
                 }
                 "S" => state = run_set_routine(lines, out, state),
                 "P" if has_season => {
-                    state = run_next_round(lines, out, state, true, beat_lib, pc_traits, world)
+                    state = run_next_round(
+                        lines,
+                        out,
+                        state,
+                        true,
+                        beat_lib,
+                        pc_traits,
+                        world,
+                        &mut pc_cup_alive,
+                    )
                 }
                 "K" if has_season => {
-                    state = run_next_round(lines, out, state, false, beat_lib, pc_traits, world)
+                    state = run_next_round(
+                        lines,
+                        out,
+                        state,
+                        false,
+                        beat_lib,
+                        pc_traits,
+                        world,
+                        &mut pc_cup_alive,
+                    )
                 }
                 "T" if has_season => render_table(out, &state, world),
                 "U" => render_world_screen(out, &state, world),
@@ -597,6 +625,7 @@ fn run_game_loop(
 
 // ── Season round ─────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn run_next_round(
     lines: &mut impl Iterator<Item = io::Result<String>>,
     out: &mut impl Write,
@@ -605,6 +634,7 @@ fn run_next_round(
     beat_lib: &BeatLibrary,
     pc_traits: PlayerTraits,
     world: &WorldGenesis,
+    pc_cup_alive: &mut bool,
 ) -> WorldState {
     let pc_id = match state.pc_player_id {
         Some(id) => id,
@@ -657,7 +687,7 @@ fn run_next_round(
             let a_pos = club_div_pos_in(&div_clubs, f.away) as u8;
             round_results.push((h_pos, a_pos, gf, ga));
         }
-        return reduce(
+        state = reduce(
             state,
             Intent::ApplyRoundResult {
                 competition_id: LEAGUE_COMPETITION_ID,
@@ -669,6 +699,19 @@ fn run_next_round(
                 week_ends: goat_world::week_ends_after_round(round),
             },
             &mut GoatRng::new(0),
+        );
+        return maybe_play_cup_fixture(
+            out,
+            state,
+            world,
+            beat_lib,
+            pc_traits,
+            round,
+            season,
+            div_idx,
+            pc_club_id,
+            world_seed,
+            pc_cup_alive,
         );
     }
 
@@ -854,6 +897,211 @@ fn run_next_round(
         },
         &mut GoatRng::new(0),
     );
+
+    maybe_play_cup_fixture(
+        out,
+        state,
+        world,
+        beat_lib,
+        pc_traits,
+        round,
+        season,
+        div_idx,
+        pc_club_id,
+        world_seed,
+        pc_cup_alive,
+    )
+}
+
+/// If the PC's club has a domestic-cup tie due this league round (Design round 4,
+/// Slice 5's playable-gate dispatcher — see `cup_dispatch.rs`), play it: a red/yellow
+/// card here suspends the PC from the CUP only (`DOMESTIC_CUP_COMPETITION_ID`), never
+/// the league, and vice versa — the whole point of `SuspensionLedger` (§5.1).
+///
+/// Deliberately simplified (auto-simmed, no interactive beat-by-beat choice loop) —
+/// see `cup_dispatch.rs`'s doc comment for what's scoped out and why.
+#[allow(clippy::too_many_arguments)]
+fn maybe_play_cup_fixture(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    league_round: usize,
+    season: u32,
+    div_idx: usize,
+    pc_club_id: usize,
+    world_seed: u64,
+    pc_cup_alive: &mut bool,
+) -> WorldState {
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return state,
+    };
+    let league = &world.leagues[div_idx];
+    let fixture = match cup_fixture_due(
+        world,
+        world_seed,
+        season,
+        league.nation,
+        pc_club_id,
+        league.tier,
+        league_round,
+        *pc_cup_alive,
+    ) {
+        Some(f) => f,
+        None => return state,
+    };
+
+    let opp = &world.clubs[fixture.opponent];
+    let own_str = world.clubs[pc_club_id].strength;
+    let round_label = if fixture.is_final {
+        "FINAL".to_string()
+    } else {
+        format!("Round {}", fixture.cup_round + 1)
+    };
+    writeln!(
+        out,
+        "\n--- DOMESTIC CUP {round_label}: {} vs {} ---",
+        if fixture.pc_is_home {
+            &state.pc_club
+        } else {
+            &opp.name
+        },
+        if fixture.pc_is_home {
+            &opp.name
+        } else {
+            &state.pc_club
+        },
+    )
+    .unwrap();
+
+    let cup_seed = world_seed
+        ^ ((season as u64) << 40)
+        ^ ((fixture.cup_round as u64) << 8)
+        ^ 0x0000_0000_0000_0CA1;
+
+    let (pc_goals, pc_result, red_card, yellow_cards, familiarity_xp, pc_survives);
+    if state.pc_suspension_matches_remaining(DOMESTIC_CUP_COMPETITION_ID) > 0 {
+        writeln!(
+            out,
+            "  You are SUSPENDED from the cup ({} match(es) remaining after this) — the \
+             club plays on without you.",
+            state.pc_suspension_matches_remaining(DOMESTIC_CUP_COMPETITION_ID) - 1
+        )
+        .unwrap();
+        let mut sim_rng = GoatRng::new(cup_seed);
+        let (gf, ga) = sim_team_match(own_str, opp.strength, &mut sim_rng);
+        let winner = if gf == ga {
+            let mut tiebreak_rng = GoatRng::new(cup_seed ^ 0xBEEF);
+            break_tie(pc_club_id, fixture.opponent, gf, ga, &mut tiebreak_rng)
+        } else if gf > ga {
+            pc_club_id
+        } else {
+            fixture.opponent
+        };
+        writeln!(out, "  {} {}–{} {}", state.pc_club, gf, ga, opp.name).unwrap();
+        pc_goals = 0;
+        pc_result = 0i8;
+        red_card = false;
+        yellow_cards = 0u32;
+        familiarity_xp = [Fixed::ZERO; goat_core::roles::NUM_ROLES];
+        pc_survives = winner == pc_club_id;
+    } else {
+        let mut match_rng = GoatRng::new(cup_seed);
+        let ref_personality = {
+            let mut rp_rng = GoatRng::new(cup_seed ^ 0xBADCAFE);
+            RefPersonality::from_rng(&mut rp_rng)
+        };
+        let view = state.players.snapshot(pc_id);
+        let setup = MatchSetup {
+            player_role: best_role_for_position(state.pc_position),
+            player_attrs: view.current,
+            player_familiarity: view.familiarity,
+            own_strength: own_str,
+            opp_strength: opp.strength,
+            opp_name: opp.name.clone(),
+            form: state.pc_form,
+            player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+                .to_int()
+                .clamp(1, 99) as u8,
+            ref_personality,
+            dirty_rep: state.pc_discipline_rep,
+            player_traits: pc_traits,
+        };
+        let result = auto_play_match(beat_lib, setup, &mut match_rng);
+        render_match_result(out, &result, &opp.name);
+        let goals = result
+            .moments
+            .iter()
+            .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+            .count() as u32;
+        let winner = if result.goals_for == result.goals_against {
+            let mut tiebreak_rng = GoatRng::new(cup_seed ^ 0xBEEF);
+            break_tie(
+                pc_club_id,
+                fixture.opponent,
+                result.goals_for,
+                result.goals_against,
+                &mut tiebreak_rng,
+            )
+        } else if result.goals_for > result.goals_against {
+            pc_club_id
+        } else {
+            fixture.opponent
+        };
+        pc_goals = goals;
+        pc_result = if result.goals_for > result.goals_against {
+            1
+        } else if result.goals_for < result.goals_against {
+            -1
+        } else {
+            0
+        };
+        red_card = result.red_card;
+        yellow_cards = result.yellow_cards as u32;
+        familiarity_xp = result.familiarity_xp;
+        pc_survives = winner == pc_club_id;
+    }
+    let _ = (pc_goals, pc_result);
+
+    state = reduce(
+        state,
+        Intent::ApplyMatchResult {
+            familiarity_xp,
+            energy_cost: Fixed::from_int(25),
+            injury_weeks: None,
+        },
+        &mut GoatRng::new(0),
+    );
+    if yellow_cards > 0 || red_card {
+        if red_card {
+            writeln!(out, "  🟥 RED CARD (cup)! You'll serve a cup suspension.").unwrap();
+        }
+        state = reduce(
+            state,
+            Intent::ApplyCardResult {
+                competition_id: DOMESTIC_CUP_COMPETITION_ID,
+                yellow_cards,
+                red_card,
+            },
+            &mut GoatRng::new(0),
+        );
+    }
+    state = reduce(
+        state,
+        Intent::ApplyOrbitMatchResult {
+            competition_id: DOMESTIC_CUP_COMPETITION_ID,
+        },
+        &mut GoatRng::new(0),
+    );
+
+    *pc_cup_alive = pc_survives;
+    if pc_survives {
+        writeln!(out, "  You advance in the cup!").unwrap();
+    } else {
+        writeln!(out, "  Knocked out of the cup.").unwrap();
+    }
 
     state
 }
