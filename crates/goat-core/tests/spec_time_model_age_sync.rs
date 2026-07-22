@@ -40,7 +40,7 @@ fn new_career(seed: u64) -> WorldState {
             pc_club_idx: 0,
             pc_div_idx: 0,
             facilities_mult: goat_fixed::Fixed::ONE,
-            initial_table: Box::new([0u32; 80]),
+            initial_table: Box::new([0u32; 100]),
         },
         &mut GoatRng::new(0),
     )
