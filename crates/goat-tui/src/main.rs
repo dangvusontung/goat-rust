@@ -11,7 +11,11 @@ use goat_core::{
         AttrId, ATTR_NAMES, DEFENDING_ATTRS, DRIBBLING_ATTRS, PACE_ATTRS, PASSING_ATTRS,
         PHYSICAL_ATTRS, SHOOTING_ATTRS,
     },
-    calendar_loop::{DOMESTIC_CUP_COMPETITION_ID, LEAGUE_COMPETITION_ID},
+    calendar_loop::{
+        CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID, CONTINENTAL_TIER1_COMPETITION_ID,
+        CONTINENTAL_TIER2_COMPETITION_ID, CONTINENTAL_TIER3_COMPETITION_ID,
+        DOMESTIC_CUP_COMPETITION_ID, LEAGUE_COMPETITION_ID, WORLD_CUP_COMPETITION_ID,
+    },
     derive::{derive_attrs, ovr, role_rating},
     generation::{generate_player, CreationChoices},
     player::PlayerView,
@@ -41,9 +45,9 @@ use goat_save::save::{
 };
 use goat_traits::PlayerTraits;
 use goat_world::{
-    domestic_cup::break_tie, fixture_for_round, format_week_header, round_fixtures, round_to_week,
-    sim_team_match, world::WorldGenesis, Table, BASE_CAREER_YEAR, CLUBS_PER_DIV, NUM_NATIONS,
-    ROUNDS_PER_SEASON, TIERS_PER_NATION,
+    continental::ContinentalTier, domestic_cup::break_tie, fixture_for_round, format_week_header,
+    round_fixtures, round_to_week, sim_team_match, world::WorldGenesis, Table, BASE_CAREER_YEAR,
+    CLUBS_PER_DIV, NUM_NATIONS, ROUNDS_PER_SEASON, TIERS_PER_NATION,
 };
 
 #[path = "orbit_fixtures.rs"]
@@ -53,6 +57,10 @@ use orbit_fixtures::build_season_orbit_fixtures;
 #[path = "cup_dispatch.rs"]
 mod cup_dispatch;
 use cup_dispatch::cup_fixture_due;
+
+#[path = "continental_dispatch.rs"]
+mod continental_dispatch;
+use continental_dispatch::{qualified_tier, ContinentalPhase, ContinentalRun};
 
 const SAVE_DIR: &str = "saves";
 const NUM_SLOTS: u8 = 9;
@@ -371,6 +379,12 @@ fn run_game_loop(
     // `cup_dispatch.rs`'s doc comment for why this is deliberately not persisted in
     // `WorldState`/the save format).
     let mut pc_cup_alive = true;
+    // Session-local: the PC's continental campaign, if their club qualified for one
+    // this season (Design round 4, Slice 5 follow-up — see `continental_dispatch.rs`'s
+    // doc comment for why this mirrors `cup_dispatch.rs`'s not-persisted rationale).
+    // `None` until qualification is checked at the first season boundary (season 1 has
+    // no prior season to qualify from), and again whenever the current run finishes.
+    let mut pc_continental: Option<ContinentalRun> = None;
 
     loop {
         let pc_id = match state.pc_player_id {
@@ -480,6 +494,36 @@ fn run_game_loop(
                         pc_cup_alive = true; // fresh domestic-cup run each season
                         let next_div_idx = state.pc_div_idx as usize;
                         let next_club_id = state.pc_club_idx as usize;
+
+                        // Continental qualification (Design round 4, Slice 5
+                        // follow-up): reuses the season that just ended's real final
+                        // table (still live in `state.table_raw` — `StartSeason`
+                        // below resets it) against the real per-nation taper table.
+                        let league = &world.leagues[next_div_idx];
+                        let final_table = Table::from_raw(&state.table_raw, &league.clubs);
+                        pc_continental = qualified_tier(
+                            world,
+                            league.nation,
+                            league.tier,
+                            &final_table,
+                            next_club_id,
+                        )
+                        .map(|tier| {
+                            writeln!(
+                                out,
+                                "\n  *** Continental qualification! {} will play in {:?} this season. ***",
+                                state.pc_club, tier
+                            )
+                            .unwrap();
+                            ContinentalRun::start(
+                                world,
+                                state.world_seed,
+                                state.season_number + 1,
+                                next_club_id,
+                                tier,
+                            )
+                        });
+
                         let fixtures = build_season_orbit_fixtures(
                             state.world_seed,
                             state.season_number + 1,
@@ -583,6 +627,7 @@ fn run_game_loop(
                         pc_traits,
                         world,
                         &mut pc_cup_alive,
+                        &mut pc_continental,
                     )
                 }
                 "K" if has_season => {
@@ -595,6 +640,7 @@ fn run_game_loop(
                         pc_traits,
                         world,
                         &mut pc_cup_alive,
+                        &mut pc_continental,
                     )
                 }
                 "T" if has_season => render_table(out, &state, world),
@@ -635,6 +681,7 @@ fn run_next_round(
     pc_traits: PlayerTraits,
     world: &WorldGenesis,
     pc_cup_alive: &mut bool,
+    pc_continental: &mut Option<ContinentalRun>,
 ) -> WorldState {
     let pc_id = match state.pc_player_id {
         Some(id) => id,
@@ -700,7 +747,7 @@ fn run_next_round(
             },
             &mut GoatRng::new(0),
         );
-        return maybe_play_cup_fixture(
+        state = maybe_play_cup_fixture(
             out,
             state,
             world,
@@ -712,6 +759,18 @@ fn run_next_round(
             pc_club_id,
             world_seed,
             pc_cup_alive,
+        );
+        return maybe_play_continental_fixture(
+            out,
+            state,
+            world,
+            beat_lib,
+            pc_traits,
+            round,
+            season,
+            pc_club_id,
+            world_seed,
+            pc_continental,
         );
     }
 
@@ -898,7 +957,7 @@ fn run_next_round(
         &mut GoatRng::new(0),
     );
 
-    maybe_play_cup_fixture(
+    state = maybe_play_cup_fixture(
         out,
         state,
         world,
@@ -910,6 +969,18 @@ fn run_next_round(
         pc_club_id,
         world_seed,
         pc_cup_alive,
+    );
+    maybe_play_continental_fixture(
+        out,
+        state,
+        world,
+        beat_lib,
+        pc_traits,
+        round,
+        season,
+        pc_club_id,
+        world_seed,
+        pc_continental,
     )
 }
 
@@ -1106,6 +1177,325 @@ fn maybe_play_cup_fixture(
     state
 }
 
+/// Play one live-or-suspended orbit match for `competition_id` (suspension-gated the
+/// same way `maybe_play_cup_fixture` is), applying `ApplyMatchResult`/`ApplyCardResult`/
+/// `ApplyOrbitMatchResult` and returning the PC's own goals-for/against. Shared by
+/// `maybe_play_continental_fixture`'s group and knockout legs — unlike the cup
+/// dispatcher (one call site, so it inlines this), continental needs the same shape
+/// twice (group matchday, each knockout leg), so it's factored out here instead of
+/// duplicated a third time.
+#[allow(clippy::too_many_arguments)]
+fn play_orbit_match(
+    out: &mut impl Write,
+    mut state: WorldState,
+    pc_id: goat_core::player::PlayerId,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    own_str: u8,
+    opp_strength: u8,
+    opp_name: &str,
+    competition_id: goat_calendar::CompetitionId,
+    seed: u64,
+) -> (WorldState, u32, u32) {
+    let (gf, ga, red_card, yellow_cards, familiarity_xp);
+    if state.pc_suspension_matches_remaining(competition_id) > 0 {
+        writeln!(
+            out,
+            "  You are SUSPENDED from {} ({} match(es) remaining after this) — the club \
+             plays on without you.",
+            competition_label(competition_id),
+            state.pc_suspension_matches_remaining(competition_id) - 1
+        )
+        .unwrap();
+        let mut sim_rng = GoatRng::new(seed);
+        let (g_for, g_against) = sim_team_match(own_str, opp_strength, &mut sim_rng);
+        writeln!(
+            out,
+            "  {} {}–{} {}",
+            state.pc_club, g_for, g_against, opp_name
+        )
+        .unwrap();
+        gf = g_for;
+        ga = g_against;
+        red_card = false;
+        yellow_cards = 0u32;
+        familiarity_xp = [Fixed::ZERO; goat_core::roles::NUM_ROLES];
+    } else {
+        let mut match_rng = GoatRng::new(seed);
+        let ref_personality = {
+            let mut rp_rng = GoatRng::new(seed ^ 0xBADCAFE);
+            RefPersonality::from_rng(&mut rp_rng)
+        };
+        let view = state.players.snapshot(pc_id);
+        let setup = MatchSetup {
+            player_role: best_role_for_position(state.pc_position),
+            player_attrs: view.current,
+            player_familiarity: view.familiarity,
+            own_strength: own_str,
+            opp_strength,
+            opp_name: opp_name.to_string(),
+            form: state.pc_form,
+            player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+                .to_int()
+                .clamp(1, 99) as u8,
+            ref_personality,
+            dirty_rep: state.pc_discipline_rep,
+            player_traits: pc_traits,
+        };
+        let result = auto_play_match(beat_lib, setup, &mut match_rng);
+        render_match_result(out, &result, opp_name);
+        gf = result.goals_for;
+        ga = result.goals_against;
+        red_card = result.red_card;
+        yellow_cards = result.yellow_cards as u32;
+        familiarity_xp = result.familiarity_xp;
+    }
+
+    state = reduce(
+        state,
+        Intent::ApplyMatchResult {
+            familiarity_xp,
+            energy_cost: Fixed::from_int(25),
+            injury_weeks: None,
+        },
+        &mut GoatRng::new(0),
+    );
+    if yellow_cards > 0 || red_card {
+        if red_card {
+            writeln!(
+                out,
+                "  🟥 RED CARD ({})! You'll serve a suspension there.",
+                competition_label(competition_id)
+            )
+            .unwrap();
+        }
+        state = reduce(
+            state,
+            Intent::ApplyCardResult {
+                competition_id,
+                yellow_cards,
+                red_card,
+            },
+            &mut GoatRng::new(0),
+        );
+    }
+    state = reduce(
+        state,
+        Intent::ApplyOrbitMatchResult { competition_id },
+        &mut GoatRng::new(0),
+    );
+    (state, gf, ga)
+}
+
+/// If the PC's club has a continental fixture due this league round (Design round 4,
+/// Slice 5 follow-up — see `continental_dispatch.rs`'s doc comment), play it. Mirrors
+/// `maybe_play_cup_fixture`'s shape: a red/yellow card here suspends the PC from that
+/// TIER only (`CONTINENTAL_TIERn_COMPETITION_ID`), never the league/cup or another
+/// tier, proving `SuspensionLedger` scoping composes for continental too.
+#[allow(clippy::too_many_arguments)]
+fn maybe_play_continental_fixture(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    league_round: usize,
+    season: u32,
+    pc_club_id: usize,
+    world_seed: u64,
+    pc_continental: &mut Option<ContinentalRun>,
+) -> WorldState {
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return state,
+    };
+    let is_due = pc_continental
+        .as_ref()
+        .is_some_and(|run| run.fixture_due(league_round));
+    if !is_due {
+        return state;
+    }
+    let tier = pc_continental.as_ref().unwrap().tier;
+    let competition_id = match tier {
+        ContinentalTier::Tier1 => CONTINENTAL_TIER1_COMPETITION_ID,
+        ContinentalTier::Tier2 => CONTINENTAL_TIER2_COMPETITION_ID,
+        ContinentalTier::Tier3 => CONTINENTAL_TIER3_COMPETITION_ID,
+    };
+    let own_str = world.clubs[pc_club_id].strength;
+    let phase = pc_continental.as_ref().unwrap().phase;
+
+    match phase {
+        ContinentalPhase::GroupMatchday(md) => {
+            {
+                let run = pc_continental.as_mut().unwrap();
+                run.sim_other_pair(world, world_seed, season, md);
+            }
+            let opp_id = pc_continental.as_ref().unwrap().group_opponent(md);
+            let opp = world.clubs[opp_id].clone();
+            writeln!(
+                out,
+                "\n--- CONTINENTAL {:?} — GROUP MATCHDAY {}: {} vs {} ---",
+                tier,
+                md + 1,
+                state.pc_club,
+                opp.name
+            )
+            .unwrap();
+            let seed = world_seed
+                ^ ((season as u64) << 36)
+                ^ ((md as u64) << 4)
+                ^ (competition_id as u64).rotate_left(13)
+                ^ 0x0000_0000_0000_C701;
+            let (new_state, gf, ga) = play_orbit_match(
+                out,
+                state,
+                pc_id,
+                beat_lib,
+                pc_traits,
+                own_str,
+                opp.strength,
+                &opp.name,
+                competition_id,
+                seed,
+            );
+            state = new_state;
+
+            let run = pc_continental.as_mut().unwrap();
+            run.record_pc_group_result(gf, ga);
+            render_continental_group_table(out, &state, world, run);
+            run.advance(world, world_seed, season, pc_club_id);
+            if matches!(run.phase, ContinentalPhase::Done) {
+                writeln!(out, "  Eliminated at the group stage.").unwrap();
+                *pc_continental = None;
+            }
+        }
+        ContinentalPhase::KnockoutLeg { round, leg } => {
+            let is_final = pc_continental.as_ref().unwrap().is_final_round();
+            let opp_id = pc_continental.as_ref().unwrap().knockout_opponent.unwrap();
+            let opp = world.clubs[opp_id].clone();
+            let round_label = if is_final {
+                "FINAL".to_string()
+            } else {
+                format!("Knockout Round {} Leg {}", round + 1, leg + 1)
+            };
+            writeln!(
+                out,
+                "\n--- CONTINENTAL {tier:?} {round_label}: {} vs {} ---",
+                state.pc_club, opp.name
+            )
+            .unwrap();
+            let seed = world_seed
+                ^ ((season as u64) << 36)
+                ^ ((round as u64) << 8)
+                ^ ((leg as u64) << 2)
+                ^ (competition_id as u64).rotate_left(17)
+                ^ 0x0000_0000_0000_C702;
+            let (new_state, gf, ga) = play_orbit_match(
+                out,
+                state,
+                pc_id,
+                beat_lib,
+                pc_traits,
+                own_str,
+                opp.strength,
+                &opp.name,
+                competition_id,
+                seed,
+            );
+            state = new_state;
+
+            let run = pc_continental.as_mut().unwrap();
+            run.accumulate_knockout_leg(gf, ga);
+            if leg == 0 && !is_final {
+                run.advance(world, world_seed, season, pc_club_id);
+            } else {
+                let mut tiebreak_rng = GoatRng::new(seed ^ 0xBEEF);
+                let pc_wins = run.resolve_knockout_tie(
+                    world,
+                    world_seed,
+                    season,
+                    pc_club_id,
+                    &mut tiebreak_rng,
+                );
+                let (agg_pc, agg_opp) = run.knockout_agg;
+                writeln!(
+                    out,
+                    "  Aggregate: {} {}–{} {}",
+                    state.pc_club, agg_pc, agg_opp, opp.name
+                )
+                .unwrap();
+                if pc_wins && is_final {
+                    writeln!(
+                        out,
+                        "  *** {} ARE CROWNED CONTINENTAL {:?} CHAMPIONS! ***",
+                        state.pc_club, tier
+                    )
+                    .unwrap();
+                    *pc_continental = None;
+                } else if pc_wins {
+                    writeln!(out, "  You advance in the continental knockout!").unwrap();
+                } else if is_final {
+                    writeln!(
+                        out,
+                        "  Runners-up. {} are crowned continental {:?} champions.",
+                        opp.name, tier
+                    )
+                    .unwrap();
+                    *pc_continental = None;
+                } else {
+                    writeln!(out, "  Knocked out of the continental {tier:?}.").unwrap();
+                    *pc_continental = None;
+                }
+            }
+        }
+        ContinentalPhase::Done => {}
+    }
+
+    state
+}
+
+/// Print the PC's continental group's live standings (points/goal-diff/gf sorted).
+fn render_continental_group_table(
+    out: &mut impl Write,
+    state: &WorldState,
+    world: &WorldGenesis,
+    run: &ContinentalRun,
+) {
+    let mut order: Vec<usize> = (0..4).collect();
+    order.sort_by(|&a, &b| {
+        run.standings[b]
+            .points()
+            .cmp(&run.standings[a].points())
+            .then(
+                run.standings[b]
+                    .goal_diff()
+                    .cmp(&run.standings[a].goal_diff()),
+            )
+            .then(run.standings[b].gf.cmp(&run.standings[a].gf))
+    });
+    writeln!(out, "  --- Group table ---").unwrap();
+    for &i in &order {
+        let s = &run.standings[i];
+        let name = if i == 0 {
+            state.pc_club.as_str()
+        } else {
+            world.clubs[s.club].name.as_str()
+        };
+        writeln!(
+            out,
+            "  {:<20} P{} W{} D{} L{} GD{:+} Pts{}",
+            name,
+            s.w + s.d + s.l,
+            s.w,
+            s.d,
+            s.l,
+            s.goal_diff(),
+            s.points()
+        )
+        .unwrap();
+    }
+}
+
 fn club_div_pos_in(div_clubs: &[usize], club_id: usize) -> usize {
     div_clubs
         .iter()
@@ -1119,6 +1509,16 @@ fn competition_label(competition_id: goat_calendar::CompetitionId) -> &'static s
         "League"
     } else if competition_id == DOMESTIC_CUP_COMPETITION_ID {
         "Domestic Cup"
+    } else if competition_id == CONTINENTAL_TIER1_COMPETITION_ID {
+        "Continental Tier 1"
+    } else if competition_id == CONTINENTAL_TIER2_COMPETITION_ID {
+        "Continental Tier 2"
+    } else if competition_id == CONTINENTAL_TIER3_COMPETITION_ID {
+        "Continental Tier 3"
+    } else if competition_id == WORLD_CUP_COMPETITION_ID {
+        "World Cup"
+    } else if competition_id == CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID {
+        "Continental Championship"
     } else {
         "Competition"
     }

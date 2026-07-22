@@ -28,6 +28,20 @@ pub const LEAGUE_COMPETITION_ID: CompetitionId = 1;
 /// this id is actually attached to real cup fixtures/results.
 pub const DOMESTIC_CUP_COMPETITION_ID: CompetitionId = 2;
 
+/// The PC's continental-tier competition ids (Design round 4, Slices 2-3/5 follow-up —
+/// continental club competitions). One id per tier so `SuspensionLedger` scoping never
+/// conflates a Tier-1 ban with a Tier-2/3 one, same rationale as the domestic cup's own
+/// id above.
+pub const CONTINENTAL_TIER1_COMPETITION_ID: CompetitionId = 3;
+pub const CONTINENTAL_TIER2_COMPETITION_ID: CompetitionId = 4;
+pub const CONTINENTAL_TIER3_COMPETITION_ID: CompetitionId = 5;
+
+/// The PC's national-team competition ids (Design round 4, Slice 4/5 follow-up — World
+/// Cup / continental championship). Distinct from every club competition id above so a
+/// national-team suspension never bleeds into a club fixture and vice versa.
+pub const WORLD_CUP_COMPETITION_ID: CompetitionId = 6;
+pub const CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID: CompetitionId = 7;
+
 /// The competitions active this season. Slice 1: just the league; sibling slices append
 /// domestic-cup/continental/national-team competitions to this same list.
 fn standard_competitions() -> Vec<Competition> {
