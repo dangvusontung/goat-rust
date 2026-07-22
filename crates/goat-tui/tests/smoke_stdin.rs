@@ -25,8 +25,8 @@ fn run_scripted(input: &str) -> Option<String> {
 }
 
 /// Same as `run_scripted`, but optionally runs the child in `cwd` — used by
-/// tests that need `goat.sav` to live in a scratch directory rather than the
-/// crate root, so a pre-seeded save doesn't collide with other tests.
+/// tests that need `saves/slot-N.sav` to live in a scratch directory rather than
+/// the crate root, so a pre-seeded save doesn't collide with other tests.
 fn run_scripted_in(input: &str, cwd: Option<&Path>) -> Option<String> {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_goat-tui"));
     cmd.stdin(Stdio::piped())
@@ -314,9 +314,11 @@ fn seed_save_at_age_weeks(dir: &std::path::Path, age_weeks: u32) {
     state.season_round = 0;
     state.pc_contract_seasons_left = 3;
 
+    std::fs::create_dir_all(dir.join("saves")).expect("saves subdir");
     let view = state.players.snapshot(pc);
     let data = goat_save::from_world_state(&state, &view);
-    goat_save::save_to_file(&data, dir.join("goat.sav")).expect("save should write");
+    goat_save::save_to_file(&data, goat_save::slot_path(dir.join("saves"), 1))
+        .expect("save should write");
 }
 
 #[test]
@@ -331,7 +333,7 @@ fn hard_retirement_age_is_forced_not_offered() {
     // high), and the soft out-of-contract path can't fire either.
     seed_save_at_age_weeks(&dir, RETIRE_AGE_HARD * 52 - 1);
 
-    let script = "L\nF\n1\n"; // load, then advance exactly 1 week — crosses the hard age.
+    let script = "L\n1\nF\n1\n"; // load slot 1, then advance exactly 1 week — crosses the hard age.
     let stdout = run_scripted_in(script, Some(&dir)).expect("process should exit cleanly");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -384,9 +386,11 @@ fn seed_save_at_season_end(dir: &std::path::Path) {
     state.pc_wage_annual = 100;
     state.pc_contract_seasons_left = 2;
 
+    std::fs::create_dir_all(dir.join("saves")).expect("saves subdir");
     let view = state.players.snapshot(pc);
     let data = goat_save::from_world_state(&state, &view);
-    goat_save::save_to_file(&data, dir.join("goat.sav")).expect("save should write");
+    goat_save::save_to_file(&data, goat_save::slot_path(dir.join("saves"), 1))
+        .expect("save should write");
 }
 
 #[test]
@@ -401,7 +405,7 @@ fn viewing_legacy_twice_at_season_end_does_not_double_credit_career_totals() {
     // Load straight into the end-of-season gate (which runs the pipeline once),
     // then take the read-only Legacy side trip from the post-pipeline menu twice
     // before moving on.
-    let script = "L\nG\nG\nQ\nQ\n";
+    let script = "L\n1\nG\nG\nQ\nQ\n";
     let stdout = run_scripted_in(script, Some(&dir)).expect("process should exit cleanly");
 
     let _ = std::fs::remove_dir_all(&dir);
@@ -416,5 +420,104 @@ fn viewing_legacy_twice_at_season_end_does_not_double_credit_career_totals() {
         "opening Legacy twice at the same season boundary must show the same, \
          single-credited career totals both times (not double-credited on the \
          second view) — expected line {expected_line:?}:\n{stdout}"
+    );
+}
+
+// ── Design round 1, Slice 3: save slots ─────────────────────────────────────
+
+#[test]
+fn slot_picker_shows_all_nine_slots_as_empty_on_fresh_save_dir() {
+    let dir =
+        std::env::temp_dir().join(format!("goat_tui_smoke_slots_fresh_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let script = "L\nQ\nQ\n"; // title Load, cancel at slot prompt, quit.
+    let stdout = run_scripted_in(script, Some(&dir)).expect("process should exit cleanly");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    for slot in 1..=9 {
+        assert!(
+            stdout.contains(&format!("[{slot}] <empty>")),
+            "slot {slot} should render as empty on a fresh save dir:\n{stdout}"
+        );
+    }
+    assert!(
+        stdout.contains("Load cancelled."),
+        "Q at the slot prompt should cancel, not crash:\n{stdout}"
+    );
+}
+
+#[test]
+fn load_empty_slot_reports_empty_not_crash() {
+    let dir = std::env::temp_dir().join(format!(
+        "goat_tui_smoke_slots_load_empty_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let script = "L\n5\nQ\n"; // title Load, pick empty slot 5, then quit.
+    let stdout = run_scripted_in(script, Some(&dir)).expect("process should exit cleanly");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        stdout.contains("Slot 5 is empty."),
+        "loading an empty slot must say so, not crash or silently no-op:\n{stdout}"
+    );
+}
+
+#[test]
+fn save_to_empty_slot_succeeds_without_confirmation() {
+    let dir = std::env::temp_dir().join(format!(
+        "goat_tui_smoke_slots_save_empty_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    let script = format!("{}Z\n2\nQ\nQ\n", new_game_england_man_city());
+    let stdout = run_scripted_in(&script, Some(&dir)).expect("process should exit cleanly");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        stdout.contains("Saved to slot 2."),
+        "saving to an empty slot should succeed directly:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Overwrite?"),
+        "an empty slot must not trigger the overwrite confirmation:\n{stdout}"
+    );
+}
+
+#[test]
+fn save_overwrite_requires_explicit_confirmation() {
+    // This is the concrete fix for the "silent overwrite" complaint: saving to an
+    // already-occupied slot must not write until the player explicitly answers Y.
+    let dir = std::env::temp_dir().join(format!(
+        "goat_tui_smoke_slots_overwrite_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+
+    // First save (slot 4, empty -> direct write), then a second save attempt to the
+    // same now-occupied slot: decline with N (must cancel), then accept with Y.
+    let script = format!(
+        "{}Z\n4\nZ\n4\nN\nZ\n4\nY\nQ\nQ\n",
+        new_game_england_man_city()
+    );
+    let stdout = run_scripted_in(&script, Some(&dir)).expect("process should exit cleanly");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        stdout.contains("has a save") && stdout.contains("Overwrite? [Y/N]"),
+        "re-saving to an occupied slot must prompt for overwrite confirmation:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Save cancelled."),
+        "answering N to the overwrite prompt must cancel, not write:\n{stdout}"
+    );
+    let saved_count = stdout.matches("Saved to slot 4.").count();
+    assert_eq!(
+        saved_count, 2,
+        "expected exactly 2 successful writes to slot 4 (first empty-slot save, \
+         then the Y-confirmed overwrite) — the N-declined attempt must not count:\n{stdout}"
     );
 }

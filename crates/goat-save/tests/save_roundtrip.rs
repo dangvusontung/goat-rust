@@ -306,3 +306,49 @@ fn old_v8_save_without_pantheon_signals_defaults_to_zero() {
     assert_eq!(restored.pc_career_best_ovr, 0);
     assert_eq!(restored.pc_career_transfer_requests, 0);
 }
+
+// ── Save slots (Design round 1, Slice 3) ─────────────────────────────────────
+
+#[test]
+fn list_slots_on_empty_dir_reports_all_unoccupied() {
+    let dir = std::env::temp_dir().join(format!("goat_save_slots_empty_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let slots = goat_save::save::list_slots(&dir, 9);
+    assert_eq!(slots.len(), 9);
+    for s in &slots {
+        assert!(!s.occupied, "slot {} should be unoccupied", s.slot);
+        assert_eq!(s.pc_name, "");
+        assert_eq!(s.season_number, 0);
+        assert_eq!(s.pc_age_weeks, 0);
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn list_slots_reports_one_occupied_slot_and_leaves_others_untouched() {
+    let dir = std::env::temp_dir().join(format!("goat_save_slots_one_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let state = setup_state();
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+    save_to_file(&data, goat_save::save::slot_path(&dir, 3)).unwrap();
+
+    let slots = goat_save::save::list_slots(&dir, 9);
+    assert_eq!(slots.len(), 9);
+    for s in &slots {
+        if s.slot == 3 {
+            assert!(s.occupied, "slot 3 should be occupied");
+            assert_eq!(s.pc_name, "Round-Trip Sam");
+            assert_eq!(s.season_number, state.season_number);
+            assert_eq!(s.pc_age_weeks, state.players.get_age_weeks(pc_id));
+        } else {
+            assert!(!s.occupied, "slot {} should still be unoccupied", s.slot);
+        }
+    }
+
+    std::fs::remove_dir_all(&dir).ok();
+}
