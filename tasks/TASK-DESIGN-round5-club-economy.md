@@ -1190,6 +1190,17 @@ a wider-than-usual ripple for Dev to scope carefully, not a small change.
   market. Bible §7.3's "your teammates arrive and leave" flavor for the PC specifically is a
   natural, compatible future extension (the PC's club could simply be one more club iterated
   in Slices 3–5's passes) but is not wired here — Phase 8 (`state.rs`) stays exactly as-is.
+- **PC Reputation as a factor in which clubs show transfer interest — approved by Tùng
+  (2026-07-22, "Ok" at the point where this was proposed) but not designed in this doc; flagged
+  here so the decision isn't lost.** Tùng's framing: high Reputation (bible §8.2,
+  `crates/goat-meta/src/reputation.rs`) should make big clubs notice/pursue the PC independent
+  of raw attribute numbers, "ngon hơn FC career mode" (better than how EA FC's career mode does
+  it, which is stats-only). Today's Phase 8 (`state.rs`) transfer-offer generation for the PC is
+  outside this doc's scope entirely (see the bullet above), and this doc's own gem-hunting logic
+  (Slice 4) targets *background* players, not the PC. The natural hook, once PC-facing transfer
+  participation is designed (the bullet above), is to weight offer likelihood/quality by
+  Reputation alongside OVR — not designed here, just recorded as a real requirement for
+  whichever future round designs PC-facing transfer offers.
 - **Seller-side reluctance / squad-retention logic** — every player transfers at the right
   price this round (Slice 5.5). A club refusing to sell its own most-important player even for
   a huge offer is a real, plausible future refinement, not designed here.

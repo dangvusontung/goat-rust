@@ -261,6 +261,13 @@ doubles this doc's scope again.
   additive data on `Club`/a new `NationalTeam`, it does not touch league-table simulation
   (that's Doc A's territory, and this task has no dependency on Doc A's internals, only on
   `Nation` existing as an identifier, which it already does today).
+- **PC Reputation as a factor in call-up likelihood — approved by Tùng (2026-07-22, "Ok" at the
+  point where this was proposed) but not designed in this doc; flagged here so the decision
+  isn't lost.** Tùng's framing: high Reputation (bible §8.2, `crates/goat-meta/src/
+  reputation.rs`) should make national-team call-up more likely independent of raw role-fit
+  numbers alone. This doc's call-up/starting-XI weighting (B.1/B.3) is role-fit-only as
+  designed; a future round should add a Reputation term alongside fit when weighting call-up
+  probability — not designed here, just recorded as a real requirement.
 
 ## Decisions Design needs from Tùng before Dev starts (collected from above)
 
