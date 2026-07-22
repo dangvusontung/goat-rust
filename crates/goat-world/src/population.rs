@@ -209,7 +209,10 @@ fn position_from_u8(p: u8) -> PrimaryPosition {
 
 impl Population {
     /// Age in years of background player `idx` at `elapsed_weeks` after genesis.
-    fn age_years_at(&self, idx: usize, elapsed_weeks: u32) -> u32 {
+    ///
+    /// `pub(crate)`, not private: Round 5 Slice 3-4's `scouting` module (a sibling in this
+    /// crate) reads this directly for its cheap SoA target-search scan.
+    pub(crate) fn age_years_at(&self, idx: usize, elapsed_weeks: u32) -> u32 {
         let weeks_since_intake = elapsed_weeks.saturating_sub(self.intake_week[idx]);
         (self.birth_age_weeks[idx] + weeks_since_intake) / 52
     }
