@@ -394,7 +394,10 @@ fn main() {
         state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
         let pc_id = state.pc_player_id.unwrap();
 
-        println!("BEAT SEASON — {} (seed {seed})\n", world.clubs[pc_club_id].name);
+        println!(
+            "BEAT SEASON — {} (seed {seed})\n",
+            world.clubs[pc_club_id].name
+        );
         println!("  Rd  Opponent           Score  Res  Out  Gls  Cards");
         println!("  {}", "─".repeat(52));
 
@@ -765,7 +768,14 @@ fn main() {
         let league_clubs = world.static_league_clubs();
         let mut pop = goat_world::population::genesis(seed, &world);
         for s in 1..=14u32 {
-            goat_world::batch_tick::batch_tick_season(&mut pop, &world, &league_clubs, seed, s, s * 52);
+            goat_world::batch_tick::batch_tick_season(
+                &mut pop,
+                &world,
+                &league_clubs,
+                seed,
+                s,
+                s * 52,
+            );
         }
         // A representative mid-tier PC career to set the bar.
         match goat_world::rival::crystallise_rival(&pop, 16 * 52, 200, 5) {
@@ -801,7 +811,14 @@ fn main() {
         let league_clubs = world.static_league_clubs();
         let mut pop = goat_world::population::genesis(seed, &world);
         for s in 1..=seasons {
-            goat_world::batch_tick::batch_tick_season(&mut pop, &world, &league_clubs, seed, s, s * 52);
+            goat_world::batch_tick::batch_tick_season(
+                &mut pop,
+                &world,
+                &league_clubs,
+                seed,
+                s,
+                s * 52,
+            );
         }
 
         // All-time top scorer of the run.
@@ -1003,17 +1020,23 @@ fn main() {
                 }
             }
 
-            let pc_output =
-                match fixture_for_round(seed, season, season_div_idx, &div_clubs, season_pc_club, round) {
-                    Some(_) => {
-                        let form_val = state.pc_form.to_int() as u64;
-                        let mut out_rng =
-                            GoatRng::new(seed ^ (season as u64 * 0xdead) ^ (round as u64));
-                        let variance = out_rng.next_range_u64(0, 20) as i32 - 10;
-                        ((form_val as i32 + variance).clamp(0, 100)) as i32
-                    }
-                    None => 0,
-                };
+            let pc_output = match fixture_for_round(
+                seed,
+                season,
+                season_div_idx,
+                &div_clubs,
+                season_pc_club,
+                round,
+            ) {
+                Some(_) => {
+                    let form_val = state.pc_form.to_int() as u64;
+                    let mut out_rng =
+                        GoatRng::new(seed ^ (season as u64 * 0xdead) ^ (round as u64));
+                    let variance = out_rng.next_range_u64(0, 20) as i32 - 10;
+                    ((form_val as i32 + variance).clamp(0, 100)) as i32
+                }
+                None => 0,
+            };
             let pc_result: i8 = if pc_gf > pc_ga {
                 1
             } else if pc_gf < pc_ga {

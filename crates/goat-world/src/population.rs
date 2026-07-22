@@ -255,9 +255,15 @@ mod tests {
     #[test]
     fn genesis_is_deterministic() {
         let world = WorldGenesis::generate(42);
-        assert_eq!(genesis(42, &world).fingerprint(), genesis(42, &world).fingerprint());
+        assert_eq!(
+            genesis(42, &world).fingerprint(),
+            genesis(42, &world).fingerprint()
+        );
         let world2 = WorldGenesis::generate(2);
-        assert_ne!(genesis(1, &world).fingerprint(), genesis(2, &world2).fingerprint());
+        assert_ne!(
+            genesis(1, &world).fingerprint(),
+            genesis(2, &world2).fingerprint()
+        );
     }
 
     #[test]

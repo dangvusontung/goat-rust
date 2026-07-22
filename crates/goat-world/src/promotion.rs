@@ -46,8 +46,11 @@ pub fn apply_season_end(
     let mut events = Vec::new();
 
     for nation in &world.nations {
-        let mut nation_leagues: Vec<&crate::world::League> =
-            world.leagues.iter().filter(|l| l.nation == nation.id).collect();
+        let mut nation_leagues: Vec<&crate::world::League> = world
+            .leagues
+            .iter()
+            .filter(|l| l.nation == nation.id)
+            .collect();
         nation_leagues.sort_by_key(|l| l.tier as usize);
 
         for pair in nation_leagues.windows(2) {
@@ -168,7 +171,10 @@ mod tests {
             .iter()
             .filter(|e| e.transition == TransitionType::DirectRelegation)
             .count();
-        assert_eq!(promotions, relegations, "every promotion pairs with a relegation");
+        assert_eq!(
+            promotions, relegations,
+            "every promotion pairs with a relegation"
+        );
         assert!(promotions > 0, "some tier boundary must have moved clubs");
     }
 

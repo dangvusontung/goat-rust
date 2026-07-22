@@ -25,7 +25,8 @@ pub enum DivLevel {
 }
 
 impl DivLevel {
-    pub const ALL: [DivLevel; TIERS_PER_NATION] = [DivLevel::Top, DivLevel::Second, DivLevel::Third];
+    pub const ALL: [DivLevel; TIERS_PER_NATION] =
+        [DivLevel::Top, DivLevel::Second, DivLevel::Third];
 
     pub fn from_idx(i: usize) -> Self {
         match i {
@@ -119,22 +120,77 @@ const NATION_SUFFIX: [&str; 20] = [
 /// Fictional place-name stems for club naming, English-flavored register (Style A) —
 /// combined with `CLUB_SUFFIX_A` (e.g. "Ashford United").
 const CITY_STEM: [&str; 24] = [
-    "Ashford", "Brackwell", "Solmoor", "Kingsmere", "Redcliffe", "Hallowgate", "Wynstead",
-    "Marlow", "Thornbury", "Oakhaven", "Cresthill", "Fenwick", "Draymoor", "Hartfield",
-    "Ellsworth", "Stonebridge", "Greymarsh", "Ravensdale", "Wintershaw", "Foxleigh", "Braemoor",
-    "Duskvale", "Aldermere", "Wrenford",
+    "Ashford",
+    "Brackwell",
+    "Solmoor",
+    "Kingsmere",
+    "Redcliffe",
+    "Hallowgate",
+    "Wynstead",
+    "Marlow",
+    "Thornbury",
+    "Oakhaven",
+    "Cresthill",
+    "Fenwick",
+    "Draymoor",
+    "Hartfield",
+    "Ellsworth",
+    "Stonebridge",
+    "Greymarsh",
+    "Ravensdale",
+    "Wintershaw",
+    "Foxleigh",
+    "Braemoor",
+    "Duskvale",
+    "Aldermere",
+    "Wrenford",
 ];
 const CLUB_SUFFIX_A: [&str; 8] = [
-    "United", "Athletic", "Rovers", "Town", "City", "Wanderers", "Albion", "Rangers",
+    "United",
+    "Athletic",
+    "Rovers",
+    "Town",
+    "City",
+    "Wanderers",
+    "Albion",
+    "Rangers",
 ];
 
 /// Single-word invented club identities, South-American-flavored register (Style B) — mirrors
 /// how the old hardcoded data used single-word Brazilian club names (Flamengo, Corinthians).
 const CLUB_WORD_B: [&str; 32] = [
-    "Volcanza", "Marejada", "Estrelar", "Cruzeta", "Fluvente", "Andaria", "Pampero", "Litorena",
-    "Tropicó", "Cordillar", "Solaço", "Barranca", "Vermelhas", "Selvana", "Riacho", "Tucanaço",
-    "Cerraço", "Guaranti", "Aurinegro", "Costeira", "Manguera", "Pantana", "Sertana", "Bravante",
-    "Corrente", "Marisco", "Delfina", "Ipanera", "Tijuqua", "Sambara", "Coralina", "Litorio",
+    "Volcanza",
+    "Marejada",
+    "Estrelar",
+    "Cruzeta",
+    "Fluvente",
+    "Andaria",
+    "Pampero",
+    "Litorena",
+    "Tropicó",
+    "Cordillar",
+    "Solaço",
+    "Barranca",
+    "Vermelhas",
+    "Selvana",
+    "Riacho",
+    "Tucanaço",
+    "Cerraço",
+    "Guaranti",
+    "Aurinegro",
+    "Costeira",
+    "Manguera",
+    "Pantana",
+    "Sertana",
+    "Bravante",
+    "Corrente",
+    "Marisco",
+    "Delfina",
+    "Ipanera",
+    "Tijuqua",
+    "Sambara",
+    "Coralina",
+    "Litorio",
 ];
 
 fn seed_mix(world_seed: u64, salt: u64, idx: u64) -> u64 {
@@ -206,12 +262,17 @@ impl WorldGenesis {
             // possible combinations against only 20 draws).
             let mut name = generate_nation_name(&mut rng);
             let mut guard = 0;
-            while nations.iter().any(|existing: &GeneratedNation| existing.name == name) && guard < 32 {
+            while nations
+                .iter()
+                .any(|existing: &GeneratedNation| existing.name == name)
+                && guard < 32
+            {
                 name = generate_nation_name(&mut rng);
                 guard += 1;
             }
             let stature = rng.next_range_u32(25, 95) as u8;
-            let tactical_identity = TacticalIdentity::generate(seed_mix(world_seed, 0xD4, n as u64));
+            let tactical_identity =
+                TacticalIdentity::generate(seed_mix(world_seed, 0xD4, n as u64));
             nations.push(GeneratedNation {
                 id: n,
                 name,
@@ -263,7 +324,11 @@ impl WorldGenesis {
             }
         }
 
-        WorldGenesis { nations, leagues, clubs }
+        WorldGenesis {
+            nations,
+            leagues,
+            clubs,
+        }
     }
 
     pub fn nation_name(&self, id: NationId) -> &str {
@@ -323,7 +388,11 @@ mod tests {
     fn club_names_differ_across_seeds() {
         let a = WorldGenesis::generate(1);
         let b = WorldGenesis::generate(2);
-        assert!(a.clubs.iter().zip(b.clubs.iter()).any(|(x, y)| x.name != y.name));
+        assert!(a
+            .clubs
+            .iter()
+            .zip(b.clubs.iter())
+            .any(|(x, y)| x.name != y.name));
     }
 
     #[test]
