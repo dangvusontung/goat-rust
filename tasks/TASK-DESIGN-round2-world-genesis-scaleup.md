@@ -260,6 +260,18 @@ free to change without touching those two.
 
 ### A2.2 — Nation generation
 
+**SUPERSEDED (2026-07-23) — nation *naming* only.** Tùng reversed the "fictional word-bank"
+call below for nations specifically: **nations must be real-world countries** (a fixed,
+hand-authored list of ~20 real country names — England, Brazil, Germany, etc. — not
+seed-generated fictional names). Clubs (A1.2) and player names (`history.rs` `FIRST_NAMES`/
+`LAST_NAMES`) stay fictional/procedurally generated exactly as designed — only the nation
+identity itself changes from generated to real. The stature/quality-band mechanism below
+(seed-derived club-strength spread per nation) is unaffected and still applies — it just now
+shifts each *real* country's generated clubs, instead of a *fictional* one's. Actual code
+(`NATION_PREFIX`/`NATION_SUFFIX` word banks and the generation call in `world.rs:242-243`)
+has **not** been updated to match yet — this is a real-country name list swap-in, tracked as
+follow-up implementation work, not done by this doc edit alone.
+
 `Nation` (`world.rs:12-32`) goes from a 2-variant enum to a generated `Vec<GeneratedNation>` (or
 similar), each with:
 - A generated name (same word-bank-and-seed approach as A1.2, a new fictional-country word
