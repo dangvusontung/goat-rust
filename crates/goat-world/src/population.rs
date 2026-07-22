@@ -368,7 +368,11 @@ pub fn apply_youth_intake(
             let mut rng = GoatRng::new(pseed);
 
             let position = squad_position(local_idx as usize);
-            let potential_ovr = roll_potential_ovr(&mut rng, club.strength);
+            // Slice 6's one call-site ripple into round-3's existing intake formula: an
+            // academy-boosted club rolls potential against a higher anchor, no change to
+            // `roll_potential_ovr`'s own signature or the outlier mechanism.
+            let effective_strength = club.strength.saturating_add(club.academy_boost).min(99);
+            let potential_ovr = roll_potential_ovr(&mut rng, effective_strength);
 
             pop.seed.push(pseed);
             pop.club.push(club.id as u16);
