@@ -47,8 +47,13 @@ fn ai_competitor_score(
     base_min: i32,
     base_max: i32,
 ) -> i32 {
+    // Hash-mix seed for a stochastic AI competitor score. This is a scramble, not an
+    // arithmetic quantity — wrapping is the correct semantics (matches release-mode
+    // behavior), not a bug being papered over.
     let mut rng = GoatRng::new(
-        world_seed ^ (season as u64 * 0x9e3779b97f4a7c15) ^ (candidate_idx as u64 * 0xdeadbeef),
+        world_seed
+            ^ (season as u64).wrapping_mul(0x9e3779b97f4a7c15)
+            ^ (candidate_idx as u64).wrapping_mul(0xdeadbeef),
     );
     let range = (base_max - base_min).max(1) as u64;
     base_min + rng.next_range_u64(0, range - 1) as i32
