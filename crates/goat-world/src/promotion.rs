@@ -518,7 +518,8 @@ mod tests {
         assert_eq!(cache_a.club_budgets(), cache_b.club_budgets());
         assert_eq!(cache_a.academy_boosts(), cache_b.academy_boosts());
         assert_eq!(
-            cache_a.pop().club, cache_b.pop().club,
+            cache_a.pop().club,
+            cache_b.pop().club,
             "self.pop.club assignments must be byte-identical"
         );
         assert_eq!(
@@ -567,7 +568,14 @@ mod tests {
             0,
             TransferLane::WeakestPosition,
         );
-        run_transfer_pass_with_log(&mut pop, &mut world, world_seed, season, 0, TransferLane::GemHunt);
+        run_transfer_pass_with_log(
+            &mut pop,
+            &mut world,
+            world_seed,
+            season,
+            0,
+            TransferLane::GemHunt,
+        );
         let after_winter_transfers = sum_budget(&world);
         assert_eq!(
             after_winter_transfers, after_winter_topup,
@@ -578,7 +586,10 @@ mod tests {
         run_academy_investment_pass(&mut world);
         let after_winter_academy = sum_budget(&world);
         let winter_academy_spend = after_winter_transfers - after_winter_academy;
-        assert!(winter_academy_spend >= 0, "academy investment only ever spends");
+        assert!(
+            winter_academy_spend >= 0,
+            "academy investment only ever spends"
+        );
 
         // Summer window (the season's matches don't touch budget, so skipping them here
         // doesn't affect this invariant — this test is scoped to the economy bookkeeping,
@@ -596,7 +607,14 @@ mod tests {
             1,
             TransferLane::WeakestPosition,
         );
-        run_transfer_pass_with_log(&mut pop, &mut world, world_seed, season, 1, TransferLane::GemHunt);
+        run_transfer_pass_with_log(
+            &mut pop,
+            &mut world,
+            world_seed,
+            season,
+            1,
+            TransferLane::GemHunt,
+        );
         let after_summer_transfers = sum_budget(&world);
         assert_eq!(
             after_summer_transfers, after_summer_topup,
@@ -607,7 +625,10 @@ mod tests {
         run_academy_investment_pass(&mut world);
         let after_summer_academy = sum_budget(&world);
         let summer_academy_spend = after_summer_transfers - after_summer_academy;
-        assert!(summer_academy_spend >= 0, "academy investment only ever spends");
+        assert!(
+            summer_academy_spend >= 0,
+            "academy investment only ever spends"
+        );
 
         let total_delta = after_summer_academy - before;
         let expected = winter_income_minus_wage + summer_income_minus_wage
@@ -685,8 +706,7 @@ mod tests {
                     .any(|(before, after)| before != after);
             }
 
-            for &(player_idx, _winner, _seller, fee, valuation, lane) in cache.last_transfers()
-            {
+            for &(player_idx, _winner, _seller, fee, valuation, lane) in cache.last_transfers() {
                 if fee > valuation {
                     any_contested_above_valuation = true;
                 }
