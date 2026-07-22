@@ -649,6 +649,31 @@ round, once this round's world-genesis scale-up (this doc) and national-team/tac
 (Doc B) have shipped and the resulting club/league/nation/roster shapes are stable to build
 against.
 
+**Multi-competition: domestic cups + continental competitions (raised by Tùng, 2026-07-22 —
+explicitly deferred, not designed here).**
+
+Tùng also asked about cup competitions (domestic cups, continental cups like a
+Champions-League-style tournament) and schedule-conflict handling between competitions. Unlike
+the item above, this one is **already substantially designed on paper** in `docs/MAIN.md`
+(marked `[ASSUMED]`/`[DECISION NEEDED]`, not yet ratified or built) — `Competition` entity
+(`kind: league | domesticCup | continental | international`, `priority` for conflict
+resolution), `Fixture` with `scheduledDay` vs `originalDay` (reschedule audit trail) and
+`legForId` (two-legged ties), `FixtureImportance` (`deadRubber < league < derby < cupKnockout <
+continental < final`, used to decide which fixture wins a same-day clash), and
+`SuspensionLedger` scoped per-`Competition` (a cup ban doesn't bleed into league availability).
+Verified against real code: `crates/goat-world/src/fixtures.rs` implements exactly one
+competition (the league) end to end — zero `Competition`/cup/continental code exists anywhere
+in the workspace today.
+
+**Why this is parked, not folded into this doc:** same reasoning as the player-driven-strength
+item above — it's a large, separate subsystem (this time touching the whole
+fixture/calendar/suspension layer, not club/league/nation structure) that would make this doc's
+scope unreviewable if merged in. The difference is this one doesn't need a design pass from
+scratch — the bible's `Competition`/`Fixture`/`FixtureImportance` shape is a solid starting
+point — it needs someone to pick it up, confirm the still-`[DECISION NEEDED]` bits (e.g. exact
+priority ladder, whether continental qualification ties to league position), and implement it
+against the post-scale-up club/league/nation shapes this doc produces.
+
 ## Decisions Design needs from Tùng before Dev starts (collected from above)
 
 1. **A2.1**: uniform 20-clubs-per-tier across all nations (low risk — `CLUBS_PER_DIV` moves
