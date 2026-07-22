@@ -22,6 +22,11 @@ pub use calendar::{
     round_to_week, week_day_offset, week_ends_after_round, week_to_rounds, BASE_CAREER_YEAR,
     SEASON_CALENDAR_WEEKS, WEEK_MATCH_COUNTS,
 };
+pub use continental::{
+    continental_slots_for_nation, nation_ranks, qualify_clubs, simulate_continental,
+    ContinentalSeasonResult, ContinentalSlots, ContinentalTier, GroupStanding, KnockoutRoundResult,
+    KnockoutTie,
+};
 pub use domestic_cup::{simulate_domestic_cup, CupRoundResult, CupSeasonResult, CupTie};
 pub use fixtures::{
     fixture_for_round, fixtures_for_club, generate_fixtures, round_fixtures, Fixture,
