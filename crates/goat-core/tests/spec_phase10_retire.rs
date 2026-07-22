@@ -12,8 +12,8 @@ fn player_at_age(age_years: u32, contract_left: u32) -> WorldState {
     let choices = CreationChoices {
         name: "Vet".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "Brazilian",
-        club: "Riverside Town",
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     let mut s = WorldState::new();
     s = reduce(

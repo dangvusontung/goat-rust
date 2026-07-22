@@ -14,8 +14,8 @@ fn forward_choices() -> CreationChoices {
     CreationChoices {
         name: "Golden Forward".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "Brazilian",
-        club: "Local FC",
+        nationality: "Brazilian".to_string(),
+        club: "Local FC".to_string(),
     }
 }
 
@@ -94,8 +94,8 @@ fn golden_seed_777_defender() {
     let choices = CreationChoices {
         name: "Golden Defender".into(),
         primary_position: PrimaryPosition::CB,
-        nationality: "English",
-        club: "Academy United",
+        nationality: "English".to_string(),
+        club: "Academy United".to_string(),
     };
     let p = generate_player(777, &choices);
 

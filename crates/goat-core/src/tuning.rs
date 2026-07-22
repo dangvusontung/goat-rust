@@ -318,3 +318,28 @@ pub const RETIRE_AGE_HARD: u32 = 40;
 /// Eye-Test Romantics' raw "moments" signal (Design round 1, decision 2). First-pass
 /// number — tune later per TASK-TUNE convention, not guessed against real playtest data.
 pub const STANDOUT_OUTPUT_THRESHOLD: i32 = 78;
+
+// ── Team tactical identity (Design round 2, Doc B §B.1/§B.3) ───────────────────
+// First-pass placeholder numbers — flagged for a TASK-TUNE follow-up once playtested,
+// same convention as every other first-pass threshold in this file.
+
+/// `team_fit`'s best-role-under-this-lens score at/above this buckets to Natural.
+pub const TEAM_FIT_NATURAL_PCT: Fixed = Fixed::from_int(75);
+/// At/above this (below Natural) buckets to Competent.
+pub const TEAM_FIT_COMPETENT_PCT: Fixed = Fixed::from_int(55);
+/// At/above this (below Competent) buckets to Unconvincing; below it, Awkward.
+pub const TEAM_FIT_UNCONVINCING_PCT: Fixed = Fixed::from_int(35);
+
+/// Call-up probability (out of 100) at each `team_fit` tier — modulates the PC's base
+/// call-up odds from `ovr()`, never zeroing them out (non-blocking per the decision's own
+/// wording — a bad fit sits on the bench sometimes, isn't banned from the sport).
+pub const CALLUP_PCT_NATURAL: u32 = 90;
+pub const CALLUP_PCT_COMPETENT: u32 = 65;
+pub const CALLUP_PCT_UNCONVINCING: u32 = 35;
+pub const CALLUP_PCT_AWKWARD: u32 = 15;
+
+/// Starting-XI probability (out of 100) once called up, at each `team_fit` tier.
+pub const START_PCT_NATURAL: u32 = 85;
+pub const START_PCT_COMPETENT: u32 = 60;
+pub const START_PCT_UNCONVINCING: u32 = 30;
+pub const START_PCT_AWKWARD: u32 = 10;

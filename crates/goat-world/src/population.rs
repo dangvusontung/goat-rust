@@ -8,7 +8,7 @@
 //! same universe on every platform: that is the Phase 9 determinism spine, pinned by the
 //! `fingerprint` golden.
 
-use crate::world::{Nation, CLUBS, NUM_CLUBS};
+use crate::world::WorldGenesis;
 use goat_core::attrs::NUM_ATTRS;
 use goat_core::generation::{generate_player, CreationChoices};
 use goat_core::player::PlayerView;
@@ -20,12 +20,10 @@ use goat_rng::{GoatRng, RngSource};
 /// retired identity can never re-enter the live world as an active player.
 pub const RETIRE_AGE_YEARS: u32 = 38;
 
-/// Players generated per club at genesis. Headcount = `NUM_CLUBS * SQUAD_SIZE`; it scales
-/// directly with the club/nation count when the world expands to the full 20–30k pyramid.
+/// Players generated per club at genesis. Total headcount = `world.clubs.len() * SQUAD_SIZE`
+/// — scales directly with the generated club/nation count (~1,200 clubs → 30,000 players,
+/// the bible §7.2/§9 population target).
 pub const SQUAD_SIZE: usize = 25;
-
-/// Total background population at genesis.
-pub const POP_SIZE: usize = NUM_CLUBS * SQUAD_SIZE;
 
 /// Background population as parallel columns. Index `i` identifies one player across all
 /// columns — there is no per-player struct.
@@ -117,11 +115,12 @@ fn player_seed(world_seed: u64, club_id: u64, slot: u64) -> u64 {
 /// Generate the background population deterministically from `world_seed`. Every club
 /// gets a `SQUAD_SIZE` squad; potential is anchored to club stature (stronger clubs draw
 /// stronger players) with per-player variance. Pure and order-stable.
-pub fn genesis(world_seed: u64) -> Population {
+pub fn genesis(world_seed: u64, world: &WorldGenesis) -> Population {
     let mut pop = Population::default();
-    pop.seed.reserve(POP_SIZE);
+    pop.seed.reserve(world.clubs.len() * SQUAD_SIZE);
 
-    for (club_id, club) in CLUBS.iter().enumerate() {
+    for club in &world.clubs {
+        let club_id = club.id;
         for slot in 0..SQUAD_SIZE {
             let pseed = player_seed(world_seed, club_id as u64, slot as u64);
             let mut rng = GoatRng::new(pseed);
@@ -207,6 +206,7 @@ impl Population {
         idx: usize,
         elapsed_weeks: u32,
         name: impl Into<String>,
+        world: &WorldGenesis,
     ) -> Option<PlayerView> {
         if self.is_retired(idx, elapsed_weeks) {
             return None;
@@ -214,10 +214,8 @@ impl Population {
         let choices = CreationChoices {
             name: name.into(),
             primary_position: position_from_u8(self.position[idx]),
-            nationality: Nation::from_idx(self.nation[idx] as usize)
-                .map(|n| n.name())
-                .unwrap_or("England"),
-            club: CLUBS[self.club[idx] as usize].name,
+            nationality: world.nation_name(self.nation[idx] as usize).to_string(),
+            club: world.clubs[self.club[idx] as usize].name.clone(),
         };
         // generate_player gives the realistic per-attribute potential + shape + roles; we
         // overwrite current to the age-appropriate fraction of that potential.
@@ -234,14 +232,17 @@ impl Population {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::WorldGenesis;
 
     #[test]
     fn genesis_is_full_and_columnar() {
-        let pop = genesis(7);
-        assert_eq!(pop.len(), POP_SIZE);
+        let world = WorldGenesis::generate(7);
+        let pop = genesis(7, &world);
+        let expected = world.clubs.len() * SQUAD_SIZE;
+        assert_eq!(pop.len(), expected);
         // All columns are the same length (true SoA — no ragged rows).
-        assert_eq!(pop.club.len(), POP_SIZE);
-        assert_eq!(pop.potential_ovr.len(), POP_SIZE);
+        assert_eq!(pop.club.len(), expected);
+        assert_eq!(pop.potential_ovr.len(), expected);
         // Invariants on derived columns.
         assert!(pop.position.iter().all(|&p| p <= 2));
         assert!(pop.potential_ovr.iter().all(|&o| (30..=99).contains(&o)));
@@ -253,13 +254,16 @@ mod tests {
 
     #[test]
     fn genesis_is_deterministic() {
-        assert_eq!(genesis(42).fingerprint(), genesis(42).fingerprint());
-        assert_ne!(genesis(1).fingerprint(), genesis(2).fingerprint());
+        let world = WorldGenesis::generate(42);
+        assert_eq!(genesis(42, &world).fingerprint(), genesis(42, &world).fingerprint());
+        let world2 = WorldGenesis::generate(2);
+        assert_ne!(genesis(1, &world).fingerprint(), genesis(2, &world2).fingerprint());
     }
 
     #[test]
     fn background_current_never_exceeds_potential() {
-        let pop = genesis(7);
+        let world = WorldGenesis::generate(7);
+        let pop = genesis(7, &world);
         // Sweep every player across a 24-year span of dates.
         for idx in 0..pop.len() {
             for wk in (0..24 * 52).step_by(26) {
@@ -273,17 +277,19 @@ mod tests {
 
     #[test]
     fn background_rederive_is_deterministic() {
-        let pop = genesis(3);
+        let world = WorldGenesis::generate(3);
+        let pop = genesis(3, &world);
         assert_eq!(pop.current_ovr(100, 260), pop.current_ovr(100, 260));
-        let a = pop.promote(50, 6 * 52, "X").unwrap();
-        let b = pop.promote(50, 6 * 52, "X").unwrap();
+        let a = pop.promote(50, 6 * 52, "X", &world).unwrap();
+        let b = pop.promote(50, 6 * 52, "X", &world).unwrap();
         assert_eq!(a.current, b.current, "promote must be deterministic");
     }
 
     #[test]
     fn promoted_player_respects_talent_ceiling() {
-        let pop = genesis(9);
-        let view = pop.promote(50, 8 * 52, "Prospect").unwrap();
+        let world = WorldGenesis::generate(9);
+        let pop = genesis(9, &world);
+        let view = pop.promote(50, 8 * 52, "Prospect", &world).unwrap();
         for i in 0..NUM_ATTRS {
             assert!(
                 view.current[i] <= view.potential[i],
@@ -294,13 +300,14 @@ mod tests {
 
     #[test]
     fn lazy_promote_never_resurrects_retired() {
-        let pop = genesis(11);
+        let world = WorldGenesis::generate(11);
+        let pop = genesis(11, &world);
         let idx = 0;
         // Elapsed time that puts this player exactly at the retirement age.
         let elapsed = RETIRE_AGE_YEARS * 52 - pop.birth_age_weeks[idx];
         assert!(pop.is_retired(idx, elapsed));
         assert!(
-            pop.promote(idx, elapsed, "Veteran").is_none(),
+            pop.promote(idx, elapsed, "Veteran", &world).is_none(),
             "a retired player must never promote to an active view"
         );
     }

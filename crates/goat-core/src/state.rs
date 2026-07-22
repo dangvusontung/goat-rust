@@ -25,8 +25,8 @@ pub struct WorldState {
     pub pc_player_id: Option<PlayerId>,
     // ── Phase 3 ───────────────────────────────────────────────────────────────
     pub pc_routine: Routine,
-    pub pc_club: &'static str,
-    pub pc_nationality: &'static str,
+    pub pc_club: String,
+    pub pc_nationality: String,
     /// `PrimaryPosition as u8` (0..7 — one of the 8 specific positions, e.g. 0=ST, 7=CB;
     /// see `positions::PrimaryPosition`) — saved for load reconstruct.
     pub pc_position: u8,
@@ -54,8 +54,8 @@ pub struct WorldState {
     /// Cumulative output across PC's matches this season.
     pub pc_season_output: i32,
     /// League table raw data: [W, D, L, GF, GA] × CLUBS_PER_DIV.
-    /// Layout: table_raw[col * 16 + row_in_div] where col ∈ {0..4}.
-    pub table_raw: [u32; 80], // 5 × 16
+    /// Layout: table_raw[col * CLUBS_PER_DIV + row_in_div] where col ∈ {0..4}.
+    pub table_raw: [u32; 100], // 5 × CLUBS_PER_DIV(20)
     // ── Phase 6 discipline fields ─────────────────────────────────────────────
     /// Yellow cards in the current season (resets each season). 5 = ban.
     pub pc_yellow_cards_season: u32,
@@ -92,6 +92,16 @@ pub struct WorldState {
     /// This season's transfer-request count, live — folded into pc_career_transfer_requests
     /// only at ApplySeasonEndLegacy.
     pub pc_season_transfer_requests: u32,
+    // ── National-team caps (Design round 2, Doc B §B.4) ───────────────────────
+    /// National-team caps won, career-wide — a minimal legacy-evidence counter for the
+    /// call-up/tactical-fit layer. No school-weighting logic reads this yet.
+    pub pc_career_caps: u32,
+    /// This season's caps, live — folded into pc_career_caps only at ApplySeasonEndLegacy.
+    pub pc_season_caps: u32,
+    /// Goals scored while capped for the national team, career-wide.
+    pub pc_career_international_goals: u32,
+    /// This season's international goals, live — folded at ApplySeasonEndLegacy.
+    pub pc_season_international_goals: u32,
     // ── Phase 7 reputation scalars ────────────────────────────────────────────
     pub pc_sporting_rep: i32,
     pub pc_club_fan_rep: i32,
@@ -164,7 +174,7 @@ pub struct PeerState {
     /// Deterministic seed used for this peer's batch-tick progression.
     pub seed: u64,
     pub name: String,
-    pub nationality: &'static str,
+    pub nationality: String,
     /// Accumulated career goals (batch-ticked each season).
     pub career_goals: u32,
     /// Career matches (batch-ticked).
@@ -181,8 +191,8 @@ impl WorldState {
             players: PlayerStore::new(),
             pc_player_id: None,
             pc_routine: Routine::default(),
-            pc_club: "",
-            pc_nationality: "",
+            pc_club: String::new(),
+            pc_nationality: String::new(),
             pc_position: 0, // PrimaryPosition::ST default
             last_week_events: Vec::new(),
             last_week_growth: [Fixed::ZERO; NUM_ATTRS],
@@ -196,7 +206,7 @@ impl WorldState {
             pc_season_goals: 0,
             pc_season_matches: 0,
             pc_season_output: 0,
-            table_raw: [0u32; 80],
+            table_raw: [0u32; 100],
             pc_yellow_cards_season: 0,
             pc_suspension_weeks: 0,
             pc_discipline_rep: 50,
@@ -215,6 +225,10 @@ impl WorldState {
             pc_career_best_ovr: 0,
             pc_career_transfer_requests: 0,
             pc_season_transfer_requests: 0,
+            pc_career_caps: 0,
+            pc_season_caps: 0,
+            pc_career_international_goals: 0,
+            pc_season_international_goals: 0,
             pc_sporting_rep: 50,
             pc_club_fan_rep: 50,
             pc_contract_seasons_left: 2,
@@ -309,6 +323,10 @@ pub enum Intent {
         season_standout_matches: u32,
         /// AgitateForTransfer escalations this season.
         season_transfer_requests: u32,
+        /// National-team caps won this season (Design round 2, Doc B §B.4).
+        season_caps: u32,
+        /// International goals scored this season.
+        season_international_goals: u32,
     },
 
     // ── Phase 8 intents ───────────────────────────────────────────────────────
@@ -326,7 +344,7 @@ pub enum Intent {
         to_div_idx: u8,
         new_wage: i64,
         new_length: u32,
-        new_club_name: &'static str,
+        new_club_name: String,
         facilities_mult: Fixed,
         fee_bonus: i64, // fraction of fee paid to player (signing bonus)
     },
@@ -340,6 +358,18 @@ pub enum Intent {
     BatchTickPeers { season: u32 },
     /// Declare a rival (crystallised from cohort).
     DeclareRival { peer_idx: usize, season: u32 },
+
+    // ── Design round 2, Doc B — national-team call-ups ────────────────────────
+    /// Record the outcome of one international-break call-up window (rolled by the
+    /// renderer against `tactical_identity::team_fit`; core just records the result —
+    /// non-blocking per the decision's own wording, this never hard-gates anything).
+    /// A no-call-up window still fires this intent with `called_up: false` so the
+    /// season-live counters stay consistent even when nothing happened.
+    NationalTeamCallUp {
+        called_up: bool,
+        started: bool,
+        goals: u32,
+    },
 
     // ── Phase 10 intents ──────────────────────────────────────────────────────
     // Lifestyle is no longer a settable intent (bible §8.5/§8.6) — it is derived
@@ -382,7 +412,7 @@ pub enum Intent {
         pc_div_idx: u8,
         facilities_mult: Fixed,
         /// Flat table raw data for the PC's division (initialised to all zeros).
-        initial_table: Box<[u32; 80]>,
+        initial_table: Box<[u32; 100]>,
     },
 
     /// Start a new season. Resets round counter, clears PC season stats.
@@ -550,12 +580,16 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             new_club_fan_rep,
             season_standout_matches,
             season_transfer_requests,
+            season_caps,
+            season_international_goals,
         } => {
             state.pc_career_goals += season_goals;
             state.pc_career_matches += season_matches;
             state.pc_career_output_sum += season_output_sum as i64;
             state.pc_career_standout_matches += season_standout_matches;
             state.pc_career_transfer_requests += season_transfer_requests;
+            state.pc_career_caps += season_caps;
+            state.pc_career_international_goals += season_international_goals;
             // Career-peak OVR: computed here, not staged — a "peak so far" check is
             // naturally season-cadenced, no per-match staging needed.
             if let Some(pc_id) = state.pc_player_id {
@@ -774,6 +808,20 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state
         }
 
+        Intent::NationalTeamCallUp {
+            called_up,
+            started,
+            goals,
+        } => {
+            if called_up {
+                state.pc_season_caps += 1;
+                if started {
+                    state.pc_season_international_goals += goals;
+                }
+            }
+            state
+        }
+
         // ── Phase 10 handlers ────────────────────────────────────────────────────
         Intent::Retire => {
             state.pc_retired = true;
@@ -822,9 +870,11 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_season_output = 0;
             state.pc_season_standout_matches = 0;
             state.pc_season_transfer_requests = 0;
+            state.pc_season_caps = 0;
+            state.pc_season_international_goals = 0;
             state.pc_yellow_cards_season = 0; // reset yellow cards each season
                                               // Preserve table from last season? No — start fresh each season.
-            state.table_raw = [0u32; 80];
+            state.table_raw = [0u32; 100];
 
             // ── Off-season back-fill: every season-year is exactly 52 weeks ──
             // In-season play ticks ~41 weeks (one per round + skipped breaks);
@@ -873,7 +923,8 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                     state.pc_week_training_done = true;
                 }
             }
-            const N: usize = 16; // CLUBS_PER_DIV
+            const N: usize = 20; // CLUBS_PER_DIV (goat-core stays headless — can't import
+                                  // goat_world::CLUBS_PER_DIV — kept in sync by hand)
 
             // Update PC season stats.
             state.pc_season_goals += pc_goals;
@@ -893,7 +944,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
 
             // Update table raw data.
             // Layout: table_raw[col * N + row] where col ∈ {W=0, D=1, L=2, GF=3, GA=4}
-            let apply_result = |raw: &mut [u32; 80],
+            let apply_result = |raw: &mut [u32; 100],
                                 home_pos: usize,
                                 away_pos: usize,
                                 home_gf: u32,
@@ -1108,7 +1159,7 @@ mod tests {
         };
         let id = state.players.push(view);
         state.pc_player_id = Some(id);
-        state.pc_club = "Riverside Town";
+        state.pc_club = "Riverside Town".to_string();
         id
     }
 

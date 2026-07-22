@@ -373,7 +373,7 @@ pub struct MatchSetup {
     pub player_familiarity: [FamiliarityTier; NUM_ROLES],
     pub own_strength: u8,
     pub opp_strength: u8,
-    pub opp_name: &'static str,
+    pub opp_name: String,
     pub form: Fixed,
     pub player_aggression: u8,
     pub ref_personality: RefPersonality,

@@ -24,8 +24,8 @@ fn new_career(seed: u64) -> WorldState {
     let choices = CreationChoices {
         name: "Clockwork".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "English",
-        club: "Local FC",
+        nationality: "English".to_string(),
+        club: "Local FC".to_string(),
     };
     let mut s = WorldState::new();
     s = reduce(

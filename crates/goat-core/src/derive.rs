@@ -253,8 +253,8 @@ mod tests {
         let c = CreationChoices {
             name: "T".into(),
             primary_position: PrimaryPosition::ST,
-            nationality: "English",
-            club: "Local FC",
+            nationality: "English".to_string(),
+            club: "Local FC".to_string(),
         };
         let players: Vec<_> = (0u64..5).map(|s| generate_player(s, &c)).collect();
         let ovrs: Vec<i32> = players

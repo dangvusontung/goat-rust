@@ -25,8 +25,7 @@ use goat_traits::PlayerTraits;
 const BEATS_JSON: &str = include_str!("../../../beats.json");
 use goat_world::{
     fixture_for_round, rest_weeks_after_round, round_fixtures, sim_team_match,
-    week_ends_after_round, Table, BASE_CAREER_YEAR, CLUBS, DIV_CLUBS, DIV_ENG_SEC,
-    ROUNDS_PER_SEASON,
+    week_ends_after_round, world::WorldGenesis, Table, BASE_CAREER_YEAR, ROUNDS_PER_SEASON,
 };
 
 // ── Position selector ─────────────────────────────────────────────────────────
@@ -218,8 +217,8 @@ fn scan_star_seed(limit: u64, sim_pos: SimPos) -> Option<u64> {
     let choices = CreationChoices {
         name: "Prospect".into(),
         primary_position: sim_pos.to_position(),
-        nationality: "England",
-        club: "Leeds United",
+        nationality: "England".to_string(),
+        club: "Leeds United".to_string(),
     };
     let mut best: Option<(u64, i32)> = None;
     for seed in 0..limit {
@@ -287,8 +286,8 @@ fn main() {
         let choices = CreationChoices {
             name: "Striker".into(),
             primary_position: PrimaryPosition::ST,
-            nationality: "Brazilian",
-            club: "Riverside Town",
+            nationality: "Brazilian".to_string(),
+            club: "Riverside Town".to_string(),
         };
         let pl = generate_player(seed, &choices);
         let aggression = pl.current[AttrId::Aggression as usize]
@@ -302,7 +301,7 @@ fn main() {
             player_familiarity: pl.familiarity,
             own_strength: 75,
             opp_strength: opp_str,
-            opp_name: "Rivals FC",
+            opp_name: "Rivals FC".to_string(),
             form: Fixed::from_int(65),
             player_aggression: aggression,
             ref_personality: RefPersonality::from_rng(&mut rp_rng),
@@ -355,17 +354,19 @@ fn main() {
         let p = args.iter().position(|a| a == "--season-beats").unwrap();
         let seed: u64 = args.get(p + 1).and_then(|s| s.parse().ok()).unwrap_or(7);
         use goat_match::beats::ScoreEvent;
-        use goat_world::DIV_ENG_SEC;
 
         let lib = BeatLibrary::load(BEATS_JSON).expect("beats.json must parse");
-        let pc_club_id = DIV_CLUBS[DIV_ENG_SEC][0];
-        let div_idx = DIV_ENG_SEC;
-        let div_clubs = DIV_CLUBS[div_idx];
+        let world = WorldGenesis::generate(seed);
+        // Second tier of the first generated nation — analogous to the old hardcoded
+        // England Championship slot (DIV_ENG_SEC).
+        let div_idx = 1;
+        let div_clubs = world.leagues[div_idx].clubs.clone();
+        let pc_club_id = div_clubs[0];
         let choices = CreationChoices {
             name: "Tung".into(),
             primary_position: PrimaryPosition::ST,
-            nationality: "England",
-            club: CLUBS[pc_club_id].name,
+            nationality: "England".to_string(),
+            club: world.clubs[pc_club_id].name.clone(),
         };
 
         let mut state = WorldState::new();
@@ -380,8 +381,8 @@ fn main() {
                 world_seed: seed,
                 pc_club_idx: pc_club_id as u16,
                 pc_div_idx: div_idx as u8,
-                facilities_mult: CLUBS[pc_club_id].facilities_mult(),
-                initial_table: Box::new([0u32; 80]),
+                facilities_mult: world.clubs[pc_club_id].facilities_mult(),
+                initial_table: Box::new([0u32; 100]),
             },
             &mut GoatRng::new(0),
         );
@@ -393,7 +394,7 @@ fn main() {
         state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
         let pc_id = state.pc_player_id.unwrap();
 
-        println!("BEAT SEASON — {} (seed {seed})\n", CLUBS[pc_club_id].name);
+        println!("BEAT SEASON — {} (seed {seed})\n", world.clubs[pc_club_id].name);
         println!("  Rd  Opponent           Score  Res  Out  Gls  Cards");
         println!("  {}", "─".repeat(52));
 
@@ -407,7 +408,7 @@ fn main() {
                 state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(rng_seed));
             }
 
-            let all_fixtures = round_fixtures(seed, 1, div_idx, round);
+            let all_fixtures = round_fixtures(seed, 1, div_idx, &div_clubs, round);
             let pc_fix = all_fixtures
                 .iter()
                 .find(|f| f.home == pc_club_id || f.away == pc_club_id);
@@ -428,9 +429,9 @@ fn main() {
                 player_role: RoleId::CompleteForward,
                 player_attrs: view.current,
                 player_familiarity: view.familiarity,
-                own_strength: CLUBS[pc_club_id].strength,
-                opp_strength: CLUBS[opp].strength,
-                opp_name: CLUBS[opp].name,
+                own_strength: world.clubs[pc_club_id].strength,
+                opp_strength: world.clubs[opp].strength,
+                opp_name: world.clubs[opp].name.clone(),
                 form: state.pc_form,
                 player_aggression: aggression,
                 ref_personality: RefPersonality::from_rng(&mut rp_rng),
@@ -494,7 +495,11 @@ fn main() {
                 } else if f.away == pc_club_id {
                     (ga, gf)
                 } else {
-                    sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng)
+                    sim_team_match(
+                        world.clubs[f.home].strength,
+                        world.clubs[f.away].strength,
+                        &mut sim_rng,
+                    )
                 };
                 let h = div_clubs.iter().position(|&c| c == f.home).unwrap() as u8;
                 let a = div_clubs.iter().position(|&c| c == f.away).unwrap() as u8;
@@ -523,7 +528,7 @@ fn main() {
             println!(
                 "  {:>2}  {:<18} {:>2}-{:<2}  {:^3}  {:>3}  {:>3}  {}",
                 round + 1,
-                CLUBS[opp].name,
+                world.clubs[opp].name,
                 gf,
                 ga,
                 res,
@@ -551,12 +556,13 @@ fn main() {
         println!("  {}", "─".repeat(52));
         println!("\n  SEASON SUMMARY");
         println!(
-            "  Played {played}  W{w} D{d} L{l}  |  Goals {tot_goals}  |  League position {pos}/16"
+            "  Played {played}  W{w} D{d} L{l}  |  Goals {tot_goals}  |  League position {pos}/{}",
+            div_clubs.len()
         );
         println!("  Output: avg {avg}  min {min_o}  max {max_o}   Cards: {yel}Y {red}R");
 
         // ── Final league table (the record table) ────────────────────────────
-        println!("\n  FINAL TABLE — England, Championship");
+        println!("\n  FINAL TABLE — {}", world.leagues[div_idx].name);
         println!(
             "  {:<3} {:<18} {:>2} {:>2} {:>2} {:>2} {:>3} {:>3} {:>4} {:>3}",
             "#", "Club", "P", "W", "D", "L", "GF", "GA", "GD", "Pts"
@@ -568,7 +574,7 @@ fn main() {
                 "{}{:>2} {:<18} {:>2} {:>2} {:>2} {:>2} {:>3} {:>3} {:>+4} {:>3}",
                 mark,
                 i + 1,
-                CLUBS[e.club_id].name,
+                world.clubs[e.club_id].name,
                 e.played(),
                 e.w,
                 e.d,
@@ -598,8 +604,8 @@ fn main() {
         let choices = CreationChoices {
             name: "Striker".into(),
             primary_position: PrimaryPosition::ST,
-            nationality: "Brazilian",
-            club: "Riverside Town",
+            nationality: "Brazilian".to_string(),
+            club: "Riverside Town".to_string(),
         };
         let p = generate_player(seed, &choices);
         let player_ovr = ovr(&p.current, p.primary_position).to_int();
@@ -626,7 +632,7 @@ fn main() {
                 player_familiarity: p.familiarity,
                 own_strength,
                 opp_strength,
-                opp_name: "Rivals FC",
+                opp_name: "Rivals FC".to_string(),
                 form: Fixed::from_int(60),
                 player_aggression: aggression,
                 ref_personality: RefPersonality::from_rng(&mut rp_rng),
@@ -709,7 +715,8 @@ fn main() {
             .and_then(|i| args.get(i + 1))
             .and_then(|s| s.parse().ok())
             .unwrap_or(42);
-        let pop = goat_world::population::genesis(seed);
+        let world = WorldGenesis::generate(seed);
+        let pop = goat_world::population::genesis(seed, &world);
         println!(
             "GENESIS seed={seed}  players={}  fingerprint=0x{:016x}",
             pop.len(),
@@ -726,7 +733,8 @@ fn main() {
             .and_then(|i| args.get(i + 1))
             .and_then(|s| s.parse().ok())
             .unwrap_or(42);
-        let h = goat_world::history::backfill_history(seed, 30);
+        let world = WorldGenesis::generate(seed);
+        let h = goat_world::history::backfill_history(seed, 30, &world);
         println!("PANTHEON CANON (seed {seed}, 30 backfilled seasons)");
         println!(
             "  {:<22} {:<10} {:>4}  {:>4}",
@@ -737,7 +745,7 @@ fn main() {
             println!(
                 "  {:<22} {:<10} {:>4}  {:>4}",
                 g.name,
-                goat_world::history::great_nation_name(g.nationality),
+                goat_world::history::great_nation_name(g.nationality, &world),
                 g.ballon_dors,
                 g.peak_ovr
             );
@@ -753,9 +761,11 @@ fn main() {
             .and_then(|i| args.get(i + 1))
             .and_then(|s| s.parse().ok())
             .unwrap_or(42);
-        let mut pop = goat_world::population::genesis(seed);
+        let world = WorldGenesis::generate(seed);
+        let league_clubs = world.static_league_clubs();
+        let mut pop = goat_world::population::genesis(seed, &world);
         for s in 1..=14u32 {
-            goat_world::batch_tick::batch_tick_season(&mut pop, seed, s, s * 52);
+            goat_world::batch_tick::batch_tick_season(&mut pop, &world, &league_clubs, seed, s, s * 52);
         }
         // A representative mid-tier PC career to set the bar.
         match goat_world::rival::crystallise_rival(&pop, 16 * 52, 200, 5) {
@@ -787,23 +797,25 @@ fn main() {
             .unwrap_or(300);
         let pc_titles: u32 = args.get(pos + 4).and_then(|s| s.parse().ok()).unwrap_or(8);
 
-        let mut pop = goat_world::population::genesis(seed);
+        let world = WorldGenesis::generate(seed);
+        let league_clubs = world.static_league_clubs();
+        let mut pop = goat_world::population::genesis(seed, &world);
         for s in 1..=seasons {
-            goat_world::batch_tick::batch_tick_season(&mut pop, seed, s, s * 52);
+            goat_world::batch_tick::batch_tick_season(&mut pop, &world, &league_clubs, seed, s, s * 52);
         }
 
         // All-time top scorer of the run.
         let top = (0..pop.len()).max_by_key(|&i| pop.career_goals[i]).unwrap();
         // Most-titled club (sum of its squad's titles).
-        let mut club_titles = [0u32; goat_world::world::NUM_CLUBS];
+        let mut club_titles = vec![0u32; world.clubs.len()];
         for i in 0..pop.len() {
             club_titles[pop.club[i] as usize] += pop.career_titles[i];
         }
-        let top_club = (0..goat_world::world::NUM_CLUBS)
+        let top_club = (0..world.clubs.len())
             .max_by_key(|&c| club_titles[c])
             .unwrap();
         // Pantheon GOAT from the backfilled canon.
-        let hist = goat_world::history::backfill_history(seed, 30);
+        let hist = goat_world::history::backfill_history(seed, 30, &world);
         let goat = hist.canon_ranked()[0];
         // Emergent rival vs a representative mid-tier PC.
         let rival = match goat_world::rival::crystallise_rival(&pop, 16 * 52, pc_goals, pc_titles) {
@@ -820,11 +832,11 @@ fn main() {
             "WORLD topscorer=\"{}\" goals={} club=\"{}\"",
             goat_world::history::name_from_seed(pop.seed[top]),
             pop.career_goals[top],
-            CLUBS[pop.club[top] as usize].name
+            world.clubs[pop.club[top] as usize].name
         );
         println!(
             "WORLD mosttitles_club=\"{}\" titles={}",
-            CLUBS[top_club].name, club_titles[top_club]
+            world.clubs[top_club].name, club_titles[top_club]
         );
         println!(
             "WORLD pantheon_goat=\"{}\" ballondors={} peak={}",
@@ -849,8 +861,8 @@ fn main() {
         let choices = CreationChoices {
             name: "X".into(),
             primary_position: sim_pos.to_position(),
-            nationality: "England",
-            club: "Leeds United",
+            nationality: "England".to_string(),
+            club: "Leeds United".to_string(),
         };
         let (_, _, _, min1, min2, min_sup) = sim_pos.scan_criteria();
         let mut hits: Vec<(u64, i32, i32, i32, i32)> = Vec::new();
@@ -887,14 +899,17 @@ fn main() {
         found.unwrap_or(42)
     };
 
-    let pc_club_id = DIV_CLUBS[DIV_ENG_SEC][0]; // Leeds United
-    let div_idx = DIV_ENG_SEC;
+    let world = WorldGenesis::generate(seed);
+    // Second tier of the first generated nation — analogous to the old hardcoded
+    // England Championship slot (DIV_ENG_SEC).
+    let div_idx = 1;
+    let pc_club_id = world.leagues[div_idx].clubs[0];
 
     let choices = CreationChoices {
         name: "Tung".into(),
         primary_position: sim_pos.to_position(),
-        nationality: "England",
-        club: CLUBS[pc_club_id].name,
+        nationality: "England".to_string(),
+        club: world.clubs[pc_club_id].name.clone(),
     };
 
     let mut state = WorldState::new();
@@ -909,8 +924,8 @@ fn main() {
             world_seed: seed,
             pc_club_idx: pc_club_id as u16,
             pc_div_idx: div_idx as u8,
-            facilities_mult: CLUBS[pc_club_id].facilities_mult(),
-            initial_table: Box::new([0u32; 80]),
+            facilities_mult: world.clubs[pc_club_id].facilities_mult(),
+            initial_table: Box::new([0u32; 100]),
         },
         &mut GoatRng::new(0),
     );
@@ -952,7 +967,7 @@ fn main() {
 
         let season_div_idx = state.pc_div_idx as usize;
         let season_pc_club = state.pc_club_idx as usize;
-        let div_clubs = DIV_CLUBS[season_div_idx];
+        let div_clubs = world.leagues[season_div_idx].clubs.clone();
 
         for round in 0..ROUNDS_PER_SEASON {
             for t in 0u64..2 {
@@ -964,15 +979,18 @@ fn main() {
                 }
             }
 
-            let all_fixtures = round_fixtures(seed, season, season_div_idx, round);
+            let all_fixtures = round_fixtures(seed, season, season_div_idx, &div_clubs, round);
             let mut sim_rng = GoatRng::new(seed ^ ((season as u64) << 32) ^ (round as u64));
             let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
             let mut pc_gf = 0u32;
             let mut pc_ga = 0u32;
 
             for f in &all_fixtures {
-                let (gf, ga) =
-                    sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng);
+                let (gf, ga) = sim_team_match(
+                    world.clubs[f.home].strength,
+                    world.clubs[f.away].strength,
+                    &mut sim_rng,
+                );
                 let h_pos = div_clubs.iter().position(|&c| c == f.home).unwrap() as u8;
                 let a_pos = div_clubs.iter().position(|&c| c == f.away).unwrap() as u8;
                 round_results.push((h_pos, a_pos, gf, ga));
@@ -986,7 +1004,7 @@ fn main() {
             }
 
             let pc_output =
-                match fixture_for_round(seed, season, season_div_idx, season_pc_club, round) {
+                match fixture_for_round(seed, season, season_div_idx, &div_clubs, season_pc_club, round) {
                     Some(_) => {
                         let form_val = state.pc_form.to_int() as u64;
                         let mut out_rng =
@@ -1084,6 +1102,8 @@ fn main() {
                 new_club_fan_rep,
                 season_standout_matches: s_standout_matches,
                 season_transfer_requests: s_transfer_requests,
+                season_caps: 0,
+                season_international_goals: 0,
             },
             &mut GoatRng::new(0),
         );
@@ -1122,7 +1142,7 @@ fn main() {
             "{}  ·  {}  ·  {}  ·  Seed {seed}",
             final_view.name,
             sim_pos.label(),
-            CLUBS[pc_club_id].name
+            world.clubs[pc_club_id].name
         ),
         width = w
     );
@@ -1245,8 +1265,11 @@ fn main() {
     println!("  age");
 
     // ── 4. League position ────────────────────────────────────────────────────
-    println!("\n  LEAGUE POSITION  (1=champion, 16=bottom, ★=title)");
-    for pos in [1usize, 4, 8, 12, 16] {
+    println!(
+        "\n  LEAGUE POSITION  (1=champion, {}=bottom, ★=title)",
+        goat_world::CLUBS_PER_DIV
+    );
+    for pos in [1usize, 5, 10, 15, goat_world::CLUBS_PER_DIV] {
         print!("  {:>2} │", pos);
         for s in &snaps {
             let marker = if s.table_pos == pos {

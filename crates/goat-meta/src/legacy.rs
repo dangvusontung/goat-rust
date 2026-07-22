@@ -31,6 +31,13 @@ pub struct LegacyEvidence {
     pub career_best_ovr: i32,
     /// Cumulative count of AgitateForTransfer escalations, career-wide.
     pub career_transfer_requests: u32,
+    /// National-team caps won, career-wide (Design round 2, Doc B §B.4) — a minimal
+    /// legacy-evidence counter for the new call-up/tactical-fit layer so international
+    /// honors aren't entirely disconnected from the Pantheon. No school-weighting logic
+    /// reads this yet (out of scope this round); it's raw evidence for a future axis pass.
+    pub career_caps: u32,
+    /// Goals scored while capped for the national team, career-wide.
+    pub career_international_goals: u32,
 }
 
 /// The 7+1 legacy axes (all 0–100 Fixed).

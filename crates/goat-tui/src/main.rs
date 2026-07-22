@@ -40,8 +40,9 @@ use goat_save::save::{
 };
 use goat_traits::PlayerTraits;
 use goat_world::{
-    fixture_for_round, format_week_header, round_fixtures, round_to_week, sim_team_match, Table,
-    BASE_CAREER_YEAR, CLUBS, CLUBS_PER_DIV, DIV_CLUBS, DIV_NAMES, DIV_NATIONS, ROUNDS_PER_SEASON,
+    fixture_for_round, format_week_header, round_fixtures, round_to_week, sim_team_match,
+    world::WorldGenesis, Table, BASE_CAREER_YEAR, CLUBS_PER_DIV, NUM_NATIONS, ROUNDS_PER_SEASON,
+    TIERS_PER_NATION,
 };
 
 const SAVE_DIR: &str = "saves";
@@ -92,13 +93,15 @@ fn main() {
                                 match load_from_file(slot_path(SAVE_DIR, slot)) {
                                     Ok(data) => {
                                         writeln!(out, "  Save loaded.").unwrap();
-                                        let state = to_world_state(&data);
+                                        let world = WorldGenesis::generate(data.world_seed);
+                                        let state = to_world_state(&data, &world);
                                         run_game_loop(
                                             &mut lines,
                                             &mut out,
                                             state,
                                             &beat_lib,
                                             PlayerTraits::default(),
+                                            &world,
                                         );
                                     }
                                     Err(e) => writeln!(out, "  Load failed: {e}").unwrap(),
@@ -156,53 +159,9 @@ fn run_new_game(
         .unwrap();
     };
 
-    // Pick nation
-    writeln!(out, "\nPick a nation:\n  1. England\n  2. Brazil").unwrap();
-    let nation_idx: usize = loop {
-        match prompt_or_exit(lines, out, "Choice [1-2]").trim() {
-            "1" => break 0, // England = DIV_ENG_TOP / DIV_ENG_SEC
-            "2" => break 2, // Brazil = DIV_BRA_TOP / DIV_BRA_SEC
-            _ => writeln!(out, "  Please enter 1 or 2.").unwrap(),
-        }
-    };
-
-    // Pick division (two per nation)
-    let div_a = nation_idx;
-    let div_b = nation_idx + 1;
-    writeln!(
-        out,
-        "\nPick a division:\n  1. {} (top)\n  2. {} (second)",
-        DIV_NAMES[div_a], DIV_NAMES[div_b]
-    )
-    .unwrap();
-    let div_idx: usize = loop {
-        match prompt_or_exit(lines, out, "Choice [1-2]").trim() {
-            "1" => break div_a,
-            "2" => break div_b,
-            _ => writeln!(out, "  Please enter 1 or 2.").unwrap(),
-        }
-    };
-
-    // Pick club from that division
-    writeln!(out, "\nPick a club:").unwrap();
-    let div_club_ids = DIV_CLUBS[div_idx];
-    for (i, &cid) in div_club_ids.iter().enumerate() {
-        let club = &CLUBS[cid];
-        let stars = "*".repeat(((club.strength as usize).div_ceil(20)).clamp(1, 5));
-        writeln!(out, "  {:2}. {:<22} {}", i + 1, club.name, stars).unwrap();
-    }
-    let club_pos: usize = loop {
-        let s = prompt_or_exit(lines, out, &format!("Choice [1-{}]", CLUBS_PER_DIV));
-        if let Ok(n) = s.trim().parse::<usize>() {
-            if (1..=CLUBS_PER_DIV).contains(&n) {
-                break n - 1;
-            }
-        }
-        writeln!(out, "  Invalid choice.").unwrap();
-    };
-    let club_id = div_club_ids[club_pos];
-    let club = &CLUBS[club_id];
-
+    // The seed must be picked before nation/club selection: club/nation identity is
+    // generated from `world_seed` (Design round 2, Doc A), so the world has to exist
+    // before the player can browse it.
     let seed = loop {
         let s = prompt_or_exit(lines, out, "Seed (Enter = random)");
         if s.trim().is_empty() {
@@ -218,16 +177,76 @@ fn run_new_game(
         writeln!(out, "  Enter a number or press Enter.").unwrap();
     };
 
-    let nationality = DIV_NATIONS[div_idx].name();
+    let world = WorldGenesis::generate(seed);
+
+    // Pick nation
+    writeln!(out, "\nPick a nation:").unwrap();
+    for (i, n) in world.nations.iter().enumerate() {
+        writeln!(out, "  {:2}. {:<16} (stature {})", i + 1, n.name, n.stature).unwrap();
+    }
+    let nation_idx: usize = loop {
+        let s = prompt_or_exit(lines, out, &format!("Choice [1-{NUM_NATIONS}]"));
+        if let Ok(n) = s.trim().parse::<usize>() {
+            if (1..=NUM_NATIONS).contains(&n) {
+                break n - 1;
+            }
+        }
+        writeln!(out, "  Please enter a number between 1 and {NUM_NATIONS}.").unwrap();
+    };
+
+    // Pick tier (every nation has TIERS_PER_NATION tiers this round — uniform pyramids).
+    writeln!(out, "\nPick a division:").unwrap();
+    for tier_idx in 0..TIERS_PER_NATION {
+        let league_id = nation_idx * TIERS_PER_NATION + tier_idx;
+        writeln!(out, "  {}. {}", tier_idx + 1, world.leagues[league_id].name).unwrap();
+    }
+    let div_idx: usize = loop {
+        let s = prompt_or_exit(lines, out, &format!("Choice [1-{TIERS_PER_NATION}]"));
+        if let Ok(n) = s.trim().parse::<usize>() {
+            if (1..=TIERS_PER_NATION).contains(&n) {
+                break nation_idx * TIERS_PER_NATION + (n - 1);
+            }
+        }
+        writeln!(
+            out,
+            "  Please enter a number between 1 and {TIERS_PER_NATION}."
+        )
+        .unwrap();
+    };
+
+    // Pick club from that division
+    writeln!(out, "\nPick a club:").unwrap();
+    let div_club_ids = world.leagues[div_idx].clubs.clone();
+    for (i, &cid) in div_club_ids.iter().enumerate() {
+        let club = &world.clubs[cid];
+        let stars = "*".repeat(((club.strength as usize).div_ceil(20)).clamp(1, 5));
+        writeln!(out, "  {:2}. {:<22} {}", i + 1, club.name, stars).unwrap();
+    }
+    let club_pos: usize = loop {
+        let s = prompt_or_exit(lines, out, &format!("Choice [1-{}]", CLUBS_PER_DIV));
+        if let Ok(n) = s.trim().parse::<usize>() {
+            if (1..=CLUBS_PER_DIV).contains(&n) {
+                break n - 1;
+            }
+        }
+        writeln!(out, "  Invalid choice.").unwrap();
+    };
+    let club_id = div_club_ids[club_pos];
+
+    let nationality = world.nation_name(world.clubs[club_id].nation).to_string();
+    let club_name = world.clubs[club_id].name.clone();
     let choices = CreationChoices {
         name,
         primary_position,
-        nationality,
-        club: club.name,
+        nationality: nationality.clone(),
+        club: club_name,
     };
 
     let mut effective_seed = seed;
     loop {
+        // Re-roll regenerates the *player* from a new identity seed but keeps the
+        // already-chosen world/nation/club (the world itself only ever regenerates
+        // from `world_seed`, which the player picked above and does not re-roll).
         let player = generate_player(effective_seed, &choices);
         // Lifestyle is not yet determined at creation time (every career starts
         // Balanced) — pass the default tier for the preview sheet.
@@ -254,17 +273,22 @@ fn run_new_game(
                     state = reduce(
                         state,
                         Intent::InitWorld {
-                            world_seed: effective_seed,
+                            // The *world's* seed — must stay `seed` (what `world` was
+                            // generated from above), not `effective_seed` (which a re-roll
+                            // may have changed): the world was already displayed/chosen
+                            // from `seed`, so persisting anything else would regenerate a
+                            // different world on next load.
+                            world_seed: seed,
                             pc_club_idx: club_id as u16,
                             pc_div_idx: div_idx as u8,
-                            facilities_mult: club.facilities_mult(),
-                            initial_table: Box::new([0u32; 80]),
+                            facilities_mult: world.clubs[club_id].facilities_mult(),
+                            initial_table: Box::new([0u32; 100]),
                         },
                         &mut GoatRng::new(0),
                     );
 
                     // Seed peer cohort (Phase 9).
-                    let peers = build_peer_cohort(effective_seed, DIV_NATIONS[div_idx].name());
+                    let peers = build_peer_cohort(effective_seed, &nationality);
                     state = reduce(state, Intent::InitPeers { peers }, &mut GoatRng::new(0));
 
                     // Roll hidden trait ceilings from creation seed (§A.3 aptitude).
@@ -275,7 +299,7 @@ fn run_new_game(
                     );
 
                     state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
-                    run_game_loop(lines, out, state, beat_lib, pc_traits);
+                    run_game_loop(lines, out, state, beat_lib, pc_traits, &world);
                     return;
                 }
                 "R" | "REROLL" | "RE-ROLL" => {
@@ -301,6 +325,7 @@ fn run_game_loop(
     mut state: WorldState,
     beat_lib: &BeatLibrary,
     pc_traits: PlayerTraits,
+    world: &WorldGenesis,
 ) {
     // Season number for which the season-end pipeline (wage collection, awards,
     // legacy accrual, peer batch-tick, transfer window, contract renewal, retirement
@@ -341,13 +366,13 @@ fn run_game_loop(
             // double-credit career legacy stats.
             if season_end_done_for != Some(state.season_number) {
                 let view = state.players.snapshot(pc_id);
-                render_season_review(out, &state, &view);
+                render_season_review(out, &state, &view, world);
 
                 // Collect annual wage.
                 state = reduce(state, Intent::CollectWage, &mut GoatRng::new(0));
 
                 // Awards night + pundit reactions + legacy update.
-                state = run_awards_and_pundits(out, state, &view);
+                state = run_awards_and_pundits(out, state, &view, world);
 
                 // Phase 9: batch-tick peers and check rival crystallisation.
                 let season = state.season_number;
@@ -377,7 +402,7 @@ fn run_game_loop(
                 }
 
                 // Phase 8: transfer window and contract renewal.
-                state = run_transfer_window(lines, out, state, &view);
+                state = run_transfer_window(lines, out, state, &view, world);
                 if state.pc_contract_seasons_left == 0 {
                     state = run_contract_negotiation(lines, out, state);
                 }
@@ -499,13 +524,13 @@ fn run_game_loop(
                 }
                 "S" => state = run_set_routine(lines, out, state),
                 "P" if has_season => {
-                    state = run_next_round(lines, out, state, true, beat_lib, pc_traits)
+                    state = run_next_round(lines, out, state, true, beat_lib, pc_traits, world)
                 }
                 "K" if has_season => {
-                    state = run_next_round(lines, out, state, false, beat_lib, pc_traits)
+                    state = run_next_round(lines, out, state, false, beat_lib, pc_traits, world)
                 }
-                "T" if has_season => render_table(out, &state),
-                "U" => render_world_screen(out, &state),
+                "T" if has_season => render_table(out, &state, world),
+                "U" => render_world_screen(out, &state, world),
                 "G" if has_season => {
                     let ev = build_legacy_evidence(&state);
                     render_legacy_screen(out, &ev, &state);
@@ -518,8 +543,8 @@ fn run_game_loop(
                         name: view.name.clone(),
                         primary_position: PrimaryPosition::from_u8(state.pc_position)
                             .unwrap_or(PrimaryPosition::ST),
-                        nationality: state.pc_nationality,
-                        club: state.pc_club,
+                        nationality: state.pc_nationality.clone(),
+                        club: state.pc_club.clone(),
                     };
                     render_player_sheet(out, &view, &choices, 0, state.pc_lifestyle);
                 }
@@ -539,6 +564,7 @@ fn run_next_round(
     play_interactive: bool,
     beat_lib: &BeatLibrary,
     pc_traits: PlayerTraits,
+    world: &WorldGenesis,
 ) -> WorldState {
     let pc_id = match state.pc_player_id {
         Some(id) => id,
@@ -554,6 +580,7 @@ fn run_next_round(
     let div_idx = state.pc_div_idx as usize;
     let pc_club_id = state.pc_club_idx as usize;
     let world_seed = state.world_seed;
+    let div_clubs = world.leagues[div_idx].clubs.clone();
 
     let week_label = format_week_header(BASE_CAREER_YEAR + season - 1, round_to_week(round));
     writeln!(
@@ -576,15 +603,18 @@ fn run_next_round(
         )
         .unwrap();
         // Still need to sim other matches and advance the round.
-        let all_fixtures = round_fixtures(world_seed, season, div_idx, round);
+        let all_fixtures = round_fixtures(world_seed, season, div_idx, &div_clubs, round);
         let sim_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
         let mut sim_rng = GoatRng::new(sim_seed);
         let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
         for f in &all_fixtures {
-            let (gf, ga) =
-                sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng);
-            let h_pos = club_div_pos_in(div_idx, f.home) as u8;
-            let a_pos = club_div_pos_in(div_idx, f.away) as u8;
+            let (gf, ga) = sim_team_match(
+                world.clubs[f.home].strength,
+                world.clubs[f.away].strength,
+                &mut sim_rng,
+            );
+            let h_pos = club_div_pos_in(&div_clubs, f.home) as u8;
+            let a_pos = club_div_pos_in(&div_clubs, f.away) as u8;
             round_results.push((h_pos, a_pos, gf, ga));
         }
         return reduce(
@@ -602,14 +632,14 @@ fn run_next_round(
     }
 
     // Find PC's fixture this round.
-    let pc_fixture = fixture_for_round(world_seed, season, div_idx, pc_club_id, round);
+    let pc_fixture = fixture_for_round(world_seed, season, div_idx, &div_clubs, pc_club_id, round);
 
     let (pc_goals, pc_output, pc_result, match_result_opt) = match pc_fixture {
         Some(f) => {
             let is_home = f.home == pc_club_id;
             let opp_id = if is_home { f.away } else { f.home };
-            let opp = &CLUBS[opp_id];
-            let own_str = CLUBS[pc_club_id].strength;
+            let opp = &world.clubs[opp_id];
+            let own_str = world.clubs[pc_club_id].strength;
             let view = state.players.snapshot(pc_id);
 
             let match_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
@@ -627,7 +657,7 @@ fn run_next_round(
                 player_familiarity: view.familiarity,
                 own_strength: own_str,
                 opp_strength: opp.strength,
-                opp_name: opp.name,
+                opp_name: opp.name.clone(),
                 form: state.pc_form,
                 player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
                     .to_int()
@@ -658,7 +688,7 @@ fn run_next_round(
                 auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
             };
 
-            render_match_result(out, &result, opp.name);
+            render_match_result(out, &result, &opp.name);
 
             // Show discipline outcome.
             if result.red_card {
@@ -717,7 +747,7 @@ fn run_next_round(
     };
 
     // Simulate all other matches in this round.
-    let all_fixtures = round_fixtures(world_seed, season, div_idx, round);
+    let all_fixtures = round_fixtures(world_seed, season, div_idx, &div_clubs, round);
     let sim_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
     let mut sim_rng = GoatRng::new(sim_seed);
 
@@ -735,10 +765,14 @@ fn run_next_round(
                 (0, 0)
             }
         } else {
-            sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng)
+            sim_team_match(
+                world.clubs[f.home].strength,
+                world.clubs[f.away].strength,
+                &mut sim_rng,
+            )
         };
-        let h_pos = club_div_pos_in(div_idx, f.home) as u8;
-        let a_pos = club_div_pos_in(div_idx, f.away) as u8;
+        let h_pos = club_div_pos_in(&div_clubs, f.home) as u8;
+        let a_pos = club_div_pos_in(&div_clubs, f.away) as u8;
         round_results.push((h_pos, a_pos, gf, ga));
     }
 
@@ -752,15 +786,15 @@ fn run_next_round(
         let (gf, ga) = round_results
             .iter()
             .find(|&&(h, a, _, _)| {
-                h == club_div_pos_in(div_idx, f.home) as u8
-                    && a == club_div_pos_in(div_idx, f.away) as u8
+                h == club_div_pos_in(&div_clubs, f.home) as u8
+                    && a == club_div_pos_in(&div_clubs, f.away) as u8
             })
             .map(|&(_, _, gf, ga)| (gf, ga))
             .unwrap_or((0, 0));
         writeln!(
             out,
             "  {:20} {:1}–{:1}  {}",
-            CLUBS[f.home].name, gf, ga, CLUBS[f.away].name
+            world.clubs[f.home].name, gf, ga, world.clubs[f.away].name
         )
         .unwrap();
     }
@@ -781,8 +815,8 @@ fn run_next_round(
     state
 }
 
-fn club_div_pos_in(div_idx: usize, club_id: usize) -> usize {
-    DIV_CLUBS[div_idx]
+fn club_div_pos_in(div_clubs: &[usize], club_id: usize) -> usize {
+    div_clubs
         .iter()
         .position(|&c| c == club_id)
         .expect("club in division")
@@ -805,17 +839,17 @@ fn best_role_for_position(pc_position: u8) -> RoleId {
 
 // ── Table display ─────────────────────────────────────────────────────────────
 
-fn render_table(out: &mut impl Write, state: &WorldState) {
+fn render_table(out: &mut impl Write, state: &WorldState, world: &WorldGenesis) {
     let div_idx = state.pc_div_idx as usize;
-    let div_club_ids = DIV_CLUBS[div_idx];
-    let table = Table::from_raw(&state.table_raw, &div_club_ids);
+    let div_club_ids = &world.leagues[div_idx].clubs;
+    let table = Table::from_raw(&state.table_raw, div_club_ids);
     let sorted = table.sorted();
     let pc_club_id = state.pc_club_idx as usize;
 
     writeln!(
         out,
         "\n  {} — Round {}",
-        DIV_NAMES[div_idx], state.season_round
+        world.leagues[div_idx].name, state.season_round
     )
     .unwrap();
     writeln!(
@@ -831,7 +865,7 @@ fn render_table(out: &mut impl Write, state: &WorldState) {
             out,
             " {}{:<22} {:>3} {:>3} {:>3} {:>3} {:>4} {:>4} {:>4}",
             marker,
-            CLUBS[e.club_id].name,
+            world.clubs[e.club_id].name,
             e.played(),
             e.w,
             e.d,
@@ -846,7 +880,12 @@ fn render_table(out: &mut impl Write, state: &WorldState) {
 
 // ── Season review ─────────────────────────────────────────────────────────────
 
-fn render_season_review(out: &mut impl Write, state: &WorldState, view: &PlayerView) {
+fn render_season_review(
+    out: &mut impl Write,
+    state: &WorldState,
+    view: &PlayerView,
+    world: &WorldGenesis,
+) {
     writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
     writeln!(
         out,
@@ -857,14 +896,14 @@ fn render_season_review(out: &mut impl Write, state: &WorldState, view: &PlayerV
     writeln!(out, "╠══════════════════════════════════════════════╣").unwrap();
 
     let div_idx = state.pc_div_idx as usize;
-    let div_club_ids = DIV_CLUBS[div_idx];
-    let table = Table::from_raw(&state.table_raw, &div_club_ids);
+    let div_club_ids = &world.leagues[div_idx].clubs;
+    let table = Table::from_raw(&state.table_raw, div_club_ids);
     let pos = table.position_of(state.pc_club_idx as usize);
 
     writeln!(
         out,
         "║  {}: finished {}th in {}",
-        CLUBS[state.pc_club_idx as usize].name, pos, DIV_NAMES[div_idx]
+        state.pc_club, pos, world.leagues[div_idx].name
     )
     .unwrap();
     writeln!(
@@ -899,7 +938,7 @@ fn render_season_review(out: &mut impl Write, state: &WorldState, view: &PlayerV
             "║ {}{:2}. {:<20} {:2}pts {:2}GD",
             marker,
             rank + 1,
-            CLUBS[e.club_id].name,
+            world.clubs[e.club_id].name,
             e.points(),
             e.goal_diff()
         )
@@ -925,11 +964,13 @@ fn build_legacy_evidence(state: &WorldState) -> LegacyEvidence {
         career_standout_matches: state.pc_career_standout_matches,
         career_best_ovr: state.pc_career_best_ovr,
         career_transfer_requests: state.pc_career_transfer_requests,
+        career_caps: state.pc_career_caps,
+        career_international_goals: state.pc_career_international_goals,
     }
 }
 
 fn render_legacy_screen(out: &mut impl Write, ev: &LegacyEvidence, state: &WorldState) {
-    let pc_name = CLUBS[state.pc_club_idx as usize].name; // placeholder — use player name
+    let pc_name = &state.pc_club; // placeholder — use player name
     let axes = compute_axes(ev);
     let rep = compute_reputation(
         state.pc_sporting_rep,
@@ -1018,11 +1059,12 @@ fn run_awards_and_pundits(
     out: &mut impl Write,
     mut state: WorldState,
     view: &PlayerView,
+    world: &WorldGenesis,
 ) -> WorldState {
     let season = state.season_number;
     let world_seed = state.world_seed;
     let pc_name = &view.name;
-    let pc_club = state.pc_club;
+    let pc_club = state.pc_club.clone();
 
     let season_avg = if state.pc_season_matches > 0 {
         state.pc_season_output / state.pc_season_matches as i32
@@ -1064,8 +1106,8 @@ fn run_awards_and_pundits(
 
     // Compute finish position for legacy/rep update.
     let div_idx = state.pc_div_idx as usize;
-    let div_clubs = goat_world::DIV_CLUBS[div_idx];
-    let table = goat_world::Table::from_raw(&state.table_raw, &div_clubs);
+    let div_clubs = &world.leagues[div_idx].clubs;
+    let table = goat_world::Table::from_raw(&state.table_raw, div_clubs);
     let finish_pos = table.position_of(state.pc_club_idx as usize) as u32;
     let won_title = finish_pos == 1;
 
@@ -1100,6 +1142,11 @@ fn run_awards_and_pundits(
             new_club_fan_rep: new_club_fan,
             season_standout_matches: s_standout_matches,
             season_transfer_requests: s_transfer_requests,
+            // National-team call-ups (Design round 2, Doc B §B.3) aren't wired into the
+            // TUI yet — the international-break window is still flavor-text-only (see
+            // the calendar-event renderer), so nothing accrues caps this season.
+            season_caps: 0,
+            season_international_goals: 0,
         },
         &mut GoatRng::new(0),
     );
@@ -1118,7 +1165,7 @@ fn run_awards_and_pundits(
             avg_output: season_avg,
             finish_pos,
         };
-        let comment = pundit_comment(pundit, &axes, &ctx, pc_name, pc_club, season);
+        let comment = pundit_comment(pundit, &axes, &ctx, pc_name, &pc_club, season);
         writeln!(out, "\n  {} ({}):", pundit.name, pundit.role).unwrap();
         // Word-wrap at ~60 chars
         let words: Vec<&str> = comment.split_whitespace().collect();
@@ -1142,7 +1189,11 @@ fn run_awards_and_pundits(
 
 // ── Phase 8: Transfer window + contract ──────────────────────────────────────
 
-fn generate_transfer_offers(state: &WorldState, view: &PlayerView) -> Vec<(usize, u8, i64, u32)> {
+fn generate_transfer_offers(
+    state: &WorldState,
+    view: &PlayerView,
+    world: &WorldGenesis,
+) -> Vec<(usize, u8, i64, u32)> {
     // Returns Vec of (club_idx, div_idx, wage_offer, length)
     use goat_rng::RngSource;
     let form = state.pc_form.to_int();
@@ -1154,12 +1205,15 @@ fn generate_transfer_offers(state: &WorldState, view: &PlayerView) -> Vec<(usize
     let mut rng = GoatRng::new(state.world_seed ^ ((state.season_number as u64) << 32) ^ 0xA11BEEF);
     let n_offers = rng.next_range_u64(0, 2) as usize; // 0-2 offers
     let mut offers = Vec::new();
+    let num_leagues = world.leagues.len() as u64;
     for _ in 0..n_offers {
-        // Pick a random club from a different division
-        let target_div = ((state.pc_div_idx as u64 + 1 + rng.next_range_u64(0, 2)) % 4) as usize;
-        let club_pos = rng.next_range_u64(0, (goat_world::CLUBS_PER_DIV - 1) as u64) as usize;
-        let club_id = goat_world::DIV_CLUBS[target_div][club_pos];
-        let target_strength = CLUBS[club_id].strength;
+        // Pick a random club from a different division.
+        let target_div = ((state.pc_div_idx as u64 + 1 + rng.next_range_u64(0, num_leagues - 2))
+            % num_leagues) as usize;
+        let league_clubs = &world.leagues[target_div].clubs;
+        let club_pos = rng.next_range_u64(0, league_clubs.len() as u64 - 1) as usize;
+        let club_id = league_clubs[club_pos];
+        let target_strength = world.clubs[club_id].strength;
         let wage_offer =
             state.pc_wage_annual + (target_strength as i64 * 2) + rng.next_range_u64(0, 50) as i64;
         let length = 2 + rng.next_range_u64(0, 2) as u32;
@@ -1175,8 +1229,9 @@ fn run_transfer_window(
     out: &mut impl Write,
     mut state: WorldState,
     view: &PlayerView,
+    world: &WorldGenesis,
 ) -> WorldState {
-    let offers = generate_transfer_offers(&state, view);
+    let offers = generate_transfer_offers(&state, view, world);
     if offers.is_empty() {
         // Check if player wants to agitate
         if state.pc_power_ladder > 0 || state.pc_contract_seasons_left == 0 {
@@ -1189,13 +1244,13 @@ fn run_transfer_window(
     writeln!(out, "║  TRANSFER WINDOW                             ║").unwrap();
     writeln!(out, "╠══════════════════════════════════════════════╣").unwrap();
     for (i, &(club_id, div_idx, wage, length)) in offers.iter().enumerate() {
-        let stars = "*".repeat((CLUBS[club_id].strength as usize / 20).clamp(1, 5));
+        let stars = "*".repeat((world.clubs[club_id].strength as usize / 20).clamp(1, 5));
         writeln!(
             out,
             "║  {}. {:22} ({}) £{}/yr {}yr  ║",
             i + 1,
-            CLUBS[club_id].name,
-            goat_world::DIV_NAMES[div_idx as usize],
+            world.clubs[club_id].name,
+            world.leagues[div_idx as usize].name,
             wage,
             length
         )
@@ -1220,14 +1275,14 @@ fn run_transfer_window(
         } else if let Ok(n) = l.parse::<usize>() {
             if n >= 1 && n <= offers.len() {
                 let (club_id, div_idx, wage, length) = offers[n - 1];
-                let club = &CLUBS[club_id];
+                let club = &world.clubs[club_id];
                 writeln!(
                     out,
                     "  TRANSFER COMPLETE: {} → {}",
                     state.pc_club, club.name
                 )
                 .unwrap();
-                let fee_bonus = (CLUBS[state.pc_club_idx as usize].strength as i64) * 3;
+                let fee_bonus = (world.clubs[state.pc_club_idx as usize].strength as i64) * 3;
                 state = reduce(
                     state,
                     Intent::ExecuteTransfer {
@@ -1235,7 +1290,7 @@ fn run_transfer_window(
                         to_div_idx: div_idx,
                         new_wage: wage,
                         new_length: length,
-                        new_club_name: club.name,
+                        new_club_name: club.name.clone(),
                         facilities_mult: club.facilities_mult(),
                         fee_bonus,
                     },
@@ -1252,12 +1307,11 @@ fn run_contract_negotiation(
     out: &mut impl Write,
     mut state: WorldState,
 ) -> WorldState {
-    let current_club = &CLUBS[state.pc_club_idx as usize];
     let new_wage = state.pc_wage_annual + (state.pc_form.to_int() as i64 / 10) * 5;
     let new_length = 2u32;
 
     writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
-    writeln!(out, "║  CONTRACT RENEWAL — {}  ║", current_club.name).unwrap();
+    writeln!(out, "║  CONTRACT RENEWAL — {}  ║", state.pc_club).unwrap();
     writeln!(out, "╠══════════════════════════════════════════════╣").unwrap();
     writeln!(
         out,
@@ -1334,17 +1388,12 @@ fn build_peer_cohort(world_seed: u64, nationality: &str) -> Vec<goat_core::state
         .map(|(_, names)| *names)
         .unwrap_or(PEER_NAMES_BY_NATION[0].1);
 
-    let nat: &'static str = if nationality == "Brazil" {
-        "Brazil"
-    } else {
-        "England"
-    };
     let mut rng = GoatRng::new(world_seed ^ 0xC0_CA_FE_BE_EF_u64);
     (0..8)
         .map(|i| goat_core::state::PeerState {
             seed: rng.next_u64(),
             name: names[i % names.len()].to_string(),
-            nationality: nat,
+            nationality: nationality.to_string(),
             career_goals: 0,
             career_matches: 0,
             avg_output: 0,
@@ -1714,7 +1763,7 @@ fn render_game_sheet(out: &mut impl Write, view: &PlayerView, state: &WorldState
     if state.season_number > 0 {
         let round = state.season_round + 1; // 1-indexed: next round to play, matches the match header
         let total = ROUNDS_PER_SEASON as u32;
-        let club_name = CLUBS[state.pc_club_idx as usize].name;
+        let club_name = &state.pc_club;
         let disc_label = match state.pc_discipline_rep {
             0..=30 => "Clean",
             31..=60 => "Neutral",
@@ -1919,7 +1968,7 @@ fn render_player_sheet(
 
 /// Phase 9 world screen: the seeded pantheon canon + this career's emergent rival.
 /// Pure renderer — all data comes from `goat_world` functions; no sim logic here.
-fn render_world_screen(out: &mut impl Write, state: &WorldState) {
+fn render_world_screen(out: &mut impl Write, state: &WorldState, world: &WorldGenesis) {
     use goat_world::history::{backfill_history, great_nation_name};
     use goat_world::rival::{crystallise_rival, RivalVerdict};
     let seed = state.world_seed;
@@ -1929,7 +1978,7 @@ fn render_world_screen(out: &mut impl Write, state: &WorldState) {
     writeln!(out, "╚══════════════════════════════════════════════╝").unwrap();
 
     // Backfilled canon of past greats (pure-derivable from the world seed).
-    let hist = backfill_history(seed, 30);
+    let hist = backfill_history(seed, 30, world);
     writeln!(out, "\n  PANTHEON — past greats of this universe").unwrap();
     writeln!(
         out,
@@ -1943,7 +1992,7 @@ fn render_world_screen(out: &mut impl Write, state: &WorldState) {
             out,
             "  {:<20} {:<9} {:>4} {:>4}",
             g.name,
-            great_nation_name(g.nationality),
+            great_nation_name(g.nationality, world),
             g.ballon_dors,
             g.peak_ovr
         )
@@ -1951,10 +2000,11 @@ fn render_world_screen(out: &mut impl Write, state: &WorldState) {
     }
 
     // Your generation: batch-tick the cohort up to now, then crystallise.
-    let mut pop = goat_world::population::genesis(seed);
+    let league_clubs = world.static_league_clubs();
+    let mut pop = goat_world::population::genesis(seed, world);
     let seasons = state.season_number.max(1);
     for s in 1..=seasons {
-        goat_world::batch_tick::batch_tick_season(&mut pop, seed, s, s * 52);
+        goat_world::batch_tick::batch_tick_season(&mut pop, world, &league_clubs, seed, s, s * 52);
     }
     writeln!(out, "\n  YOUR GENERATION").unwrap();
     match crystallise_rival(&pop, 16 * 52, state.pc_career_goals, state.pc_league_titles) {

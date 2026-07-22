@@ -14,17 +14,29 @@ use goat_core::{
 use goat_fixed::Fixed;
 use goat_rng::GoatRng;
 use goat_save::save::{from_world_state, load_from_file, save_to_file, to_world_state};
-use goat_world::world::{CLUBS, DIV_CLUBS, DIV_ENG_SEC};
+use goat_world::world::WorldGenesis;
+
+const TEST_WORLD_SEED: u64 = 54321;
+
+/// The world used by every test in this file — deterministic per `TEST_WORLD_SEED`,
+/// rebuilt on demand (never persisted, same "seed is the universe" pattern as `History`).
+fn test_world() -> WorldGenesis {
+    WorldGenesis::generate(TEST_WORLD_SEED)
+}
 
 fn setup_state() -> WorldState {
-    let pc_club_id = DIV_CLUBS[DIV_ENG_SEC][3]; // Burnley
-    let world_seed = 54321u64;
+    let world = test_world();
+    let world_seed = TEST_WORLD_SEED;
+    // Second tier of the first generated nation, 4th club — analogous to the old
+    // hardcoded DIV_ENG_SEC/Burnley slot.
+    let div_idx = 1;
+    let pc_club_id = world.leagues[div_idx].clubs[3];
 
     let choices = CreationChoices {
         name: "Round-Trip Sam".into(),
         primary_position: PrimaryPosition::ST,
-        nationality: "England",
-        club: CLUBS[pc_club_id].name,
+        nationality: "England".to_string(),
+        club: world.clubs[pc_club_id].name.clone(),
     };
 
     let mut state = WorldState::new();
@@ -41,9 +53,9 @@ fn setup_state() -> WorldState {
         Intent::InitWorld {
             world_seed,
             pc_club_idx: pc_club_id as u16,
-            pc_div_idx: DIV_ENG_SEC as u8,
-            facilities_mult: CLUBS[pc_club_id].facilities_mult(),
-            initial_table: Box::new([0u32; 80]),
+            pc_div_idx: div_idx as u8,
+            facilities_mult: world.clubs[pc_club_id].facilities_mult(),
+            initial_table: Box::new([0u32; 100]),
         },
         &mut GoatRng::new(0),
     );
@@ -65,7 +77,7 @@ fn save_load_restores_current_attrs() {
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
     let data = from_world_state(&state, &view);
-    let restored = to_world_state(&data);
+    let restored = to_world_state(&data, &test_world());
     let r_id = restored.pc_player_id.unwrap();
 
     for a in 0..NUM_ATTRS {
@@ -82,7 +94,7 @@ fn save_load_restores_potentials_from_seed() {
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
     let data = from_world_state(&state, &view);
-    let restored = to_world_state(&data);
+    let restored = to_world_state(&data, &test_world());
     let r_id = restored.pc_player_id.unwrap();
 
     for a in 0..NUM_ATTRS {
@@ -98,7 +110,7 @@ fn save_load_restores_season_state() {
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
     let data = from_world_state(&state, &view);
-    let restored = to_world_state(&data);
+    let restored = to_world_state(&data, &test_world());
 
     assert_eq!(state.season_number, restored.season_number, "season_number");
     assert_eq!(state.season_round, restored.season_round, "season_round");
@@ -122,7 +134,7 @@ fn save_load_restores_epoch_day_through_bytes() {
     let path = std::env::temp_dir().join("goat_save_epoch_roundtrip.gsav");
     save_to_file(&data, &path).unwrap();
     let loaded = load_from_file(&path).unwrap();
-    let restored = to_world_state(&loaded);
+    let restored = to_world_state(&loaded, &test_world());
     std::fs::remove_file(&path).ok();
 
     assert_eq!(
@@ -137,7 +149,7 @@ fn save_load_restores_familiarity() {
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
     let data = from_world_state(&state, &view);
-    let restored = to_world_state(&data);
+    let restored = to_world_state(&data, &test_world());
     let r_id = restored.pc_player_id.unwrap();
 
     for r in 0..NUM_ROLES {
@@ -153,7 +165,7 @@ fn save_load_restores_age_and_energy() {
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
     let data = from_world_state(&state, &view);
-    let restored = to_world_state(&data);
+    let restored = to_world_state(&data, &test_world());
     let r_id = restored.pc_player_id.unwrap();
 
     assert_eq!(
@@ -185,7 +197,7 @@ fn save_load_restores_phase10_economy_and_life() {
 
     let path = std::env::temp_dir().join("goat_save_phase10_roundtrip.gsav");
     save_to_file(&data, &path).unwrap();
-    let restored = to_world_state(&load_from_file(&path).unwrap());
+    let restored = to_world_state(&load_from_file(&path).unwrap(), &test_world());
     std::fs::remove_file(&path).ok();
 
     assert_eq!(restored.pc_business_value, 4_200);
@@ -211,7 +223,7 @@ fn save_load_restores_lifestyle_score_and_derived_tier() {
 
     let path = std::env::temp_dir().join("goat_save_lifestyle_roundtrip.gsav");
     save_to_file(&data, &path).unwrap();
-    let restored = to_world_state(&load_from_file(&path).unwrap());
+    let restored = to_world_state(&load_from_file(&path).unwrap(), &test_world());
     std::fs::remove_file(&path).ok();
 
     assert_eq!(restored.pc_lifestyle_score, Fixed::raw(-450));
@@ -240,7 +252,7 @@ fn save_load_restores_pantheon_signals() {
         std::process::id()
     ));
     save_to_file(&data, &path).unwrap();
-    let restored = to_world_state(&load_from_file(&path).unwrap());
+    let restored = to_world_state(&load_from_file(&path).unwrap(), &test_world());
     std::fs::remove_file(&path).ok();
 
     assert_eq!(restored.pc_career_standout_matches, 12);
@@ -257,7 +269,7 @@ fn old_v7_save_without_lifestyle_score_defaults_to_balanced() {
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
     let data = from_world_state(&state, &view);
-    let restored = to_world_state(&data);
+    let restored = to_world_state(&data, &test_world());
     // setup_state() never touches lifestyle, so the score defaults to 0 = Balanced.
     assert_eq!(restored.pc_lifestyle_score, Fixed::ZERO);
     assert_eq!(restored.pc_lifestyle, 1);
@@ -301,7 +313,7 @@ fn old_v8_save_without_pantheon_signals_defaults_to_zero() {
     assert_eq!(loaded.pc_career_transfer_requests, 0);
     assert_eq!(loaded.pc_season_transfer_requests, 0);
 
-    let restored = to_world_state(&loaded);
+    let restored = to_world_state(&loaded, &test_world());
     assert_eq!(restored.pc_career_standout_matches, 0);
     assert_eq!(restored.pc_career_best_ovr, 0);
     assert_eq!(restored.pc_career_transfer_requests, 0);

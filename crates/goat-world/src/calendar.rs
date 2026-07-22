@@ -14,29 +14,20 @@ pub const SEASON_CALENDAR_WEEKS: usize = 38;
 pub const BASE_CAREER_YEAR: u32 = 2025;
 
 /// Number of league matches per calendar week (0 = break / rest).
-/// Must sum to exactly ROUNDS_PER_SEASON (30).
+/// Must sum to exactly ROUNDS_PER_SEASON (38, at the confirmed 20-clubs-per-tier scale).
 ///
-/// Layout:
+/// Layout (3 break weeks kept for flavor — international break, winter break, spring
+/// break — the rest of the 38-week grid is filled to carry 38 rounds):
 ///   wk 0–3  : Aug  (opener, early busy period)
 ///   wk 4    : Sep  break (international)
-///   wk 5–7  : Sep  (midweek + weekend run)
-///   wk 8    : Oct  break
-///   wk 9–12 : Oct–Nov (steady run)
-///   wk 13   : Nov  break
-///   wk 14–20: Nov–Jan (Christmas/NY congestion)
-///   wk 21–22: Jan  winter break
-///   wk 23   : Jan  catch-up double-header
-///   wk 24–25: Feb  (single weekly)
-///   wk 26   : Feb  break
-///   wk 27–29: Mar  (single weekly)
-///   wk 30   : Mar  break
-///   wk 31   : Mar  (single)
+///   wk 5–20 : Sep–Jan (steady run, Christmas/NY congestion)
+///   wk 21   : Jan  winter break
+///   wk 22–31: Jan–Mar (catch-up double-header + steady run)
 ///   wk 32   : Apr  break
-///   wk 33–34: Apr  (run-in)
-///   wk 35–37: Apr–May (season tail / rest)
+///   wk 33–37: Apr–May (run-in / season tail)
 pub const WEEK_MATCH_COUNTS: [u8; SEASON_CALENDAR_WEEKS] = [
-    1, 2, 1, 1, 0, 1, 2, 1, 0, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 2, 1, 1, 0, 1, 1, 1, 0, 1,
-    0, 1, 1, 0, 0, 0,
+    1, 2, 1, 1, 0, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 2, 1, 1, 1, 1, 1, 1, 1, 1,
+    0, 1, 1, 1, 1, 1,
 ];
 
 // Compile-time assertion: WEEK_MATCH_COUNTS must sum to ROUNDS_PER_SEASON.

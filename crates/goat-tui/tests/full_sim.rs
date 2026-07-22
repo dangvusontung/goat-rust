@@ -26,10 +26,16 @@ use goat_rng::GoatRng;
 use goat_traits::PlayerTraits;
 use goat_world::{
     fixture_for_round, rest_weeks_after_round, round_fixtures, sim_team_match,
-    week_ends_after_round, Table, CLUBS, DIV_CLUBS, DIV_ENG_SEC, DIV_ENG_TOP, ROUNDS_PER_SEASON,
+    week_ends_after_round, world::WorldGenesis, Table, ROUNDS_PER_SEASON,
 };
 
 const BEATS_JSON: &str = include_str!("../../../beats.json");
+
+// First nation's top tier / second tier — analogous to the old hardcoded
+// DIV_ENG_TOP/DIV_ENG_SEC constants (league ids are nation-major, tier-minor per
+// `WorldGenesis::generate`, so nation 0's tiers are leagues 0 and 1).
+const DIV_ENG_TOP: usize = 0;
+const DIV_ENG_SEC: usize = 1;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -59,13 +65,14 @@ fn beat_lib() -> BeatLibrary {
 }
 
 fn make_state(seed: u64, position: Position, div_idx: usize) -> WorldState {
-    let pc_club_id = DIV_CLUBS[div_idx][0];
-    let club = &CLUBS[pc_club_id];
+    let world = WorldGenesis::generate(seed);
+    let pc_club_id = world.leagues[div_idx].clubs[0];
+    let club = &world.clubs[pc_club_id];
     let choices = CreationChoices {
         name: "Test Legend".into(),
         primary_position: position.to_primary(),
-        nationality: "England",
-        club: club.name,
+        nationality: "England".to_string(),
+        club: club.name.clone(),
     };
     let mut s = WorldState::new();
     s = reduce(
@@ -80,7 +87,7 @@ fn make_state(seed: u64, position: Position, div_idx: usize) -> WorldState {
             pc_club_idx: pc_club_id as u16,
             pc_div_idx: div_idx as u8,
             facilities_mult: club.facilities_mult(),
-            initial_table: Box::new([0u32; 80]),
+            initial_table: Box::new([0u32; 100]),
         },
         &mut GoatRng::new(0),
     );
@@ -113,7 +120,7 @@ fn make_state(seed: u64, position: Position, div_idx: usize) -> WorldState {
         .map(|i| PeerState {
             seed: seed ^ (i as u64 * 0x1234_5678),
             name: format!("Peer {i}"),
-            nationality: "England",
+            nationality: "England".to_string(),
             career_goals: 0,
             career_matches: 0,
             avg_output: 0,
@@ -162,6 +169,7 @@ fn role_for_position(p: Position) -> RoleId {
 /// Uses `auto_play_match` for the PC's fixture each round.
 fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibrary) -> WorldState {
     let seed = state.world_seed;
+    let world = WorldGenesis::generate(seed);
     let pc_id = state.pc_player_id.unwrap();
 
     state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));

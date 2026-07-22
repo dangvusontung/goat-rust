@@ -28,8 +28,10 @@ use crate::tuning::{
 pub struct CreationChoices {
     pub name: String,
     pub primary_position: PrimaryPosition,
-    pub nationality: &'static str,
-    pub club: &'static str,
+    /// Owned, not `&'static str` — club/nation names are generated per `world_seed`
+    /// (goat-world's `WorldGenesis`), not compile-time literals.
+    pub nationality: String,
+    pub club: String,
 }
 
 /// Hardcoded stub nationality list for phases 1–4.
@@ -252,8 +254,8 @@ mod tests {
         CreationChoices {
             name: "Test Player".into(),
             primary_position: pos,
-            nationality: "English",
-            club: "Local FC",
+            nationality: "English".to_string(),
+            club: "Local FC".to_string(),
         }
     }
 
