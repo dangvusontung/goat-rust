@@ -214,26 +214,29 @@ At 20 nations, that's **40-60 clubs per nation**. A natural, round split consist
 current game's existing "top flight + second tier" 2-level shape
 (`world.rs:36-39`, `DivLevel::Top`/`Second`) extended by one more tier:
 
-**Proposed: 3 tiers per nation × 16 clubs per tier = 48 clubs/nation × 20 nations = 960
-clubs → 24,000 players** — squarely inside the bible's 20-30k band, and `16 clubs/tier`
-reuses the *exact* `CLUBS_PER_DIV = 16` constant that already exists
-(`world.rs:63`), meaning `fixtures.rs`'s `ROUNDS_PER_SEASON = (CLUBS_PER_DIV - 1) * 2 = 30`
-(`fixtures.rs:10`) and `season::Table`'s `[TableEntry; CLUBS_PER_DIV]` fixed-size array
-(`season.rs:57-58`) **need no changes at all** if every tier, in every nation, stays exactly
-16 clubs — only the *number* of such 16-club tiers grows (4 divisions → 60 divisions).
+**Confirmed by Tùng, 2026-07-22: 20 clubs per tier** (not 16 — Design's first pass proposed 16
+to reuse `CLUBS_PER_DIV` unchanged; Tùng explicitly overrode this). Reworked numbers: **3
+tiers per nation × 20 clubs per tier = 60 clubs/nation × 20 nations = 1,200 clubs → 30,000
+players** — top edge of the bible's 20-30k band, still inside it.
 
-This is the single biggest lever in this whole slice's risk profile: **keeping
-`CLUBS_PER_DIV` uniform and unchanged (16, always) turns "scale to 20 nations" into "generate
-more instances of the same fixed-size division," not "redesign the table/fixture machinery to
-handle variable-size divisions."** Variable club-counts-per-tier (e.g., a smaller top flight,
-bigger lower tiers — closer to how real football pyramids actually taper) is realistic and
-arguably more authentic, but turns `[TableEntry; CLUBS_PER_DIV]`, `table_raw: [u32; 80]`, and
-`ROUNDS_PER_SEASON` from fixed consts into per-division values, rippling into the save format
-(A2.5) and `fixtures.rs`'s round-generation math. **Flag for Tùng: uniform 16-clubs-per-tier
-(low risk, reuses everything, less realistic) vs. variable per-tier sizing (more realistic,
-meaningfully bigger rewrite of `season.rs`/`fixtures.rs`/the save format's `table_raw`)** — do
-not silently pick one; this is exactly the kind of number Tùng asked not to have invented for
-him.
+Because `CLUBS_PER_DIV` is changing from 16 to 20 anyway, this slice is **not** the
+zero-touch "just add more instances of the same fixed-size division" case the first pass
+described — `CLUBS_PER_DIV = 16` (`world.rs:63`) itself needs to become 20, which ripples into
+`fixtures.rs`'s `ROUNDS_PER_SEASON = (CLUBS_PER_DIV - 1) * 2` (`fixtures.rs:10`, becomes 38 —
+matching real-world 20-club leagues' 38-round season) and `season::Table`'s
+`[TableEntry; CLUBS_PER_DIV]` fixed-size array (`season.rs:57-58`, becomes 20-wide). Both are
+still **uniform, fixed-size-per-tier changes** (every tier in every nation stays exactly 20
+clubs) — not the larger variable-per-tier-sizing rewrite described below, which remains
+unconfirmed and separate.
+
+Still open, and *not* resolved by the club-count confirmation above: variable club-counts-per-
+tier (e.g., a smaller top flight, bigger lower tiers — closer to how real football pyramids
+actually taper) is realistic and arguably more authentic, but turns `[TableEntry; CLUBS_PER_DIV]`,
+`table_raw: [u32; 80]`, and `ROUNDS_PER_SEASON` from fixed consts into per-division values,
+rippling into the save format (A2.5) and `fixtures.rs`'s round-generation math. **Flag for
+Tùng: uniform 20-clubs-per-tier (low risk, reuses the same shape, less realistic) vs. variable
+per-tier sizing (more realistic, meaningfully bigger rewrite of
+`season.rs`/`fixtures.rs`/the save format's `table_raw`)** — do not silently pick one.
 
 Also needs Tùng's confirmation, not a Design default: **should every nation get exactly 3
 tiers**, or should the powerhouse-vs-minnow spectrum (bible §4.1, §7.2 point 1: "nations and
@@ -251,7 +254,7 @@ clubs-per-tier question above is resolved, `League.clubs` (A2.3's refined struct
 `Vec<ClubId>` with a `max_clubs: u8` field, not a `[ClubId; N]`-shaped const array — so this
 decision only ever changes a *number* stored in `max_clubs`, it never forces a type-level
 rewrite of `season.rs`/`fixtures.rs` either way. That said, `ROUNDS_PER_SEASON`/`table_raw`'s
-*sizes* still depend on which club-count is chosen (see A2.3's flagged 16-vs-20 discrepancy) —
+*sizes* still depend on which club-count is chosen — now confirmed as 20, not 16 (see A2.1) —
 the refinement decouples the type shape from the number, it does not make the number itself
 free to change without touching those two.
 
@@ -329,17 +332,12 @@ numbers are unaffected by this refinement** — see A2.1's decision #1 for what 
 per-tier club count is; `max_clubs` just holds whichever number Tùng confirms there, as data
 instead of a type parameter.
 
-**Flag for Tùng — a number mismatch to resolve, not silently picked by Design:** A2.1's
-decision #1 (unchanged from the first pass) still recommends 16 clubs/tier, pending
-confirmation, with a worked example of 3 tiers × 16 clubs × 20 nations = 960 clubs → 24,000
-players. Separately, the brief for *this* refinement pass stated the round's clubs-per-league
-count is "already decided at 20." Design has **not** silently overwritten 16 with 20 anywhere
-in this doc, nor silently kept 16 over the "already decided" 20 — these two numbers conflict
-and only Tùng can say which is current. If 20 is in fact final, A2.1's worked example needs
-re-deriving (20/tier × 3 tiers × 20 nations = 1,200 clubs → 30,000 players — still inside the
-bible's 20-30k band, at the top edge) and its text updated to match. **Confirm which number is
-actually final before Dev starts** — `ROUNDS_PER_SEASON`/`table_raw`'s sizing (under the
-uniform-per-tier path) depends on it either way.
+**Resolved 2026-07-22 (was flagged as a mismatch, now confirmed):** the earlier pass's proposal
+of 16 clubs/tier and this refinement pass's brief saying "already decided at 20" were in fact
+the same decision at two different points in time — Tùng confirmed 20 explicitly, overriding
+Design's 16 recommendation. A2.1 has been re-derived to 20/tier × 3 tiers × 20 nations = 1,200
+clubs → 30,000 players (top edge of the bible's 20-30k band). `ROUNDS_PER_SEASON`/`table_raw`
+sizing (under the uniform-per-tier path) now target 20, not 16 — see A2.1.
 
 ### A2.4 — `history.rs` ripple (backfilled canon must track the new nation count)
 
@@ -484,7 +482,7 @@ this creates that Tùng should weigh before confirming:
 
 **If Tùng would rather have the simpler, persisted-incremental-state design instead** (accept
 a small new persisted field — e.g. a `Vec<u16>` "current division index per club," a few KB at
-960 clubs, cheap by tiny-save standards — updated at each real season-end alongside the
+1,200 clubs, cheap by tiny-save standards — updated at each real season-end alongside the
 existing table/legacy pipeline, and accept that this means the ~59 non-orbit divisions now get
 a small new per-season write where previously they had none), **that's a legitimate simpler
 alternative** — flag it as the explicit fork; either is buildable, but they have different
@@ -595,7 +593,7 @@ depends on A2's actual genesis/replay cost being measured, not guessed.
   `tasks/TASK-DESIGN-round2-national-team-tactical-identity.md`.
 - **Variable club-count-per-tier / variable tiers-per-nation** (the "full pyramids," realistic
   taper the bible §7.2 gestures at) — flagged as a real possibility in A2.1/A2.3 but scoped
-  out of this round's default recommendation (uniform 16-clubs/3-tiers) pending Tùng's
+  out of this round's default recommendation (uniform 20-clubs/3-tiers) pending Tùng's
   confirmation either way.
 - **Promotion/relegation playoffs** (a 4th promotion/relegation spot decided by a mini-
   tournament, common in real football) — A3.2's proposed N=3 is a clean top-N/bottom-N cut,
@@ -653,14 +651,12 @@ against.
 
 ## Decisions Design needs from Tùng before Dev starts (collected from above)
 
-1. **A2.1**: uniform 16-clubs-per-tier across all nations (low risk, reuses `CLUBS_PER_DIV`/
-   `ROUNDS_PER_SEASON`/`table_raw` as-is) vs. variable club-count-per-tier (more realistic,
-   bigger rewrite of `season.rs`/`fixtures.rs`/save format). **Recommendation: uniform.**
-   **Number conflict flagged 2026-07-22 (see A2.3's `League.max_clubs` writeup): this doc's
-   only recommendation on record is 16/tier (960 clubs total), but a note accompanying this
-   round's refinement pass stated the count is "already decided at 20" (1,200 clubs total,
-   still inside the bible's 20-30k band). Not resolved here — confirm which number is actually
-   final, then update A2.1's worked example to match if it's 20.**
+1. **A2.1**: uniform 20-clubs-per-tier across all nations (low risk — `CLUBS_PER_DIV` moves
+   from 16 to 20 but stays a single uniform constant, so `ROUNDS_PER_SEASON`/`table_raw`
+   change size but not shape) vs. variable club-count-per-tier (more realistic, bigger rewrite
+   of `season.rs`/`fixtures.rs`/save format). **Confirmed by Tùng, 2026-07-22: 20/tier (1,200
+   clubs total, 30,000 players — top edge of the bible's 20-30k band), overriding Design's
+   earlier 16/tier recommendation. Resolved — no longer open.**
 2. **A2.1**: uniform 3-tiers-per-nation vs. variable pyramid depth per nation's stature (bible
    §7.2 leans toward variable — "full pyramids" — but that's a bigger scope). **Recommendation:
    uniform 3, revisit variable depth as a later enhancement.**
