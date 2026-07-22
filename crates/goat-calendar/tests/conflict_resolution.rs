@@ -4,9 +4,10 @@
 //! Mirrors the bible's own AC set and `promotion.rs`'s existing idempotency-test style.
 
 use goat_calendar::{
-    CalendarEngine, CalendarWindow, Competition, CompetitionKind, Fixture, FixtureImportance,
-    Season, WindowKind,
+    CalendarEngine, CalendarWindow, Competition, CompetitionKind, DayContext, DayReport, Fixture,
+    FixtureImportance, Season, StopClass, Subsystem, SubsystemId, WindowKind,
 };
+use goat_rng::RngSource;
 
 fn season(windows: Vec<CalendarWindow>) -> Season {
     Season {
@@ -226,4 +227,89 @@ fn no_clash_is_a_no_op() {
     engine.advance_bounded(6, false);
     let f = engine.fixtures.iter().find(|f| f.id == 1).unwrap();
     assert_eq!(f.scheduled_day, 5, "a lone fixture never gets rescheduled");
+}
+
+// ── Playable gate (slice1 §1.4) ─────────────────────────────────────────────────
+//
+// "cargo run -p goat-tui -> a season where the PC's club has both a league match and a
+// cup match on the same calendar day (synthetic/seeded -- a real cup fixture doesn't
+// exist until a sibling slice ships) -> the resolved fixture list shows exactly one of
+// them on that day, the other moved with a visible reschedule note."
+//
+// A real cup fixture doesn't exist in the TUI yet (that's a sibling slice's job), so
+// this drives the identical CalendarEngine/Subsystem ABI the TUI's live calendar tick
+// uses (see `goat-core`'s `calendar_loop::advance_calendar_week`), with a synthetic
+// second orbit fixture standing in for the not-yet-wired cup match.
+
+type SeenLog = std::rc::Rc<std::cell::RefCell<Vec<(u32, Vec<u64>)>>>;
+
+/// Records which fixture ids fired a HardStop on which day.
+struct RecordingMatchStub {
+    seen: SeenLog,
+}
+
+impl Subsystem for RecordingMatchStub {
+    fn on_day(&mut self, ctx: &DayContext, _rng: &mut dyn RngSource) -> DayReport {
+        if ctx.todays_fixtures.is_empty() {
+            return DayReport::silent(SubsystemId::Match);
+        }
+        self.seen.borrow_mut().push((
+            ctx.epoch_day,
+            ctx.todays_fixtures.iter().map(|f| f.id).collect(),
+        ));
+        DayReport {
+            source: SubsystemId::Match,
+            stop_class: StopClass::HardStop,
+            payload: Some("match_day".into()),
+            mutations: vec![],
+        }
+    }
+    fn id(&self) -> SubsystemId {
+        SubsystemId::Match
+    }
+}
+
+#[test]
+fn playable_gate_league_and_cup_clash_resolves_to_exactly_one_match_per_day() {
+    let fixtures = vec![
+        league_fixture(1, 15),
+        cup_fixture(2, 15, FixtureImportance::DomesticCupEarly),
+    ];
+    let mut engine = CalendarEngine::new(2026, season(vec![]), fixtures, competitions());
+    let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    engine.register(Box::new(RecordingMatchStub { seen: seen.clone() }));
+
+    // Run the whole season headless; both fixtures must eventually fire, on different
+    // days, each alone.
+    engine.sim_season_headless(1);
+
+    let log = seen.borrow();
+    assert_eq!(
+        log.len(),
+        2,
+        "both the league and cup fixtures eventually play"
+    );
+    for (day, ids) in log.iter() {
+        assert_eq!(
+            ids.len(),
+            1,
+            "day {day} must show exactly one fixture, not a same-day double-header"
+        );
+    }
+    let days: Vec<u32> = log.iter().map(|(d, _)| *d).collect();
+    assert_ne!(
+        days[0], days[1],
+        "the two fixtures must resolve onto different days"
+    );
+    assert!(
+        days.contains(&15),
+        "the higher-priority league fixture keeps its original day 15"
+    );
+
+    let cup_final = engine.fixtures.iter().find(|f| f.id == 2).unwrap();
+    assert!(
+        cup_final.scheduled_day > 15,
+        "the cup fixture carries a visible reschedule note (original_day != scheduled_day)"
+    );
+    assert_eq!(cup_final.original_day, 15);
 }

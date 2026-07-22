@@ -56,7 +56,11 @@ fn age_weeks(state: &WorldState) -> u32 {
 fn start_season_alone_backfills_to_the_yearly_target() {
     let mut state = new_career(1);
     for season in 1u32..=10 {
-        state = reduce(state, Intent::StartSeason { fixtures: vec![] }, &mut GoatRng::new(0));
+        state = reduce(
+            state,
+            Intent::StartSeason { fixtures: vec![] },
+            &mut GoatRng::new(0),
+        );
         assert_eq!(state.season_number, season);
         let expected = START_AGE_WEEKS + (season - 1) * 52;
         assert_eq!(
@@ -77,7 +81,11 @@ fn untrained_rounds_still_sync_to_the_calendar() {
     const ROUNDS_PER_SEASON: u32 = 30;
 
     for season in 1u32..=5 {
-        state = reduce(state, Intent::StartSeason { fixtures: vec![] }, &mut GoatRng::new(0));
+        state = reduce(
+            state,
+            Intent::StartSeason { fixtures: vec![] },
+            &mut GoatRng::new(0),
+        );
         assert_eq!(state.season_number, season);
         assert_eq!(
             age_weeks(&state),
@@ -126,7 +134,11 @@ fn trained_every_round_still_hits_exact_target() {
     const ROUNDS_PER_SEASON: u32 = 30;
 
     for season in 1u32..=5 {
-        state = reduce(state, Intent::StartSeason { fixtures: vec![] }, &mut GoatRng::new(0));
+        state = reduce(
+            state,
+            Intent::StartSeason { fixtures: vec![] },
+            &mut GoatRng::new(0),
+        );
         assert_eq!(
             age_weeks(&state),
             START_AGE_WEEKS + (season - 1) * 52,

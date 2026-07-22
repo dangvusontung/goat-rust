@@ -28,6 +28,10 @@ use goat_world::{
     week_ends_after_round, world::WorldGenesis, Table, BASE_CAREER_YEAR, ROUNDS_PER_SEASON,
 };
 
+#[path = "orbit_fixtures.rs"]
+mod orbit_fixtures;
+use orbit_fixtures::build_season_orbit_fixtures;
+
 // ── Position selector ─────────────────────────────────────────────────────────
 
 #[derive(Clone, Copy, PartialEq)]
@@ -391,7 +395,12 @@ fn main() {
             intensity: Intensity::High,
         };
         state = reduce(state, Intent::SetRoutine { routine }, &mut GoatRng::new(0));
-        state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+        let fixtures = build_season_orbit_fixtures(seed, 1, div_idx, &div_clubs, pc_club_id);
+        state = reduce(
+            state,
+            Intent::StartSeason { fixtures },
+            &mut GoatRng::new(0),
+        );
         let pc_id = state.pc_player_id.unwrap();
 
         println!(
@@ -980,11 +989,19 @@ fn main() {
 
     // ── 20-season simulation ───────────────────────────────────────────────────
     for season in 1u32..=20 {
-        state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
-
+        // pc_div_idx/pc_club_idx already reflect the club for the season about to
+        // start (set by the previous iteration's promotion/relegation, or by InitWorld
+        // for season 1) — compute the fixtures before StartSeason resets season state.
         let season_div_idx = state.pc_div_idx as usize;
         let season_pc_club = state.pc_club_idx as usize;
         let div_clubs = world.leagues[season_div_idx].clubs.clone();
+        let fixtures =
+            build_season_orbit_fixtures(seed, season, season_div_idx, &div_clubs, season_pc_club);
+        state = reduce(
+            state,
+            Intent::StartSeason { fixtures },
+            &mut GoatRng::new(0),
+        );
 
         for round in 0..ROUNDS_PER_SEASON {
             for t in 0u64..2 {

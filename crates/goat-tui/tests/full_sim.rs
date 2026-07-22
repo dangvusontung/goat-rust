@@ -172,7 +172,11 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
     let world = WorldGenesis::generate(seed);
     let pc_id = state.pc_player_id.unwrap();
 
-    state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+    state = reduce(
+        state,
+        Intent::StartSeason { fixtures: vec![] },
+        &mut GoatRng::new(0),
+    );
 
     for round in 0..ROUNDS_PER_SEASON {
         // Two training weeks per round (matches are every ~2 weeks).
