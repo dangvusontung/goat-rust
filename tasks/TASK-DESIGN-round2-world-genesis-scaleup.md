@@ -717,6 +717,22 @@ persistent gap" threshold triggers it; does it apply to background/rival players
 currently have full attribute-level `current` tracked, only a formula-derived headline
 `potential_ovr`) or PC-only.
 
+**BL6 — Fan comments (crowd sentiment + social-feed flavor) — raised by Tùng, 2026-07-22, not
+yet designed.**
+
+Tùng's framing, clarified via two follow-up questions: (1) aggregate crowd-sentiment flavor text
+("the stands are split on you") — no fixed identity, not a named character; (2) social-media-style
+comments that appear after matches — random, no persistent identity per commenter (distinct from
+the 4 named pundits, BL4). Confirmed no fixed-identity fan characters (option 2 from the
+clarifying question was explicitly NOT chosen). Text should be **template + slot, authored with
+LLMs offline** — the exact pattern bible §8.7 already specifies for pundits/beats ("never at
+runtime") — so this is a content-authoring extension of an existing approach, not a new runtime
+mechanic. Verified: no code or bible text for fan comments exists today — only the numeric
+`club_fan` reputation facet (`crates/goat-meta/src/reputation.rs`), which is a score, not text.
+Open question for a real design pass: does this purely-flavor feed feed back into any state
+(e.g. `club_fan` reputation, matching how BL4 wired pundit tier into Sporting reputation), or is
+it pure flavor with zero mechanical effect — Tùng did not specify this either way yet.
+
 ## Decisions Design needs from Tùng before Dev starts (collected from above)
 
 1. **A2.1**: uniform 20-clubs-per-tier across all nations (low risk — `CLUBS_PER_DIV` moves
