@@ -1,16 +1,17 @@
 //! Regression test: every pair of clubs must meet exactly once at home and
 //! once away over a season's double round-robin (see fixtures.rs).
 
-use goat_world::generate_fixtures;
+use goat_world::{generate_fixtures, CLUBS_PER_DIV};
 use std::collections::HashMap;
 
 #[test]
 fn every_pair_mirrors_home_away_across_seeds() {
+    let clubs: Vec<usize> = (0..CLUBS_PER_DIV).collect();
     let mut total_bad = 0;
     let mut total_pairs_checked = 0;
     for world_seed in 0..50u64 {
         for season in 1..=3u32 {
-            let fixtures = generate_fixtures(world_seed, season, 0);
+            let fixtures = generate_fixtures(world_seed, season, 0, &clubs);
             let mut pair_sides: HashMap<(usize, usize), Vec<(usize, usize)>> = HashMap::new();
             for f in &fixtures {
                 let key = if f.home < f.away {
