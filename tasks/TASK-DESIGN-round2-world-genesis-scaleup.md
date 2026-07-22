@@ -621,33 +621,25 @@ depends on A2's actual genesis/replay cost being measured, not guessed.
 
 ## Parked for a future design round
 
-**Player-driven dynamic club strength (raised by Tùng during this round's review, 2026-07-22 —
-explicitly deferred, not designed here).**
+**Player-driven dynamic club strength — superseded, now designed in full.**
 
-Alongside this round's two refinements above, Tùng raised a third idea: replacing
-`Club.strength` (today's single hardcoded per-club scalar, `world.rs:49`) with a value
-*computed* from an actual roster of real `PlayerId`s — factoring in injuries, age, and form —
-plus promoting `Match`/`Fixture` to first-class entities under `Season` (rather than today's
-ephemeral, on-the-fly `fixtures::round_fixtures`/`season::Table` simulation shape).
+What was parked here 2026-07-22 (a one-paragraph placeholder: replacing `Club.strength` with a
+value computed from an actual roster, plus promoting `Match`/`Fixture` to first-class entities)
+has since been designed in a full follow-up round, same day:
+`tasks/TASK-DESIGN-round3-player-driven-club-strength.md`. That doc covers, against the real
+current code (not the placeholder's guesses): per-club `squad_size` replacing the global
+`SQUAD_SIZE` constant, the genesis anchor formula kept intact with a rare outlier roll added on
+top, live club strength computed from the current roster for match simulation (discovering
+along the way that this already exists for the background-league path, `batch_tick.rs`'s
+`club_strength`, and just needs promoting to a public API), season-end youth-academy
+replenishment with a floating squad-size band, and tactical-identity-biased lazy-promote
+potentials coordinated with Doc B's `TacticalIdentity`.
 
-**Why this is parked, not folded into this doc:** it is a genuinely separate, large subsystem
-that touches *how the whole 20-30k background player population is simulated* (bible §9's
-SoA/formula-driven background-growth machinery) — the same population this doc's own ground
-rules already carve out as "not this doc's concern" applies in reverse here: this idea would
-pull that population's live state directly into the club/league model this doc *does* own.
-Mixing club-strength-from-roster and first-class Match/Fixture entities into a spec whose scope
-is already "extra-large" (A2) and "large, high-risk" (A3) for club/league/nation *structure
-alone* would make this doc much harder to review and implement correctly as one unit — a
-different subsystem, a different risk profile, and its own set of numbers Tùng would need to
-sign off on separately (how much do injuries/age/form move the computed strength? does `Match`
-need its own persisted history, or is it recomputed like everything else in this doc? does
-`Fixture` replace or wrap the existing `fixtures.rs` generator?).
-
-**Recorded here so it isn't lost, not designed.** No struct shape, no data flow, and no numbers
-are proposed for this idea in this doc — that is deliberately left for its own future design
-round, once this round's world-genesis scale-up (this doc) and national-team/tactical-identity
-(Doc B) have shipped and the resulting club/league/nation/roster shapes are stable to build
-against.
+The `Match`/`Fixture`-as-first-class-persisted-entities half of this placeholder was **not**
+carried into the round-3 doc — Tùng's round-3 conversation scoped it out explicitly (see that
+doc's "Out of scope"). `season.rs`'s existing ephemeral fixture/table simulation stays exactly
+as this doc (A3) already designed it. This paragraph is superseded; see the round-3 doc for the
+actual design, not this placeholder.
 
 **Multi-competition: domestic cups + continental competitions (raised by Tùng, 2026-07-22 —
 explicitly deferred, not designed here).**
