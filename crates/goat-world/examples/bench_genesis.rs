@@ -6,6 +6,7 @@
 //! architecture.
 
 use goat_world::batch_tick::batch_tick_season;
+use goat_world::national_tournament::simulate_national_tournament;
 use goat_world::promotion::ReplayCache;
 use goat_world::world::WorldGenesis;
 use goat_world::{continental, history, population, ContinentalTier};
@@ -81,5 +82,26 @@ fn main() {
         "\ncontinental qualification: {season_boundary_tables:?} to build all 20 nations' \
          Tier-1 tables (one season boundary) + {qualification_total:?} to qualify all 3 tiers \
          from them"
+    );
+
+    // TASK-DESIGN-round4-competitions-slice4-national-teams §DoD#6: a *real* measurement
+    // of the full national-team tournament-cycle cost (qualifying: 4 groups of 5, 40
+    // matches total, each resolving a per-nation eligible-population scan; then the
+    // tournament proper: group stage + knockout), not estimated. Uses the same
+    // background population `qual_pop` built above rather than genesis-ing a second one.
+    const N_CYCLES: u32 = 10;
+    let t6 = Instant::now();
+    let mut last_champion = 0;
+    for cycle in 0..N_CYCLES {
+        let tournament_season = 1 + cycle * 4; // one World Cup cycle per iteration
+        let result = simulate_national_tournament(&world, &qual_pop, seed, tournament_season);
+        last_champion = result.champion;
+    }
+    let national_tournament_total = t6.elapsed();
+    println!(
+        "\nnational tournament cycle (qualifying + tournament proper): {:?} total for \
+         {N_CYCLES} cycles (avg {:?}/cycle, last champion nation id {last_champion})",
+        national_tournament_total,
+        national_tournament_total / N_CYCLES
     );
 }
