@@ -21,8 +21,8 @@ use crate::world::{Club, DivLevel};
 /// directly from `world.rs`, a sibling module in the same crate.
 pub(crate) fn tier_baseline_income(strength: u8, tier: DivLevel) -> i64 {
     let tier_mult: i64 = match tier {
-        DivLevel::Top => 12,    // TV money, prestige sponsorship — top-flight clubs earn
-        DivLevel::Second => 4,  // far more per point of strength than lower tiers
+        DivLevel::Top => 12,   // TV money, prestige sponsorship — top-flight clubs earn
+        DivLevel::Second => 4, // far more per point of strength than lower tiers
         DivLevel::Third => 1,
     };
     (strength as i64) * tier_mult * 20 // scaled to £k units — see task doc §1.3
@@ -138,8 +138,14 @@ mod tests {
         let top = total_income(&club, DivLevel::Top);
         let second = total_income(&club, DivLevel::Second);
         let third = total_income(&club, DivLevel::Third);
-        assert!(top > second, "Top tier must out-earn Second at equal strength");
-        assert!(second > third, "Second tier must out-earn Third at equal strength");
+        assert!(
+            top > second,
+            "Top tier must out-earn Second at equal strength"
+        );
+        assert!(
+            second > third,
+            "Second tier must out-earn Third at equal strength"
+        );
     }
 
     #[test]
@@ -190,31 +196,31 @@ mod tests {
         );
     }
 
+    fn push_test_player(pop: &mut Population, ovr: u8) -> usize {
+        let idx = pop.len();
+        pop.seed.push(idx as u64);
+        pop.club.push(0);
+        pop.nation.push(0);
+        pop.position.push(0);
+        pop.birth_age_weeks.push(28 * 52); // peak plateau -> current_ovr == potential
+        pop.potential_ovr.push(ovr);
+        pop.intake_week.push(0);
+        pop.career_goals.push(0);
+        pop.career_apps.push(0);
+        pop.career_titles.push(0);
+        idx
+    }
+
     #[test]
     fn window_wage_deduction_scales_with_squad_quality_and_size() {
         let mut pop = Population::default();
-        let mut push = |ovr: u8| {
-            let idx = pop.len();
-            pop.seed.push(idx as u64);
-            pop.club.push(0);
-            pop.nation.push(0);
-            pop.position.push(0);
-            pop.birth_age_weeks.push(28 * 52); // peak plateau -> current_ovr == potential
-            pop.potential_ovr.push(ovr);
-            pop.intake_week.push(0);
-            pop.career_goals.push(0);
-            pop.career_apps.push(0);
-            pop.career_titles.push(0);
-            idx
-        };
 
         // Equal size, one squad uniformly higher-quality.
-        let weak_squad: Vec<usize> = (0..10).map(|_| push(50)).collect();
-        let strong_squad: Vec<usize> = (0..10).map(|_| push(85)).collect();
+        let weak_squad: Vec<usize> = (0..10).map(|_| push_test_player(&mut pop, 50)).collect();
+        let strong_squad: Vec<usize> = (0..10).map(|_| push_test_player(&mut pop, 85)).collect();
         // Equal quality, different sizes.
-        let small_squad: Vec<usize> = (0..5).map(|_| push(70)).collect();
-        let large_squad: Vec<usize> = (0..15).map(|_| push(70)).collect();
-        drop(push);
+        let small_squad: Vec<usize> = (0..5).map(|_| push_test_player(&mut pop, 70)).collect();
+        let large_squad: Vec<usize> = (0..15).map(|_| push_test_player(&mut pop, 70)).collect();
 
         assert!(
             window_wage_deduction(&pop, &strong_squad, 0)
@@ -247,8 +253,14 @@ mod tests {
         let veteran = market_valuation(85, 85, 30);
         let prospect = market_valuation(60, 90, 19);
 
-        assert_eq!(veteran, 4_696, "veteran valuation should match the worked example");
-        assert_eq!(prospect, 2_214, "prospect valuation should match the worked example");
+        assert_eq!(
+            veteran, 4_696,
+            "veteran valuation should match the worked example"
+        );
+        assert_eq!(
+            prospect, 2_214,
+            "prospect valuation should match the worked example"
+        );
         assert!(
             prospect < veteran,
             "young high-ceiling prospect must value below the peaked veteran despite a \
@@ -266,12 +278,18 @@ mod tests {
         // Non-decreasing up to the 21..=29 peak plateau.
         let peak_start = samples.iter().position(|&a| a == 21).unwrap();
         for w in pcts[..=peak_start].windows(2) {
-            assert!(w[0] <= w[1], "age_value_pct must not decrease before the peak: {pcts:?}");
+            assert!(
+                w[0] <= w[1],
+                "age_value_pct must not decrease before the peak: {pcts:?}"
+            );
         }
         // Non-increasing from the peak plateau onward.
         let peak_end = samples.iter().position(|&a| a == 29).unwrap();
         for w in pcts[peak_end..].windows(2) {
-            assert!(w[0] >= w[1], "age_value_pct must not increase after the peak: {pcts:?}");
+            assert!(
+                w[0] >= w[1],
+                "age_value_pct must not increase after the peak: {pcts:?}"
+            );
         }
     }
 }
