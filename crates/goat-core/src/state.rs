@@ -13,6 +13,7 @@ use crate::generation::{self, CreationChoices};
 use crate::player::{PlayerId, PlayerStore};
 use crate::roles::FamiliarityTier;
 use crate::roles::NUM_ROLES;
+use crate::tactical_identity::TacticalIdentity;
 use crate::tuning::{ENERGY_START, START_AGE_WEEKS};
 use crate::tuning::{FAM_XP_AWKWARD, FAM_XP_COMPETENT, FAM_XP_UNCONVINCING};
 use crate::week::{advance_week, DevelopmentEvent, Routine};
@@ -71,6 +72,20 @@ pub struct WorldState {
     /// writes to it (an investment pass / season-end decay) — both are a later slice's
     /// season-tick wiring, not this slice's job.
     pub academy_boosts: Vec<u8>,
+    /// Every generated manager (Design round 5, Slice 7-8 §7.1), index = `ManagerId` as
+    /// `usize` — same "closed pool" system `goat_world::manager::ManagerPool` defines.
+    /// `goat-core` doesn't depend on `goat-world` (see the crate doc comments in both), so
+    /// this holds the flat, crate-boundary-safe shape of `goat_world::manager::Manager`
+    /// rather than the type itself. Path-dependent (fire/rehire history, rolling form) —
+    /// empty until a caller seeds it (genesis) or writes to it (a season-tick fire/rehire
+    /// pass) — both are a later slice's season-tick wiring, not this slice's job.
+    pub managers: Vec<ManagerState>,
+    /// Per-club current manager, index = `goat_world::world::ClubId`, value = index into
+    /// `managers`. Empty until a later slice seeds it, same as `managers` itself.
+    pub club_manager: Vec<u32>,
+    /// Currently-unemployed manager indices into `managers`, available to hire. Empty until
+    /// a later slice seeds it, same as `managers` itself.
+    pub free_agents: Vec<u32>,
     // ── Phase 6 discipline fields ─────────────────────────────────────────────
     /// Yellow cards in the current season (resets each season). 5 = ban.
     pub pc_yellow_cards_season: u32,
@@ -206,6 +221,26 @@ pub struct WorldState {
     pub pc_season_fixtures: Vec<goat_calendar::Fixture>,
 }
 
+/// Rolling match-points form window length (Design round 5, Slice 7-8 §7.1) — `goat-core`
+/// keeps its own local copy rather than importing `goat_world::manager::MANAGER_FORM_WINDOW`
+/// (no shared "seed/const util" module exists in this codebase; `world.rs`'s `seed_mix` and
+/// `population.rs`'s own local seed helpers already established this "each module keeps its
+/// own copy" precedent).
+pub const MANAGER_FORM_WINDOW: usize = 10;
+
+/// One manager's persisted state (Design round 5, Slice 7-8) — flat fields mirroring
+/// `goat_world::manager::Manager`'s shape; kept here rather than importing that type since
+/// `goat-core` is not depended on by, and does not depend on, `goat-world`.
+#[derive(Debug, Clone)]
+pub struct ManagerState {
+    pub name: String,
+    pub identity_bias: TacticalIdentity,
+    pub recent_points: [u8; MANAGER_FORM_WINDOW],
+    pub recent_idx: u8,
+    pub tenure_start_season: u32,
+    pub matches_played: u16,
+}
+
 /// Batch-ticked career state for one cohort peer (Phase 9).
 #[derive(Debug, Clone)]
 pub struct PeerState {
@@ -247,6 +282,9 @@ impl WorldState {
             table_raw: [0u32; 100],
             club_budgets: Vec::new(),
             academy_boosts: Vec::new(),
+            managers: Vec::new(),
+            club_manager: Vec::new(),
+            free_agents: Vec::new(),
             pc_yellow_cards_season: 0,
             pc_suspensions: Vec::new(),
             pc_discipline_rep: 50,

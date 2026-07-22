@@ -496,11 +496,11 @@ fn save_load_restores_club_budgets_through_bytes() {
 #[test]
 fn old_v11_save_without_club_budgets_defaults_to_empty() {
     // A real v11 binary never wrote the trailing v12 `club_budgets` bytes (length prefix +
-    // entries) or the v13 `academy_boosts` bytes (an empty-list length prefix here, since
-    // this test leaves it unset). Simulate that by truncating those bytes off a real v13
-    // buffer — exercises the actual `.unwrap_or(0)` backward-compat reads in `from_bytes`,
-    // not just the in-memory struct default (same idiom as the v8/v9 Pantheon-signal
-    // truncation test).
+    // entries), the v13 `academy_boosts` bytes, or the v14 manager-pool bytes (each an
+    // empty-list length prefix here, since this test leaves them unset). Simulate that by
+    // truncating those bytes off a real v14 buffer — exercises the actual `.unwrap_or(0)`
+    // backward-compat reads in `from_bytes`, not just the in-memory struct default (same
+    // idiom as the v8/v9 Pantheon-signal truncation test).
     let state = setup_state();
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
@@ -513,9 +513,11 @@ fn old_v11_save_without_club_budgets_defaults_to_empty() {
     let mut bytes = std::fs::read(&full_path).unwrap();
     std::fs::remove_file(&full_path).ok();
 
-    // Trailing encoding: club_budgets (4-byte count + 3 * 8-byte entries) followed by
-    // academy_boosts's empty-list 4-byte length prefix.
-    let v11_len = bytes.len() - (4 + 3 * 8) - 4;
+    // Trailing encoding: club_budgets (4-byte count + 3 * 8-byte entries), followed by
+    // academy_boosts's empty-list 4-byte length prefix, followed by v14's manager section:
+    // manager_blob's own 4-byte byte-length prefix + its empty-pool 4-byte inner manager
+    // count, then club_manager's and free_agents' empty-list 4-byte length prefixes.
+    let v11_len = bytes.len() - (4 + 3 * 8) - 4 - (4 + 4 + 4 + 4);
     bytes.truncate(v11_len);
 
     let v11_path = std::env::temp_dir().join(format!(
@@ -534,9 +536,20 @@ fn old_v11_save_without_club_budgets_defaults_to_empty() {
         loaded.academy_boosts.is_empty(),
         "a pre-v13 save must default academy_boosts to empty too"
     );
+    assert!(
+        loaded.manager_blob.is_empty()
+            && loaded.club_manager.is_empty()
+            && loaded.free_agents.is_empty(),
+        "a pre-v14 save must default the manager pool to empty too"
+    );
     let restored = to_world_state(&loaded, &test_world());
     assert!(restored.club_budgets.is_empty());
     assert!(restored.academy_boosts.is_empty());
+    assert!(
+        restored.managers.is_empty()
+            && restored.club_manager.is_empty()
+            && restored.free_agents.is_empty()
+    );
 }
 
 #[test]
@@ -562,7 +575,8 @@ fn save_load_restores_academy_boosts_through_bytes() {
 #[test]
 fn old_v12_save_without_academy_boosts_defaults_to_empty() {
     // A real v12 binary never wrote the trailing v13 `academy_boosts` bytes (length prefix +
-    // entries). Simulate that by truncating those bytes off a real v13 buffer.
+    // entries), or the v14 manager-pool bytes. Simulate that by truncating those bytes off a
+    // real v14 buffer.
     let state = setup_state();
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
@@ -575,8 +589,11 @@ fn old_v12_save_without_academy_boosts_defaults_to_empty() {
     let mut bytes = std::fs::read(&full_path).unwrap();
     std::fs::remove_file(&full_path).ok();
 
-    // Trailing encoding: 4-byte count + 3 * 1-byte entries.
-    let v12_len = bytes.len() - (4 + 3);
+    // Trailing encoding: academy_boosts (4-byte count + 3 * 1-byte entries), followed by
+    // v14's manager section: manager_blob's own 4-byte byte-length prefix + its empty-pool
+    // 4-byte inner manager count, then club_manager's and free_agents' empty-list 4-byte
+    // length prefixes.
+    let v12_len = bytes.len() - (4 + 3) - (4 + 4 + 4 + 4);
     bytes.truncate(v12_len);
 
     let v12_path = std::env::temp_dir().join(format!(
@@ -591,8 +608,147 @@ fn old_v12_save_without_academy_boosts_defaults_to_empty() {
         loaded.academy_boosts.is_empty(),
         "a pre-v13 save must default academy_boosts to empty, not panic or fabricate entries"
     );
+    assert!(
+        loaded.manager_blob.is_empty()
+            && loaded.club_manager.is_empty()
+            && loaded.free_agents.is_empty(),
+        "a pre-v14 save must default the manager pool to empty too"
+    );
     let restored = to_world_state(&loaded, &test_world());
     assert!(restored.academy_boosts.is_empty());
+    assert!(
+        restored.managers.is_empty()
+            && restored.club_manager.is_empty()
+            && restored.free_agents.is_empty()
+    );
+}
+
+// ── Managers (Design round 5, Slice 7-8) ─────────────────────────────────────
+
+#[test]
+fn old_v13_save_without_managers_defaults_to_empty() {
+    // A real v13 binary never wrote the trailing v14 manager-pool bytes at all. Simulate
+    // that by truncating just those bytes off a real v14 buffer, isolating the v13->v14
+    // boundary specifically (unlike the v11/v12 tests above, which also strip the earlier
+    // v12/v13 fields).
+    use goat_core::roles::NUM_ROLES;
+    use goat_core::state::{ManagerState, MANAGER_FORM_WINDOW};
+    use goat_core::tactical_identity::TacticalIdentity;
+
+    let mut state = setup_state();
+    state.managers = vec![ManagerState {
+        name: "Should Vanish".to_string(),
+        identity_bias: TacticalIdentity {
+            role_weight: [Fixed::from_int(1); NUM_ROLES],
+        },
+        recent_points: [0u8; MANAGER_FORM_WINDOW],
+        recent_idx: 0,
+        tenure_start_season: 1,
+        matches_played: 5,
+    }];
+    state.club_manager = vec![0];
+    state.free_agents = vec![];
+
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let full_path =
+        std::env::temp_dir().join(format!("goat_save_v13_full2_{}.gsav", std::process::id()));
+    save_to_file(&data, &full_path).unwrap();
+    let mut bytes = std::fs::read(&full_path).unwrap();
+    std::fs::remove_file(&full_path).ok();
+
+    // Trailing encoding: manager_blob's own 4-byte byte-length prefix + its 1-manager
+    // content, then club_manager's 4-byte count + 1 entry (4 bytes), then free_agents'
+    // empty-list 4-byte length prefix.
+    let manager_blob_len = data.manager_blob.len();
+    let v13_len = bytes.len() - (4 + manager_blob_len) - (4 + 4) - 4;
+    bytes.truncate(v13_len);
+
+    let v13_path = std::env::temp_dir().join(format!(
+        "goat_save_v13_truncated_{}.gsav",
+        std::process::id()
+    ));
+    std::fs::write(&v13_path, &bytes).unwrap();
+    let loaded = load_from_file(&v13_path).unwrap();
+    std::fs::remove_file(&v13_path).ok();
+
+    assert!(
+        loaded.manager_blob.is_empty()
+            && loaded.club_manager.is_empty()
+            && loaded.free_agents.is_empty(),
+        "a pre-v14 save must default the manager pool to empty, not panic or fabricate entries"
+    );
+    let restored = to_world_state(&loaded, &test_world());
+    assert!(
+        restored.managers.is_empty()
+            && restored.club_manager.is_empty()
+            && restored.free_agents.is_empty()
+    );
+}
+
+#[test]
+fn save_load_restores_managers_through_bytes() {
+    // v14+: the manager pool (managers, club_manager, free_agents) must survive a full byte
+    // round-trip, including a manager's non-default tactical identity, mid-window ring
+    // buffer, and a nonzero tenure/matches_played.
+    use goat_core::roles::NUM_ROLES;
+    use goat_core::state::{ManagerState, MANAGER_FORM_WINDOW};
+    use goat_core::tactical_identity::TacticalIdentity;
+
+    let mut state = setup_state();
+    let mut role_weight = [Fixed::from_int(1); NUM_ROLES];
+    role_weight[0] = Fixed::raw(1_600);
+    role_weight[1] = Fixed::raw(400);
+    let mut recent_points = [0u8; MANAGER_FORM_WINDOW];
+    recent_points[0] = 3;
+    recent_points[1] = 1;
+    state.managers = vec![
+        ManagerState {
+            name: "Round-Trip Manager".to_string(),
+            identity_bias: TacticalIdentity { role_weight },
+            recent_points,
+            recent_idx: 2,
+            tenure_start_season: 5,
+            matches_played: 27,
+        },
+        ManagerState {
+            name: "Free Agent Manager".to_string(),
+            identity_bias: TacticalIdentity {
+                role_weight: [Fixed::from_int(1); NUM_ROLES],
+            },
+            recent_points: [0u8; MANAGER_FORM_WINDOW],
+            recent_idx: 0,
+            tenure_start_season: 0,
+            matches_played: 0,
+        },
+    ];
+    state.club_manager = vec![0];
+    state.free_agents = vec![1];
+
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join(format!(
+        "goat_save_managers_roundtrip_{}.gsav",
+        std::process::id()
+    ));
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap(), &test_world());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(restored.managers.len(), 2);
+    assert_eq!(restored.managers[0].name, "Round-Trip Manager");
+    assert_eq!(restored.managers[0].identity_bias.role_weight, role_weight);
+    assert_eq!(restored.managers[0].recent_points, recent_points);
+    assert_eq!(restored.managers[0].recent_idx, 2);
+    assert_eq!(restored.managers[0].tenure_start_season, 5);
+    assert_eq!(restored.managers[0].matches_played, 27);
+    assert_eq!(restored.managers[1].name, "Free Agent Manager");
+    assert_eq!(restored.club_manager, vec![0]);
+    assert_eq!(restored.free_agents, vec![1]);
 }
 
 // ── Save slots (Design round 1, Slice 3) ─────────────────────────────────────

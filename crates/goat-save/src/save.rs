@@ -41,7 +41,12 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// v13+: (Design round 5, Doc A §Slice 6) adds `academy_boosts: Vec<u8>` — every AI club's
 /// youth-academy investment lever, indexed by `ClubId`. Another pure tail-append, same idiom
 /// as v12's `club_budgets`.
-pub const VERSION: u32 = 13;
+/// v14+: (Design round 5, Slice 7-8 §7.1/8.4) adds the `ManagerPool`'s three fields —
+/// `manager_blob` (every generated manager, packed like `peer_blob`), `club_manager`, and
+/// `free_agents` (both length-prefixed `Vec<u32>` `ManagerId` lists) — path-dependent
+/// fire/rehire history and rolling form that cannot be regenerated from `world_seed` alone.
+/// Another pure tail-append, same idiom as v12/v13.
+pub const VERSION: u32 = 14;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -139,6 +144,16 @@ pub struct SaveData {
     /// Every AI club's academy-boost lever, indexed by `ClubId`. Empty for saves that never
     /// seeded it (older saves, or a fresh game before genesis wiring).
     pub academy_boosts: Vec<u8>,
+    // ── Managers (v14+, Design round 5 Slice 7-8) ──────────────────────────────
+    /// Packed manager data: for each manager: name (u8 len + bytes) + identity_bias
+    /// (`NUM_ROLES` × i32 `Fixed` raw) + recent_points (`MANAGER_FORM_WINDOW` × u8) +
+    /// recent_idx (u8) + tenure_start_season (u32) + matches_played (u16). Mirrors
+    /// `peer_blob`'s packed-blob idiom.
+    pub manager_blob: Vec<u8>,
+    /// Per-club current manager index into the unpacked `manager_blob`, indexed by `ClubId`.
+    pub club_manager: Vec<u32>,
+    /// Currently-unemployed manager indices into the unpacked `manager_blob`.
+    pub free_agents: Vec<u32>,
 }
 
 #[derive(Debug)]
@@ -252,7 +267,94 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_season_international_goals: state.pc_season_international_goals,
         club_budgets: state.club_budgets.clone(),
         academy_boosts: state.academy_boosts.clone(),
+        manager_blob: encode_managers(&state.managers),
+        club_manager: state.club_manager.clone(),
+        free_agents: state.free_agents.clone(),
     }
+}
+
+fn encode_managers(managers: &[goat_core::state::ManagerState]) -> Vec<u8> {
+    let mut v = Vec::new();
+    push_u32(&mut v, managers.len() as u32);
+    for m in managers {
+        let name_bytes = m.name.as_bytes();
+        v.push(name_bytes.len().min(63) as u8);
+        v.extend_from_slice(&name_bytes[..name_bytes.len().min(63)]);
+        for w in m.identity_bias.role_weight {
+            push_i32(&mut v, w.to_raw());
+        }
+        v.extend_from_slice(&m.recent_points);
+        v.push(m.recent_idx);
+        push_u32(&mut v, m.tenure_start_season);
+        push_u16(&mut v, m.matches_played);
+    }
+    v
+}
+
+fn decode_managers(blob: &[u8]) -> Vec<goat_core::state::ManagerState> {
+    use goat_core::state::{ManagerState, MANAGER_FORM_WINDOW};
+    use goat_core::tactical_identity::TacticalIdentity;
+    use goat_fixed::Fixed;
+
+    if blob.len() < 4 {
+        return Vec::new();
+    }
+    let mut cur = 0usize;
+    let count = u32::from_le_bytes(blob[0..4].try_into().unwrap_or([0; 4])) as usize;
+    cur += 4;
+    let mut managers = Vec::with_capacity(count.min(4096));
+    for _ in 0..count {
+        let Some(&name_len) = blob.get(cur) else {
+            break;
+        };
+        let name_len = name_len as usize;
+        cur += 1;
+        let name = std::str::from_utf8(blob.get(cur..cur + name_len).unwrap_or(b""))
+            .unwrap_or("?")
+            .to_string();
+        cur += name_len;
+
+        let mut role_weight = [Fixed::ZERO; NUM_ROLES];
+        for w in role_weight.iter_mut() {
+            let raw = blob
+                .get(cur..cur + 4)
+                .and_then(|s| s.try_into().ok())
+                .map(i32::from_le_bytes)
+                .unwrap_or(0);
+            *w = Fixed::raw(raw);
+            cur += 4;
+        }
+
+        let mut recent_points = [0u8; MANAGER_FORM_WINDOW];
+        for p in recent_points.iter_mut() {
+            *p = blob.get(cur).copied().unwrap_or(0);
+            cur += 1;
+        }
+        let recent_idx = blob.get(cur).copied().unwrap_or(0);
+        cur += 1;
+        let tenure_start_season = blob
+            .get(cur..cur + 4)
+            .and_then(|s| s.try_into().ok())
+            .map(u32::from_le_bytes)
+            .unwrap_or(0);
+        cur += 4;
+        let matches_played = blob
+            .get(cur..cur + 2)
+            .and_then(|s| s.try_into().ok())
+            .map(u16::from_le_bytes)
+            .unwrap_or(0);
+        cur += 2;
+
+        managers.push(ManagerState {
+            name,
+            identity_bias: TacticalIdentity { role_weight },
+            recent_points,
+            recent_idx,
+            tenure_start_season,
+            matches_played,
+        });
+    }
+    managers
 }
 
 fn encode_peers(peers: &[goat_core::state::PeerState]) -> Vec<u8> {
@@ -525,6 +627,9 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.pc_season_international_goals = data.pc_season_international_goals;
     state.club_budgets = data.club_budgets.clone();
     state.academy_boosts = data.academy_boosts.clone();
+    state.managers = decode_managers(&data.manager_blob);
+    state.club_manager = data.club_manager.clone();
+    state.free_agents = data.free_agents.clone();
 
     state
 }
@@ -636,6 +741,17 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     push_u32(&mut v, d.academy_boosts.len() as u32);
     for &boost in &d.academy_boosts {
         v.push(boost);
+    }
+    // v14+ — managers (Design round 5 Slice 7-8): packed manager blob + two ManagerId lists.
+    push_u32(&mut v, d.manager_blob.len() as u32);
+    v.extend_from_slice(&d.manager_blob);
+    push_u32(&mut v, d.club_manager.len() as u32);
+    for &id in &d.club_manager {
+        push_u32(&mut v, id);
+    }
+    push_u32(&mut v, d.free_agents.len() as u32);
+    for &id in &d.free_agents {
+        push_u32(&mut v, id);
     }
     v
 }
@@ -810,6 +926,25 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     for _ in 0..academy_boosts_len {
         academy_boosts.push(read_u8(b, &mut cur).unwrap_or(0));
     }
+    // Managers (v14+; default empty for older saves).
+    let manager_blob_len = read_u32(b, &mut cur).unwrap_or(0) as usize;
+    let manager_blob = if cur + manager_blob_len <= b.len() {
+        let blob = b[cur..cur + manager_blob_len].to_vec();
+        cur += manager_blob_len;
+        blob
+    } else {
+        Vec::new()
+    };
+    let club_manager_len = read_u32(b, &mut cur).unwrap_or(0) as usize;
+    let mut club_manager = Vec::with_capacity(club_manager_len.min(4096));
+    for _ in 0..club_manager_len {
+        club_manager.push(read_u32(b, &mut cur).unwrap_or(0));
+    }
+    let free_agents_len = read_u32(b, &mut cur).unwrap_or(0) as usize;
+    let mut free_agents = Vec::with_capacity(free_agents_len.min(4096));
+    for _ in 0..free_agents_len {
+        free_agents.push(read_u32(b, &mut cur).unwrap_or(0));
+    }
 
     Ok(SaveData {
         world_seed,
@@ -878,6 +1013,9 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_season_international_goals,
         club_budgets,
         academy_boosts,
+        manager_blob,
+        club_manager,
+        free_agents,
     })
 }
 
