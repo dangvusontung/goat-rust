@@ -38,6 +38,12 @@ pub struct LegacyEvidence {
     pub career_caps: u32,
     /// Goals scored while capped for the national team, career-wide.
     pub career_international_goals: u32,
+    /// World Cups won with the PC's nation, career-wide (Design round 4, Slice 4 §4.5) --
+    /// a minimal legacy-evidence counter mirroring `career_caps` exactly. No
+    /// school-weighting logic reads this yet (raw evidence for a future axis pass).
+    pub career_world_cups_won: u32,
+    /// Continental championships won with the PC's nation, career-wide.
+    pub career_continental_championships_won: u32,
 }
 
 /// The 7+1 legacy axes (all 0–100 Fixed).

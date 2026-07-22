@@ -102,6 +102,17 @@ pub struct WorldState {
     pub pc_career_international_goals: u32,
     /// This season's international goals, live — folded at ApplySeasonEndLegacy.
     pub pc_season_international_goals: u32,
+    // ── Design round 4, Slice 4 §4.5 — national-team tournament wins ──────────
+    /// World Cups won with the PC's nation, career-wide.
+    pub pc_career_world_cups_won: u32,
+    /// This season's World Cup wins, live — folded into pc_career_world_cups_won only at
+    /// ApplySeasonEndLegacy (mirrors pc_season_caps -> pc_career_caps exactly).
+    pub pc_season_world_cups_won: u32,
+    /// Continental championships won with the PC's nation, career-wide.
+    pub pc_career_continental_championships_won: u32,
+    /// This season's continental-championship wins, live — folded at
+    /// ApplySeasonEndLegacy.
+    pub pc_season_continental_championships_won: u32,
     // ── Phase 7 reputation scalars ────────────────────────────────────────────
     pub pc_sporting_rep: i32,
     pub pc_club_fan_rep: i32,
@@ -237,6 +248,10 @@ impl WorldState {
             pc_season_caps: 0,
             pc_career_international_goals: 0,
             pc_season_international_goals: 0,
+            pc_career_world_cups_won: 0,
+            pc_season_world_cups_won: 0,
+            pc_career_continental_championships_won: 0,
+            pc_season_continental_championships_won: 0,
             pc_sporting_rep: 50,
             pc_club_fan_rep: 50,
             pc_contract_seasons_left: 2,
@@ -336,6 +351,10 @@ pub enum Intent {
         season_caps: u32,
         /// International goals scored this season.
         season_international_goals: u32,
+        /// World Cups won with the PC's nation this season (Design round 4, Slice 4 §4.5).
+        season_world_cups_won: u32,
+        /// Continental championships won with the PC's nation this season.
+        season_continental_championships_won: u32,
     },
 
     // ── Phase 8 intents ───────────────────────────────────────────────────────
@@ -595,6 +614,8 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             season_transfer_requests,
             season_caps,
             season_international_goals,
+            season_world_cups_won,
+            season_continental_championships_won,
         } => {
             state.pc_career_goals += season_goals;
             state.pc_career_matches += season_matches;
@@ -603,6 +624,8 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_career_transfer_requests += season_transfer_requests;
             state.pc_career_caps += season_caps;
             state.pc_career_international_goals += season_international_goals;
+            state.pc_career_world_cups_won += season_world_cups_won;
+            state.pc_career_continental_championships_won += season_continental_championships_won;
             // Career-peak OVR: computed here, not staged — a "peak so far" check is
             // naturally season-cadenced, no per-match staging needed.
             if let Some(pc_id) = state.pc_player_id {
@@ -886,6 +909,8 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_season_transfer_requests = 0;
             state.pc_season_caps = 0;
             state.pc_season_international_goals = 0;
+            state.pc_season_world_cups_won = 0;
+            state.pc_season_continental_championships_won = 0;
             state.pc_yellow_cards_season = 0; // reset yellow cards each season
                                               // Preserve table from last season? No — start fresh each season.
             state.table_raw = [0u32; 100];

@@ -160,6 +160,8 @@ const fn constify_default() -> LegacyEvidence {
         career_transfer_requests: 0,
         career_caps: 0,
         career_international_goals: 0,
+        career_world_cups_won: 0,
+        career_continental_championships_won: 0,
     }
 }
 

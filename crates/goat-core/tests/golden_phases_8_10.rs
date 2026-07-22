@@ -343,6 +343,8 @@ fn apply_season_end_legacy(
             season_transfer_requests,
             season_caps: 0,
             season_international_goals: 0,
+            season_world_cups_won: 0,
+            season_continental_championships_won: 0,
         },
         &mut GoatRng::new(0),
     )
@@ -372,6 +374,57 @@ fn season_end_legacy_folds_standout_and_transfer_counters() {
     assert_eq!(
         s.pc_career_transfer_requests, 3,
         "season 2 transfer requests accumulate on top of season 1"
+    );
+}
+
+/// Design round 4, Slice 4 §4.5: `pc_career_world_cups_won`/
+/// `pc_career_continental_championships_won` fold at `ApplySeasonEndLegacy` exactly like
+/// `pc_career_caps` does -- accumulate across seasons, never reset mid-career.
+#[test]
+fn season_end_legacy_folds_national_tournament_wins() {
+    fn apply(s: WorldState, world_cups: u32, continentals: u32) -> WorldState {
+        reduce(
+            s,
+            Intent::ApplySeasonEndLegacy {
+                season_goals: 0,
+                season_matches: 0,
+                season_output_sum: 0,
+                won_title: false,
+                player_of_year: false,
+                finish_position: 10,
+                decisive_moments: 0,
+                new_sporting_rep: 50,
+                new_club_fan_rep: 50,
+                season_standout_matches: 0,
+                season_transfer_requests: 0,
+                season_caps: 0,
+                season_international_goals: 0,
+                season_world_cups_won: world_cups,
+                season_continental_championships_won: continentals,
+            },
+            &mut GoatRng::new(0),
+        )
+    }
+
+    let mut s = base_state();
+    assert_eq!(s.pc_career_world_cups_won, 0);
+    assert_eq!(s.pc_career_continental_championships_won, 0);
+
+    s = apply(s, 1, 0);
+    assert_eq!(
+        s.pc_career_world_cups_won, 1,
+        "season 1 World Cup win folds in"
+    );
+    assert_eq!(s.pc_career_continental_championships_won, 0);
+
+    s = apply(s, 0, 1);
+    assert_eq!(
+        s.pc_career_world_cups_won, 1,
+        "a later season with no World Cup win does not regress the career total"
+    );
+    assert_eq!(
+        s.pc_career_continental_championships_won, 1,
+        "season 2 continental-championship win accumulates independently"
     );
 }
 

@@ -1279,6 +1279,8 @@ pub fn get_legacy() -> LegacyDto {
             career_transfer_requests: s.pc_career_transfer_requests,
             career_caps: s.pc_career_caps,
             career_international_goals: s.pc_career_international_goals,
+            career_world_cups_won: s.pc_career_world_cups_won,
+            career_continental_championships_won: s.pc_career_continental_championships_won,
         };
         let axes = compute_axes(&ev);
         let rankings = all_rankings(&ev, &axes);
@@ -1446,6 +1448,10 @@ pub fn apply_season_end() -> GoatGameState {
             // Flutter side, so nothing accrues caps this season.
             season_caps: 0,
             season_international_goals: 0,
+            // National-team tournaments (Design round 4, Slice 4) aren't dispatched from
+            // the bridge layer yet either (same deferred-to-Slice-5 gap).
+            season_world_cups_won: 0,
+            season_continental_championships_won: 0,
         },
         &mut GoatRng::new(0),
     );

@@ -364,6 +364,8 @@ fn end_season(mut state: WorldState) -> WorldState {
             season_transfer_requests: s_transfer_requests,
             season_caps: 0,
             season_international_goals: 0,
+            season_world_cups_won: 0,
+            season_continental_championships_won: 0,
         },
         &mut GoatRng::new(0),
     );
