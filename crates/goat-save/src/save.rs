@@ -454,11 +454,13 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.pc_suspensions = data
         .pc_suspensions
         .iter()
-        .map(|&(competition_id, matches_remaining)| goat_calendar::SuspensionLedger {
-            player_id: pc_id,
-            competition_id,
-            matches_remaining,
-        })
+        .map(
+            |&(competition_id, matches_remaining)| goat_calendar::SuspensionLedger {
+                player_id: pc_id,
+                competition_id,
+                matches_remaining,
+            },
+        )
         .collect();
     state.pc_discipline_rep = data.pc_discipline_rep;
     state.pc_career_goals = data.pc_career_goals;

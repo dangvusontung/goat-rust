@@ -650,7 +650,10 @@ fn form_stays_in_range() {
 #[test]
 fn red_card_triggers_suspension() {
     let mut state = make_state(11, Position::Midfielder, DIV_ENG_SEC);
-    assert_eq!(state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID), 0);
+    assert_eq!(
+        state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID),
+        0
+    );
 
     state = reduce(
         state,
