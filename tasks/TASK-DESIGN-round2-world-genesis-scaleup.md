@@ -674,6 +674,37 @@ point — it needs someone to pick it up, confirm the still-`[DECISION NEEDED]` 
 priority ladder, whether continental qualification ties to league position), and implement it
 against the post-scale-up club/league/nation shapes this doc produces.
 
+**AI-run club economy: transfer market between AI clubs, managers, club finances (raised by
+Tùng, 2026-07-22 — explicitly deferred, not designed here).**
+
+Bible §7.3 ("Transfer Market & AI Clubs") already commits to AI clubs being "deep agents, not
+backdrops": each with its own strategy, finances/budget, squad-building plan, and manager, with
+clubs trading *each other* (not just trading with the PC) so teammates arrive/leave and shift
+squad chemistry around the player. Bible §7.2 item 2 also wants clubs to carry "rich identity:
+history, rivalries, philosophy, stature, finances" beyond today's name+strength-number shape.
+Verified against real code: `crates/goat-core/src/state.rs`'s "Phase 8" transfer/contract
+machinery is entirely PC-facing (the player negotiating their own moves) — there is no
+`Manager` type, no AI-club-initiated transfer, and no club-level finance/budget anywhere in the
+workspace. Same parking rationale as the two items above: a large, separate subsystem (club AI
+agent behavior, not club/league/nation structure), deliberately left for its own future round.
+
+**Pundits & Media, including a credibility/influence axis per pundit (raised by Tùng,
+2026-07-22 — explicitly deferred, not designed here).**
+
+Bible §8.7 already specifies 4 named recurring pundits (doubter, champion, stats nerd, eye-test
+romantic) as "the voice of the plural pantheon (§8.1)" — i.e. one pundit per existing Pantheon
+school, not an independently-sized roster. Confirmed with Tùng this round: the 4-personality
+count itself is fine (it's intentionally tied to the 4 schools); what's missing is that **each
+individual pundit needs their own credibility/influence stat**, separate from which of the 4
+personalities they represent — a green rookie writer's hot take should barely move public
+perception, while a veteran pundit's opinion should carry real weight. Tùng also specified this
+credibility should **grow over time** (with tenure and/or being proven right), the same way a
+player's attributes develop. None of this exists in the bible today (`grep`'d — zero mentions of
+pundit credibility/influence/growth in `docs/MAIN.md`) or in code (§8.7's pundit system itself is
+0% implemented — no pundit-related struct anywhere in the workspace). Parked alongside the AI
+club economy item above for the same reason: a distinct subsystem (media/narrative layer, not
+club/league/nation structure) that would blow up this doc's scope if designed here.
+
 ## Decisions Design needs from Tùng before Dev starts (collected from above)
 
 1. **A2.1**: uniform 20-clubs-per-tier across all nations (low risk — `CLUBS_PER_DIV` moves
