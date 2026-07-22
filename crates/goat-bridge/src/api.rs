@@ -31,7 +31,7 @@ use goat_rng::{GoatRng, RngSource};
 use goat_traits::PlayerTraits;
 use goat_world::{
     format_match_date, format_week_header, is_break_week, round_to_week, week_to_rounds,
-    world::WorldGenesis, Table, BASE_CAREER_YEAR, CLUBS_PER_DIV, ROUNDS_PER_SEASON,
+    world::WorldGenesis, Table, BASE_CAREER_YEAR, ROUNDS_PER_SEASON,
     SEASON_CALENDAR_WEEKS,
 };
 
