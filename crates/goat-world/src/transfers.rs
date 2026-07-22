@@ -261,6 +261,7 @@ mod tests {
             squad_size: 5,
             tactical_identity: neutral_identity(),
             budget,
+            academy_boost: 0,
         }
     }
 

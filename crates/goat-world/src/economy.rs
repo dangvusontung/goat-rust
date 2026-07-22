@@ -122,6 +122,7 @@ mod tests {
             squad_size: 20,
             tactical_identity: neutral_identity(),
             budget: 0,
+            academy_boost: 0,
         };
 
         for tier in DivLevel::ALL {
@@ -160,6 +161,7 @@ mod tests {
             squad_size: 20,
             tactical_identity: neutral_identity(),
             budget: 100,
+            academy_boost: 0,
         };
         let mut pop = Population::default();
         let squad: Vec<usize> = (0..20)
