@@ -59,8 +59,12 @@ pub struct WorldState {
     // ── Phase 6 discipline fields ─────────────────────────────────────────────
     /// Yellow cards in the current season (resets each season). 5 = ban.
     pub pc_yellow_cards_season: u32,
-    /// Matches remaining on suspension (0 = available).
-    pub pc_suspension_weeks: u32,
+    /// Per-competition suspension ledger (Design round 4, Slice 5 §5.1) — replaces a
+    /// single global "matches remaining" scalar so a ban is scoped to the exact
+    /// competition it was earned in (a domestic-cup red card never blocks league
+    /// selection, and vice versa). In practice tiny: the PC is rarely suspended in more
+    /// than one competition at once, but the type supports it correctly.
+    pub pc_suspensions: Vec<goat_calendar::SuspensionLedger>,
     /// Dirty/clean reputation 0–100 (50 = neutral). Higher = stricter officiating.
     pub pc_discipline_rep: i32,
     // ── Phase 7 legacy evidence ───────────────────────────────────────────────
@@ -227,7 +231,7 @@ impl WorldState {
             pc_season_output: 0,
             table_raw: [0u32; 100],
             pc_yellow_cards_season: 0,
-            pc_suspension_weeks: 0,
+            pc_suspensions: Vec::new(),
             pc_discipline_rep: 50,
             pc_career_goals: 0,
             pc_career_matches: 0,
@@ -277,6 +281,51 @@ impl WorldState {
             last_week_flashpoints: Vec::new(),
             pc_season_fixtures: Vec::new(),
         }
+    }
+
+    /// Matches remaining on the PC's suspension in `competition_id` (0 = available in
+    /// that competition, regardless of any ban held in a different one).
+    pub fn pc_suspension_matches_remaining(&self, competition_id: goat_calendar::CompetitionId) -> u32 {
+        self.pc_suspensions
+            .iter()
+            .find(|l| l.competition_id == competition_id)
+            .map(|l| l.matches_remaining)
+            .unwrap_or(0)
+    }
+
+    /// Add `matches` bans to the PC's ledger entry for `competition_id`, merging into an
+    /// existing entry rather than creating a duplicate.
+    fn pc_add_suspension(&mut self, competition_id: goat_calendar::CompetitionId, matches: u32) {
+        if matches == 0 {
+            return;
+        }
+        if let Some(entry) = self
+            .pc_suspensions
+            .iter_mut()
+            .find(|l| l.competition_id == competition_id)
+        {
+            entry.matches_remaining += matches;
+        } else {
+            self.pc_suspensions.push(goat_calendar::SuspensionLedger {
+                player_id: self.pc_player_id.unwrap_or(0),
+                competition_id,
+                matches_remaining: matches,
+            });
+        }
+    }
+
+    /// Serve one match of the PC's ban in `competition_id` (bible AC-06: counts down by
+    /// matches actually played in that exact competition, not by elapsed calendar days or
+    /// rounds of any other competition). A no-op if the PC isn't suspended there.
+    fn pc_serve_suspension_match(&mut self, competition_id: goat_calendar::CompetitionId) {
+        if let Some(entry) = self
+            .pc_suspensions
+            .iter_mut()
+            .find(|l| l.competition_id == competition_id)
+        {
+            entry.matches_remaining = entry.matches_remaining.saturating_sub(1);
+        }
+        self.pc_suspensions.retain(|l| l.matches_remaining > 0);
     }
 }
 
@@ -429,7 +478,22 @@ pub enum Intent {
     /// Apply cards received in a match. Updates yellow card count and suspension.
     ///
     /// Called after `ApplyMatchResult`, once per match where a card was shown.
-    ApplyCardResult { yellow_cards: u32, red_card: bool },
+    /// `competition_id` scopes the resulting ban (Design round 4, Slice 5 §5.1) — a
+    /// red card in a domestic-cup tie only suspends the PC from that competition.
+    ApplyCardResult {
+        competition_id: goat_calendar::CompetitionId,
+        yellow_cards: u32,
+        red_card: bool,
+    },
+
+    /// Serve one match of suspension in `competition_id`, for orbit competitions whose
+    /// round resolution isn't otherwise driven through `ApplyRoundResult` (which is
+    /// league-specific — season table, season_round, player-clock bookkeeping). Cup/
+    /// continental/national-team fixtures call this once per match played so their own
+    /// suspensions count down independently of the league's (Design round 4, Slice 5).
+    ApplyOrbitMatchResult {
+        competition_id: goat_calendar::CompetitionId,
+    },
 
     // ── Phase 5 intents ───────────────────────────────────────────────────────
     /// Initialise the world (sets world_seed, pc_club_idx, div_idx, facilities).
@@ -454,6 +518,9 @@ pub enum Intent {
     ///
     /// The TUI drives fixture simulation (via goat-world) and sends the outcomes here.
     ApplyRoundResult {
+        /// Which competition this round belongs to (Design round 4, Slice 5 §5.1) — the
+        /// suspension-serve step below only decrements THIS competition's ledger entry.
+        competition_id: goat_calendar::CompetitionId,
         /// PC's goals this round (0 if they didn't play or skipped).
         pc_goals: u32,
         /// PC output this round (0 if didn't play).
@@ -865,21 +932,27 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
         }
 
         Intent::ApplyCardResult {
+            competition_id,
             yellow_cards,
             red_card,
         } => {
             state.pc_yellow_cards_season += yellow_cards;
             // 5 yellow cards in a season = 1-match ban; red = 1–3 matches.
             if red_card {
-                state.pc_suspension_weeks += 2; // base 2-match ban for red
+                state.pc_add_suspension(competition_id, 2); // base 2-match ban for red
                 state.pc_discipline_rep = (state.pc_discipline_rep + 15).min(100);
             }
             if yellow_cards > 0 && state.pc_yellow_cards_season >= 5 {
-                state.pc_suspension_weeks += 1;
+                state.pc_add_suspension(competition_id, 1);
                 state.pc_yellow_cards_season = 0; // reset after serving ban
                 state.pc_discipline_rep = (state.pc_discipline_rep + 5).min(100);
             }
             // Clean match recovery: handled separately per week/round (not here).
+            state
+        }
+
+        Intent::ApplyOrbitMatchResult { competition_id } => {
+            state.pc_serve_suspension_match(competition_id);
             state
         }
 
@@ -930,6 +1003,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
         }
 
         Intent::ApplyRoundResult {
+            competition_id,
             pc_goals,
             pc_output,
             pc_result,
@@ -938,10 +1012,9 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             week_ends,
         } => {
             // ── Suspension serves one match per round resolved (bible AC-06: a
-            // ban counts down by matches actually played, not by elapsed days) ──
-            if state.pc_suspension_weeks > 0 {
-                state.pc_suspension_weeks -= 1;
-            }
+            // ban counts down by matches actually played, not by elapsed days) —
+            // scoped to THIS competition only (Design round 4, Slice 5 §5.1) ──
+            state.pc_serve_suspension_match(competition_id);
 
             // ── Time passes: the season calendar drives the player clock ─────
             // Exactly one tick per calendar week: the match week elapses even if

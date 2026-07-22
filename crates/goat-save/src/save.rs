@@ -27,7 +27,14 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// ~1,200-club world anyway — every club id means something different post-scale-up).
 /// Also adds `pc_career_caps`/`pc_career_international_goals` (Doc B §B.4) as new tail
 /// fields, defaulted to 0 for older saves.
-pub const VERSION: u32 = 10;
+/// v11+: (Design round 4, Slice 5 §5.1/§5.2) `pc_suspension_weeks: u32` (a single global
+/// scalar) is replaced by `pc_suspensions: Vec<(competition_id, matches_remaining)>` — a
+/// ban is now scoped to the exact competition it was earned in. Another real mid-stream
+/// layout break, same idiom as v10's `table_raw` widening: `from_bytes` reads the old
+/// bare-`u32` shape for `ver < 11` and migrates a nonzero value into a single
+/// League-scoped ledger entry (the only competition that could suspend a player before
+/// this slice), rather than a pure tail-append.
+pub const VERSION: u32 = 11;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -60,7 +67,9 @@ pub struct SaveData {
     pub table_raw: [u32; 100], // 5 × CLUBS_PER_DIV (20, v10+)
     // ── Phase 6 discipline ────────────────────────────────────────────────────
     pub pc_yellow_cards_season: u32,
-    pub pc_suspension_weeks: u32,
+    /// (competition_id, matches_remaining) per active ban (v11+, Design round 4 Slice 5
+    /// §5.1) — replaces the old single global scalar.
+    pub pc_suspensions: Vec<(u32, u32)>,
     pub pc_discipline_rep: i32,
     // ── Phase 7 legacy evidence ───────────────────────────────────────────────
     pub pc_career_goals: u32,
@@ -180,7 +189,11 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_season_output: state.pc_season_output,
         table_raw: state.table_raw,
         pc_yellow_cards_season: state.pc_yellow_cards_season,
-        pc_suspension_weeks: state.pc_suspension_weeks,
+        pc_suspensions: state
+            .pc_suspensions
+            .iter()
+            .map(|l| (l.competition_id, l.matches_remaining))
+            .collect(),
         pc_discipline_rep: state.pc_discipline_rep,
         pc_career_goals: state.pc_career_goals,
         pc_career_matches: state.pc_career_matches,
@@ -438,7 +451,15 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.pc_season_output = data.pc_season_output;
     state.table_raw = data.table_raw;
     state.pc_yellow_cards_season = data.pc_yellow_cards_season;
-    state.pc_suspension_weeks = data.pc_suspension_weeks;
+    state.pc_suspensions = data
+        .pc_suspensions
+        .iter()
+        .map(|&(competition_id, matches_remaining)| goat_calendar::SuspensionLedger {
+            player_id: pc_id,
+            competition_id,
+            matches_remaining,
+        })
+        .collect();
     state.pc_discipline_rep = data.pc_discipline_rep;
     state.pc_career_goals = data.pc_career_goals;
     state.pc_career_matches = data.pc_career_matches;
@@ -525,7 +546,13 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     }
     // Phase 6 fields
     push_u32(&mut v, d.pc_yellow_cards_season);
-    push_u32(&mut v, d.pc_suspension_weeks);
+    // v11+: length-prefixed (competition_id, matches_remaining) pairs, replacing the
+    // old bare-u32 `pc_suspension_weeks` scalar.
+    push_u32(&mut v, d.pc_suspensions.len() as u32);
+    for &(competition_id, matches_remaining) in &d.pc_suspensions {
+        push_u32(&mut v, competition_id);
+        push_u32(&mut v, matches_remaining);
+    }
     push_i32(&mut v, d.pc_discipline_rep);
     // Phase 7 legacy fields
     push_u32(&mut v, d.pc_career_goals);
@@ -646,7 +673,28 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     }
     // Phase 6 fields (default if missing — supports older saves)
     let pc_yellow_cards_season = read_u32(b, &mut cur).unwrap_or(0);
-    let pc_suspension_weeks = read_u32(b, &mut cur).unwrap_or(0);
+    // v11+: `pc_suspension_weeks` (bare u32) becomes a length-prefixed list of
+    // (competition_id, matches_remaining) pairs — a real mid-stream layout break, same
+    // idiom as v10's `table_raw` widening. `ver < 11` migrates a nonzero old scalar into
+    // a single League-scoped ledger entry (the only competition that could suspend a
+    // player before this slice).
+    let pc_suspensions: Vec<(u32, u32)> = if ver < 11 {
+        let old = read_u32(b, &mut cur).unwrap_or(0);
+        if old > 0 {
+            vec![(goat_core::calendar_loop::LEAGUE_COMPETITION_ID, old)]
+        } else {
+            Vec::new()
+        }
+    } else {
+        let count = read_u32(b, &mut cur).unwrap_or(0) as usize;
+        let mut list = Vec::with_capacity(count.min(64));
+        for _ in 0..count {
+            let competition_id = read_u32(b, &mut cur).unwrap_or(0);
+            let matches_remaining = read_u32(b, &mut cur).unwrap_or(0);
+            list.push((competition_id, matches_remaining));
+        }
+        list
+    };
     let pc_discipline_rep = read_i32(b, &mut cur).unwrap_or(50);
     // Phase 7 legacy fields (all default to 0 / 50 if missing)
     let pc_career_goals = read_u32(b, &mut cur).unwrap_or(0);
@@ -743,7 +791,7 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_season_output,
         table_raw,
         pc_yellow_cards_season,
-        pc_suspension_weeks,
+        pc_suspensions,
         pc_discipline_rep,
         pc_career_goals,
         pc_career_matches,

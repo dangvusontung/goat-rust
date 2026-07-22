@@ -467,6 +467,7 @@ fn round_result_counts_standout_matches_at_threshold() {
         reduce(
             s,
             Intent::ApplyRoundResult {
+                competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
                 pc_goals: 0,
                 pc_output,
                 pc_result: 0,
@@ -504,6 +505,7 @@ fn start_season_resets_standout_and_transfer_request_counters() {
     s = reduce(
         s,
         Intent::ApplyRoundResult {
+            competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
             pc_goals: 0,
             pc_output: 100,
             pc_result: 0,
