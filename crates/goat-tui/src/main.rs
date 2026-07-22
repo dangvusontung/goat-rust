@@ -45,6 +45,10 @@ use goat_world::{
     TIERS_PER_NATION,
 };
 
+#[path = "orbit_fixtures.rs"]
+mod orbit_fixtures;
+use orbit_fixtures::build_season_orbit_fixtures;
+
 const SAVE_DIR: &str = "saves";
 const NUM_SLOTS: u8 = 9;
 const BEATS_JSON: &str = include_str!("../../../beats.json");
@@ -94,7 +98,18 @@ fn main() {
                                     Ok(data) => {
                                         writeln!(out, "  Save loaded.").unwrap();
                                         let world = WorldGenesis::generate(data.world_seed);
-                                        let state = to_world_state(&data, &world);
+                                        let mut state = to_world_state(&data, &world);
+                                        // pc_season_fixtures is "generated but
+                                        // consistent" (like WorldGenesis itself) — not
+                                        // persisted in the save, rebuilt here from the
+                                        // loaded world_seed/season/club/division.
+                                        state.pc_season_fixtures = build_season_orbit_fixtures(
+                                            state.world_seed,
+                                            state.season_number,
+                                            state.pc_div_idx as usize,
+                                            &world.leagues[state.pc_div_idx as usize].clubs,
+                                            state.pc_club_idx as usize,
+                                        );
                                         run_game_loop(
                                             &mut lines,
                                             &mut out,
@@ -298,7 +313,18 @@ fn run_new_game(
                         &mut GoatRng::new(effective_seed ^ 0x7261_6974_0000_0001),
                     );
 
-                    state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+                    let fixtures = build_season_orbit_fixtures(
+                        seed,
+                        1,
+                        div_idx,
+                        &world.leagues[div_idx].clubs,
+                        club_id,
+                    );
+                    state = reduce(
+                        state,
+                        Intent::StartSeason { fixtures },
+                        &mut GoatRng::new(0),
+                    );
                     run_game_loop(lines, out, state, beat_lib, pc_traits, &world);
                     return;
                 }
@@ -441,7 +467,20 @@ fn run_game_loop(
             match lines.next() {
                 Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                     "Y" => {
-                        state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+                        let next_div_idx = state.pc_div_idx as usize;
+                        let next_club_id = state.pc_club_idx as usize;
+                        let fixtures = build_season_orbit_fixtures(
+                            state.world_seed,
+                            state.season_number + 1,
+                            next_div_idx,
+                            &world.leagues[next_div_idx].clubs,
+                            next_club_id,
+                        );
+                        state = reduce(
+                            state,
+                            Intent::StartSeason { fixtures },
+                            &mut GoatRng::new(0),
+                        );
                         continue;
                     }
                     "G" => {

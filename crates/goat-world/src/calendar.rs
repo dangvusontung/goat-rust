@@ -344,8 +344,8 @@ mod tests {
         // Every match in week N+1 must fall after every match in week N, so fixtures
         // built from consecutive rounds never land on the same or an earlier day.
         let mut last_max = 0u32;
-        for week in 0..SEASON_CALENDAR_WEEKS {
-            let count = WEEK_MATCH_COUNTS[week] as usize;
+        for (week, &raw_count) in WEEK_MATCH_COUNTS.iter().enumerate() {
+            let count = raw_count as usize;
             if count == 0 {
                 continue;
             }

@@ -59,7 +59,11 @@ fn setup_state() -> WorldState {
         },
         &mut GoatRng::new(0),
     );
-    state = reduce(state, Intent::StartSeason { fixtures: vec![] }, &mut GoatRng::new(0));
+    state = reduce(
+        state,
+        Intent::StartSeason { fixtures: vec![] },
+        &mut GoatRng::new(0),
+    );
 
     let routine = Routine {
         focus_attrs: vec![AttrId::Finishing, AttrId::Vision],
