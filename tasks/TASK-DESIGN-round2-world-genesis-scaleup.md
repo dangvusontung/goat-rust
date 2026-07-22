@@ -733,6 +733,27 @@ Open question for a real design pass: does this purely-flavor feed feed back int
 (e.g. `club_fan` reputation, matching how BL4 wired pundit tier into Sporting reputation), or is
 it pure flavor with zero mechanical effect — Tùng did not specify this either way yet.
 
+**BL7 — Hidden per-player injury-proneness/durability trait — raised by Tùng, 2026-07-22, not
+yet designed.**
+
+Verified: `injury_prob()` (`crates/goat-core/src/week.rs:326-348`) already multiplies fatigue
+(`energy`, a real accumulating value that drains from training/matches and recovers with rest —
+NOT reset weekly), training intensity, age, and lifestyle into injury risk — the "plays/trains a
+lot without rest → more injuries" mechanic Tùng asked about already exists and works correctly.
+What's missing: every player with identical energy/intensity/age/lifestyle has *identical*
+injury risk today — no player is innately more fragile (Diego Costa-style) or more durable
+(Rodri-style) than another. Confirmed design: a per-player `durability`/`injury_proneness`
+value, rolled once at player generation like other attributes, multiplied into the existing
+formula the same way `lifestyle_injury_x10` already is — **not a new subsystem**, one more
+coefficient in an existing one. Confirmed **hidden from the player** — never displayed as a
+number, only observable through outcomes (matches the existing pattern of OVR's
+position-weighted formula also not being shown). Confirmed **fixed/innate for now** (not
+improvable via club medical staff) — Tùng agreed to keep BL7 small; the medical/sports-science
+club-investment angle that could later modify this multiplier is real-world accurate but would
+couple this into `TASK-DESIGN-round5-club-economy.md`'s (BL3) budget-spending system, which
+isn't built yet. Recorded as an explicit future hook: BL3 (or a later round) can multiply an
+additional "club medical quality" coefficient into this same formula without redesigning it.
+
 ## Decisions Design needs from Tùng before Dev starts (collected from above)
 
 1. **A2.1**: uniform 20-clubs-per-tier across all nations (low risk — `CLUBS_PER_DIV` moves
