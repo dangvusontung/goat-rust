@@ -1230,9 +1230,12 @@ pub fn get_legacy() -> LegacyDto {
             league_titles: s.pc_league_titles,
             clubs_served: s.pc_clubs_served,
             longest_club_tenure: s.pc_longest_club_tenure,
+            career_standout_matches: s.pc_career_standout_matches,
+            career_best_ovr: s.pc_career_best_ovr,
+            career_transfer_requests: s.pc_career_transfer_requests,
         };
         let axes = compute_axes(&ev);
-        let rankings = all_rankings(&axes);
+        let rankings = all_rankings(&ev, &axes);
         let rep = compute_reputation(s.pc_sporting_rep, s.pc_discipline_rep, s.pc_club_fan_rep);
 
         LegacyDto {
@@ -1307,6 +1310,8 @@ pub fn apply_season_end() -> GoatGameState {
     let season_goals = state.pc_season_goals;
     let season_matches = state.pc_season_matches;
     let season_output = state.pc_season_output;
+    let season_standout_matches = state.pc_season_standout_matches;
+    let season_transfer_requests = state.pc_season_transfer_requests;
 
     let div_idx = state.pc_div_idx as usize;
     let div_clubs = DIV_CLUBS[div_idx];
@@ -1387,6 +1392,8 @@ pub fn apply_season_end() -> GoatGameState {
             decisive_moments: 0,
             new_sporting_rep: new_sporting,
             new_club_fan_rep: new_club_fan,
+            season_standout_matches,
+            season_transfer_requests,
         },
         &mut GoatRng::new(0),
     );

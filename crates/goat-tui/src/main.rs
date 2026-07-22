@@ -903,6 +903,9 @@ fn build_legacy_evidence(state: &WorldState) -> LegacyEvidence {
         league_titles: state.pc_league_titles,
         clubs_served: state.pc_clubs_served,
         longest_club_tenure: state.pc_longest_club_tenure,
+        career_standout_matches: state.pc_career_standout_matches,
+        career_best_ovr: state.pc_career_best_ovr,
+        career_transfer_requests: state.pc_career_transfer_requests,
     }
 }
 
@@ -914,7 +917,7 @@ fn render_legacy_screen(out: &mut impl Write, ev: &LegacyEvidence, state: &World
         state.pc_discipline_rep,
         state.pc_club_fan_rep,
     );
-    let rankings = all_rankings(&axes);
+    let rankings = all_rankings(ev, &axes);
 
     writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
     writeln!(
@@ -1060,6 +1063,8 @@ fn run_awards_and_pundits(
     let s_goals = state.pc_season_goals;
     let s_matches = state.pc_season_matches;
     let s_output = state.pc_season_output;
+    let s_standout_matches = state.pc_season_standout_matches;
+    let s_transfer_requests = state.pc_season_transfer_requests;
 
     // Update legacy evidence via intent.
     state = reduce(
@@ -1074,6 +1079,8 @@ fn run_awards_and_pundits(
             decisive_moments: 0,
             new_sporting_rep: new_sporting,
             new_club_fan_rep: new_club_fan,
+            season_standout_matches: s_standout_matches,
+            season_transfer_requests: s_transfer_requests,
         },
         &mut GoatRng::new(0),
     );
@@ -1081,7 +1088,7 @@ fn run_awards_and_pundits(
     // Pundit reactions.
     let ev = build_legacy_evidence(&state);
     let axes = compute_axes(&ev);
-    let rankings = all_rankings(&axes);
+    let rankings = all_rankings(&ev, &axes);
 
     writeln!(out, "\n  --- THE PUNDITS ---").unwrap();
     for pundit in PUNDITS.iter() {
@@ -1357,7 +1364,7 @@ fn render_retirement_screen(out: &mut impl Write, state: &WorldState, view: &Pla
         state.pc_sponsor_tier,
         state.pc_bankrupt,
     );
-    let rankings = all_rankings(&axes);
+    let rankings = all_rankings(&ev, &axes);
     let rep = compute_reputation(
         state.pc_sporting_rep,
         state.pc_discipline_rep,

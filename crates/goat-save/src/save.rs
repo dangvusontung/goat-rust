@@ -13,7 +13,12 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// new appended field. `pc_lifestyle` is still persisted for legacy readers but is now
 /// fully re-derivable from the score via `lifestyle_tier_from_score` — `to_world_state`
 /// recomputes it rather than trusting the stored byte.
-pub const VERSION: u32 = 8;
+/// v9+: adds the Pantheon raw-signal evidence (Design round 1) — `pc_career_standout_matches`,
+/// `pc_season_standout_matches`, `pc_career_best_ovr`, `pc_career_transfer_requests`,
+/// `pc_season_transfer_requests`. The two `pc_season_*` staging fields are persisted too
+/// (like `pc_season_goals` already is) so a mid-season save/load doesn't lose in-progress
+/// counters.
+pub const VERSION: u32 = 9;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -90,6 +95,12 @@ pub struct SaveData {
     /// Raw `Fixed` value of the emergent lifestyle score (bible §8.5/§8.6). New saves
     /// write it; older saves default to 0 (Balanced) on load.
     pub pc_lifestyle_score: i32,
+    // ── Pantheon raw-signal evidence (v9+) ────────────────────────────────────
+    pub pc_career_standout_matches: u32,
+    pub pc_season_standout_matches: u32,
+    pub pc_career_best_ovr: i32,
+    pub pc_career_transfer_requests: u32,
+    pub pc_season_transfer_requests: u32,
 }
 
 #[derive(Debug)]
@@ -188,6 +199,11 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_relationships: state.pc_relationships,
         pc_character_rep: state.pc_character_rep,
         pc_lifestyle_score: state.pc_lifestyle_score.to_raw(),
+        pc_career_standout_matches: state.pc_career_standout_matches,
+        pc_season_standout_matches: state.pc_season_standout_matches,
+        pc_career_best_ovr: state.pc_career_best_ovr,
+        pc_career_transfer_requests: state.pc_career_transfer_requests,
+        pc_season_transfer_requests: state.pc_season_transfer_requests,
     }
 }
 
@@ -393,6 +409,11 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
     state.pc_sponsor_tier = data.pc_sponsor_tier;
     state.pc_relationships = data.pc_relationships;
     state.pc_character_rep = data.pc_character_rep;
+    state.pc_career_standout_matches = data.pc_career_standout_matches;
+    state.pc_season_standout_matches = data.pc_season_standout_matches;
+    state.pc_career_best_ovr = data.pc_career_best_ovr;
+    state.pc_career_transfer_requests = data.pc_career_transfer_requests;
+    state.pc_season_transfer_requests = data.pc_season_transfer_requests;
 
     state
 }
@@ -478,6 +499,12 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     push_i32(&mut v, d.pc_character_rep);
     // v8+
     push_i32(&mut v, d.pc_lifestyle_score);
+    // v9+ — Pantheon raw-signal evidence
+    push_u32(&mut v, d.pc_career_standout_matches);
+    push_u32(&mut v, d.pc_season_standout_matches);
+    push_i32(&mut v, d.pc_career_best_ovr);
+    push_u32(&mut v, d.pc_career_transfer_requests);
+    push_u32(&mut v, d.pc_season_transfer_requests);
     v
 }
 
@@ -596,6 +623,12 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     let pc_character_rep = read_i32(b, &mut cur).unwrap_or(50);
     // Lifestyle score (v8+; default 0 = Balanced for older saves).
     let pc_lifestyle_score = read_i32(b, &mut cur).unwrap_or(0);
+    // Pantheon raw-signal evidence (v9+; default 0 for older saves).
+    let pc_career_standout_matches = read_u32(b, &mut cur).unwrap_or(0);
+    let pc_season_standout_matches = read_u32(b, &mut cur).unwrap_or(0);
+    let pc_career_best_ovr = read_i32(b, &mut cur).unwrap_or(0);
+    let pc_career_transfer_requests = read_u32(b, &mut cur).unwrap_or(0);
+    let pc_season_transfer_requests = read_u32(b, &mut cur).unwrap_or(0);
 
     Ok(SaveData {
         world_seed,
@@ -653,6 +686,11 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_relationships,
         pc_character_rep,
         pc_lifestyle_score,
+        pc_career_standout_matches,
+        pc_season_standout_matches,
+        pc_career_best_ovr,
+        pc_career_transfer_requests,
+        pc_season_transfer_requests,
     })
 }
 

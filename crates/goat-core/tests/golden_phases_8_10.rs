@@ -319,3 +319,155 @@ fn attrs_stay_in_bounds_with_lifestyle_professional() {
         }
     }
 }
+
+// ── Design round 1: Pantheon raw-signal evidence wiring ─────────────────────────
+
+fn apply_season_end_legacy(
+    s: WorldState,
+    season_standout_matches: u32,
+    season_transfer_requests: u32,
+) -> WorldState {
+    reduce(
+        s,
+        Intent::ApplySeasonEndLegacy {
+            season_goals: 0,
+            season_matches: 0,
+            season_output_sum: 0,
+            won_title: false,
+            player_of_year: false,
+            finish_position: 10,
+            decisive_moments: 0,
+            new_sporting_rep: 50,
+            new_club_fan_rep: 50,
+            season_standout_matches,
+            season_transfer_requests,
+        },
+        &mut GoatRng::new(0),
+    )
+}
+
+#[test]
+fn season_end_legacy_folds_standout_and_transfer_counters() {
+    let mut s = base_state();
+    assert_eq!(s.pc_career_standout_matches, 0);
+    assert_eq!(s.pc_career_transfer_requests, 0);
+
+    s = apply_season_end_legacy(s, 5, 2);
+    assert_eq!(
+        s.pc_career_standout_matches, 5,
+        "season 1 standout matches fold in"
+    );
+    assert_eq!(
+        s.pc_career_transfer_requests, 2,
+        "season 1 transfer requests fold in"
+    );
+
+    s = apply_season_end_legacy(s, 3, 1);
+    assert_eq!(
+        s.pc_career_standout_matches, 8,
+        "season 2 standout matches accumulate on top of season 1"
+    );
+    assert_eq!(
+        s.pc_career_transfer_requests, 3,
+        "season 2 transfer requests accumulate on top of season 1"
+    );
+}
+
+#[test]
+fn season_end_legacy_best_ovr_is_a_running_max() {
+    let mut s = base_state();
+    let pc_id = s.pc_player_id.expect("base_state creates a PC");
+
+    // Boost every attribute to its potential ceiling, then fold in a season-end check.
+    for a in 0..NUM_ATTRS {
+        let potential = s.players.get_potential(pc_id, a);
+        s.players.set_current(pc_id, a, potential);
+    }
+    s = apply_season_end_legacy(s, 0, 0);
+    let peak_after_high = s.pc_career_best_ovr;
+    assert!(
+        peak_after_high > 0,
+        "peak OVR should be recorded from a high-attribute player"
+    );
+
+    // Now drop every attribute — a lower current OVR must not decrease the recorded peak.
+    for a in 0..NUM_ATTRS {
+        s.players.set_current(pc_id, a, Fixed::from_int(5));
+    }
+    s = apply_season_end_legacy(s, 0, 0);
+    assert_eq!(
+        s.pc_career_best_ovr, peak_after_high,
+        "career_best_ovr is a running max — a lower current OVR must not decrease it"
+    );
+}
+
+#[test]
+fn round_result_counts_standout_matches_at_threshold() {
+    use goat_core::tuning::STANDOUT_OUTPUT_THRESHOLD;
+
+    let mut s = base_state();
+    assert_eq!(s.pc_season_standout_matches, 0);
+
+    let round = |s: WorldState, pc_output: i32| {
+        reduce(
+            s,
+            Intent::ApplyRoundResult {
+                pc_goals: 0,
+                pc_output,
+                pc_result: 0,
+                round_results: Vec::new(),
+                rest_weeks: 0,
+                week_ends: true,
+            },
+            &mut GoatRng::new(0),
+        )
+    };
+
+    s = round(s, STANDOUT_OUTPUT_THRESHOLD - 1);
+    assert_eq!(
+        s.pc_season_standout_matches, 0,
+        "below threshold does not count"
+    );
+
+    s = round(s, STANDOUT_OUTPUT_THRESHOLD);
+    assert_eq!(
+        s.pc_season_standout_matches, 1,
+        "at threshold counts as standout"
+    );
+
+    s = round(s, 100);
+    assert_eq!(
+        s.pc_season_standout_matches, 2,
+        "above threshold counts as standout"
+    );
+}
+
+#[test]
+fn start_season_resets_standout_and_transfer_request_counters() {
+    let mut s = base_state();
+    s = reduce(s, Intent::AgitateForTransfer, &mut GoatRng::new(0));
+    s = reduce(
+        s,
+        Intent::ApplyRoundResult {
+            pc_goals: 0,
+            pc_output: 100,
+            pc_result: 0,
+            round_results: Vec::new(),
+            rest_weeks: 0,
+            week_ends: true,
+        },
+        &mut GoatRng::new(0),
+    );
+    assert_eq!(s.pc_season_transfer_requests, 1);
+    assert_eq!(s.pc_season_standout_matches, 1);
+
+    s = reduce(s, Intent::StartSeason, &mut GoatRng::new(0));
+    assert_eq!(
+        s.pc_season_transfer_requests, 0,
+        "StartSeason resets the live counter"
+    );
+    assert_eq!(
+        s.pc_season_standout_matches, 0,
+        "StartSeason resets the live counter"
+    );
+}
