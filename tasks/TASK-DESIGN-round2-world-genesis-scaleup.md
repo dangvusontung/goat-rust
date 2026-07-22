@@ -246,6 +246,15 @@ A2+A3 to something shippable), with variable-depth pyramids flagged as an explic
 enhancement once uniform tiers are proven out — but this is a recommendation, not a decision
 already made; confirm before Dev starts.
 
+**Data-shape note (added post-review, 2026-07-22):** regardless of how the uniform-vs-variable
+clubs-per-tier question above is resolved, `League.clubs` (A2.3's refined struct, below) is a
+`Vec<ClubId>` with a `max_clubs: u8` field, not a `[ClubId; N]`-shaped const array — so this
+decision only ever changes a *number* stored in `max_clubs`, it never forces a type-level
+rewrite of `season.rs`/`fixtures.rs` either way. That said, `ROUNDS_PER_SEASON`/`table_raw`'s
+*sizes* still depend on which club-count is chosen (see A2.3's flagged 16-vs-20 discrepancy) —
+the refinement decouples the type shape from the number, it does not make the number itself
+free to change without touching those two.
+
 ### A2.2 — Nation generation
 
 `Nation` (`world.rs:12-32`) goes from a 2-variant enum to a generated `Vec<GeneratedNation>` (or
@@ -284,6 +293,53 @@ low-stakes content choice Design can make without asking Tùng**, unlike A2.1/A2
 current signatures and logic — they already iterate/search rather than hardcode indices, so
 they port over unchanged once `CLUBS`/`DIV_CLUBS` are runtime values instead of consts (same
 "port the logic, change the storage" shape as A1).
+
+**Refinement (post-review, 2026-07-22): `League.clubs` is a `Vec<ClubId>`, not a fixed-size
+array.** The generated per-division data above is best modeled as one `League` struct per
+division — replacing the four parallel `DIV_CLUBS`/`DIV_NAMES`/`DIV_NATIONS`/`DIV_LEVELS`
+arrays with a single `Vec<League>` — where:
+
+```rust
+struct League {
+    id: LeagueId,       // was: index into DIV_CLUBS/DIV_NAMES/DIV_NATIONS/DIV_LEVELS
+    nation: NationId,    // was: DIV_NATIONS[div]
+    tier: DivLevel,      // was: DIV_LEVELS[div]
+    name: String,        // was: DIV_NAMES[div], generated per this section
+    clubs: Vec<ClubId>,  // was: DIV_CLUBS[div]: [ClubId; CLUBS_PER_DIV]
+    max_clubs: u8,       // NEW — the cap is data, not baked into the type
+}
+```
+
+`clubs` must be `Vec<ClubId>`, not `[ClubId; N]`, regardless of what N is settled at — A3
+already requires `League.clubs` to be *mutated* season-to-season (a relegated club is removed
+from one league's `clubs` and inserted into another's, see A3.1/A3.3), so a fixed-size array
+was never actually viable once promotion/relegation exists. This refinement doesn't add a new
+capability; it just stops the type shape from implying a fixed roster that A3 would have had to
+work around anyway — a near-zero-cost change, since `Vec<ClubId>` at ~16-20 entries is a tiny
+heap allocation done once at genesis (or once per promotion/relegation transition), nowhere
+near the SoA-sensitive 20-30k player population this doc's ground rules already carve out as a
+different concern.
+
+`max_clubs: u8` moves per-league capacity from the type system (today's `CLUBS_PER_DIV` const,
+reused everywhere via array-size generics) into a plain field on the struct. This is what
+actually buys future flexibility: a later round adding MLS-style no-relegation conferences, a
+36-team Champions-League-style league phase, or smaller 10-18-club domestic leagues only needs
+different `max_clubs` values per `League`, not a new type per league shape. **This round's own
+numbers are unaffected by this refinement** — see A2.1's decision #1 for what the actual
+per-tier club count is; `max_clubs` just holds whichever number Tùng confirms there, as data
+instead of a type parameter.
+
+**Flag for Tùng — a number mismatch to resolve, not silently picked by Design:** A2.1's
+decision #1 (unchanged from the first pass) still recommends 16 clubs/tier, pending
+confirmation, with a worked example of 3 tiers × 16 clubs × 20 nations = 960 clubs → 24,000
+players. Separately, the brief for *this* refinement pass stated the round's clubs-per-league
+count is "already decided at 20." Design has **not** silently overwritten 16 with 20 anywhere
+in this doc, nor silently kept 16 over the "already decided" 20 — these two numbers conflict
+and only Tùng can say which is current. If 20 is in fact final, A2.1's worked example needs
+re-deriving (20/tier × 3 tiers × 20 nations = 1,200 clubs → 30,000 players — still inside the
+bible's 20-30k band, at the top edge) and its text updated to match. **Confirm which number is
+actually final before Dev starts** — `ROUNDS_PER_SEASON`/`table_raw`'s sizing (under the
+uniform-per-tier path) depends on it either way.
 
 ### A2.4 — `history.rs` ripple (backfilled canon must track the new nation count)
 
@@ -450,6 +506,40 @@ and **does the top tier have promotion** (no, symmetric reasoning) — Design as
 simply no-ops at the pyramid's edges, which should be uncontroversial, but is worth stating
 explicitly as an assumption rather than leaving it implicit.
 
+**Refinement (post-review, 2026-07-22): the per-club outcome is a typed enum, not a `bool`.**
+Whichever of A3.1's replay-vs-persist fork Tùng picks, the per-club result of a season boundary
+is represented as:
+
+```rust
+enum TransitionType {
+    DirectPromotion,
+    DirectRelegation,
+}
+
+struct PromoRelegationEvent {
+    club: ClubId,
+    season: u32,
+    from_league: LeagueId,
+    to_league: LeagueId,
+    transition: TransitionType,
+}
+```
+
+Exactly 2 variants, matching exactly what this round's rule implements: top-N of a tier rises
+(`DirectPromotion`), bottom-N drops (`DirectRelegation`), nothing else. This is deliberately
+**not** `isPromotion: bool` — a bool can only ever mean "up or down," while an enum leaves room
+for a later round to add variants without rewriting every call site that currently
+pattern-matches a bool into an `if`/`else`.
+
+**Explicitly not being added this round:** no `PlayoffPromotion` variant (no playoff mechanic
+exists or is being built — this section's proposed N is a clean top-N/bottom-N cut) and no
+`AdministrativeRelegation`/club-dissolution variant (no bankruptcy/dissolution mechanic exists
+or is being built anywhere in this doc). The enum's 2-variant shape is future-proofing the
+*call-site pattern* — every place that currently would have written `if event.is_promotion`
+instead pattern-matches on `transition`, so adding a third variant later touches only the
+match arms that care, not every caller — it is not a commitment to build either of those
+mechanics. See "Out of scope" below.
+
 ### A3.3 — Interaction with the season-end pipeline (the d77170b idempotency fix)
 
 **Verified:** `d77170b` (`git show d77170b`) fixed a bug where re-viewing [G] Legacy at the
@@ -469,6 +559,11 @@ view of the season-end screen re-promoting/re-relegating clubs, double-moving th
 if using the persisted-mapping alternative) corrupting the persisted tier assignment on a
 second run. **This is the concrete reason the task brief called out reading that commit before
 touching this slice** — confirmed necessary, not just due diligence.
+
+The resolution step should be modeled as producing an ordered `Vec<PromoRelegationEvent>`
+(A3.2's refined type) for the season, applied atomically inside that gated block. This makes
+the idempotency requirement precise and testable: viewing [G] Legacy twice must produce the
+identical event list, applied exactly once — not recomputed-and-reapplied on the second view.
 
 - TDD: a new scripted-stdin test in `crates/goat-tui/tests/smoke_stdin.rs`, same style as
   d77170b's own added test (`smoke_stdin.rs` additions from that commit) — seed a save at a
@@ -504,7 +599,14 @@ depends on A2's actual genesis/replay cost being measured, not guessed.
   confirmation either way.
 - **Promotion/relegation playoffs** (a 4th promotion/relegation spot decided by a mini-
   tournament, common in real football) — A3.2's proposed N=3 is a clean top-N/bottom-N cut,
-  no playoff mechanic. Flag as a future enhancement if Tùng wants it, not this round.
+  no playoff mechanic. `PromoRelegationEvent`'s `TransitionType` enum (A3.2) does **not** grow
+  a `PlayoffPromotion` variant this round — its 2-variant shape is future-proofing the
+  call-site pattern, not a commitment to build this. Flag as a future enhancement if Tùng wants
+  it, not this round.
+- **Administrative relegation / club dissolution** (a club forcibly relegated or removed for
+  financial reasons, rather than by league position — a bankruptcy mechanic) — no such
+  mechanic exists or is proposed anywhere in this doc. `TransitionType` stays at exactly
+  `DirectPromotion`/`DirectRelegation` this round, not a placeholder for this.
 - **Rebalancing the pantheon/legacy-axis math for a 20-nation world** — the powerhouse/minnow
   nationality dial (bible §4.1) already exists conceptually and this doc's nation-stature
   generation (A2.2) is designed to keep it *functioning*, but retuning exactly how stature
@@ -519,11 +621,46 @@ depends on A2's actual genesis/replay cost being measured, not guessed.
   domain model lands (same reasoning as round-1's Slice 3 "out of scope" note re: Flutter
   multi-slot wiring).
 
+## Parked for a future design round
+
+**Player-driven dynamic club strength (raised by Tùng during this round's review, 2026-07-22 —
+explicitly deferred, not designed here).**
+
+Alongside this round's two refinements above, Tùng raised a third idea: replacing
+`Club.strength` (today's single hardcoded per-club scalar, `world.rs:49`) with a value
+*computed* from an actual roster of real `PlayerId`s — factoring in injuries, age, and form —
+plus promoting `Match`/`Fixture` to first-class entities under `Season` (rather than today's
+ephemeral, on-the-fly `fixtures::round_fixtures`/`season::Table` simulation shape).
+
+**Why this is parked, not folded into this doc:** it is a genuinely separate, large subsystem
+that touches *how the whole 20-30k background player population is simulated* (bible §9's
+SoA/formula-driven background-growth machinery) — the same population this doc's own ground
+rules already carve out as "not this doc's concern" applies in reverse here: this idea would
+pull that population's live state directly into the club/league model this doc *does* own.
+Mixing club-strength-from-roster and first-class Match/Fixture entities into a spec whose scope
+is already "extra-large" (A2) and "large, high-risk" (A3) for club/league/nation *structure
+alone* would make this doc much harder to review and implement correctly as one unit — a
+different subsystem, a different risk profile, and its own set of numbers Tùng would need to
+sign off on separately (how much do injuries/age/form move the computed strength? does `Match`
+need its own persisted history, or is it recomputed like everything else in this doc? does
+`Fixture` replace or wrap the existing `fixtures.rs` generator?).
+
+**Recorded here so it isn't lost, not designed.** No struct shape, no data flow, and no numbers
+are proposed for this idea in this doc — that is deliberately left for its own future design
+round, once this round's world-genesis scale-up (this doc) and national-team/tactical-identity
+(Doc B) have shipped and the resulting club/league/nation/roster shapes are stable to build
+against.
+
 ## Decisions Design needs from Tùng before Dev starts (collected from above)
 
 1. **A2.1**: uniform 16-clubs-per-tier across all nations (low risk, reuses `CLUBS_PER_DIV`/
    `ROUNDS_PER_SEASON`/`table_raw` as-is) vs. variable club-count-per-tier (more realistic,
    bigger rewrite of `season.rs`/`fixtures.rs`/save format). **Recommendation: uniform.**
+   **Number conflict flagged 2026-07-22 (see A2.3's `League.max_clubs` writeup): this doc's
+   only recommendation on record is 16/tier (960 clubs total), but a note accompanying this
+   round's refinement pass stated the count is "already decided at 20" (1,200 clubs total,
+   still inside the bible's 20-30k band). Not resolved here — confirm which number is actually
+   final, then update A2.1's worked example to match if it's 20.**
 2. **A2.1**: uniform 3-tiers-per-nation vs. variable pyramid depth per nation's stature (bible
    §7.2 leans toward variable — "full pyramids" — but that's a bigger scope). **Recommendation:
    uniform 3, revisit variable depth as a later enhancement.**
