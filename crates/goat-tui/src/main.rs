@@ -16,7 +16,7 @@ use goat_core::{
     player::PlayerView,
     positions::PrimaryPosition,
     roles::RoleId,
-    state::{reduce, Intent, WorldState},
+    state::{reduce, should_retire, Intent, WorldState},
     week::{DevelopmentEvent, Intensity, Routine},
 };
 use goat_fixed::Fixed;
@@ -294,6 +294,15 @@ fn run_game_loop(
             let view = state.players.snapshot(pc_id);
             render_retirement_screen(out, &state, &view);
             return;
+        }
+
+        // Phase 10: hard retirement enforcement. `should_retire` already encodes the
+        // full rule (bible §8.6) — nobody plays past RETIRE_AGE_HARD, full stop,
+        // regardless of form. This is unconditional (no [C] to continue), unlike the
+        // softer low-form suggestion further below, which still lets the player choose.
+        if should_retire(&state) {
+            state = reduce(state, Intent::Retire, &mut GoatRng::new(0));
+            continue;
         }
 
         // End-of-season gate

@@ -10,6 +10,7 @@
 //! process fails the test instead of hanging the suite.
 
 use std::io::{Read, Write};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -20,12 +21,21 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// EOF). Returns the captured stdout, or `None` if the process didn't exit
 /// within `TIMEOUT` (a hang — the process is killed either way).
 fn run_scripted(input: &str) -> Option<String> {
-    let mut child: Child = Command::new(env!("CARGO_BIN_EXE_goat-tui"))
-        .stdin(Stdio::piped())
+    run_scripted_in(input, None)
+}
+
+/// Same as `run_scripted`, but optionally runs the child in `cwd` — used by
+/// tests that need `goat.sav` to live in a scratch directory rather than the
+/// crate root, so a pre-seeded save doesn't collide with other tests.
+fn run_scripted_in(input: &str, cwd: Option<&Path>) -> Option<String> {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_goat-tui"));
+    cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("failed to spawn goat-tui binary");
+        .stderr(Stdio::null());
+    if let Some(dir) = cwd {
+        cmd.current_dir(dir);
+    }
+    let mut child: Child = cmd.spawn().expect("failed to spawn goat-tui binary");
 
     let mut stdin = child.stdin.take().expect("child stdin");
     let input = input.to_string();
@@ -271,5 +281,69 @@ fn status_header_shows_energy_percent_and_labeled_discipline_count() {
     assert!(
         stdout.contains("(cards)"),
         "expected the discipline count's scope to be labeled:\n{stdout}"
+    );
+}
+
+// ── Round 3, Slice 2: hard retirement age enforcement ──────────────────────────
+
+/// Write a `goat.sav` (into `dir`) for a player at exactly `age_weeks`, mid-season
+/// (so `L`oading it drops straight into the normal week menu) and still under
+/// contract (so only the hard-age path, not the out-of-contract soft path, can fire).
+fn seed_save_at_age_weeks(dir: &std::path::Path, age_weeks: u32) {
+    use goat_core::generation::CreationChoices;
+    use goat_core::positions::PrimaryPosition;
+    use goat_core::state::{reduce, Intent, WorldState};
+    use goat_rng::GoatRng;
+
+    let choices = CreationChoices {
+        name: "Veteran".into(),
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian",
+        club: "Riverside Town",
+    };
+    let mut state = WorldState::new();
+    state.world_seed = 42;
+    state = reduce(
+        state,
+        Intent::CreatePlayer { seed: 42, choices },
+        &mut GoatRng::new(0),
+    );
+    let pc = state.pc_player_id.unwrap();
+    state.players.set_age_weeks(pc, age_weeks);
+    state.season_number = 5;
+    state.season_round = 0;
+    state.pc_contract_seasons_left = 3;
+
+    let view = state.players.snapshot(pc);
+    let data = goat_save::from_world_state(&state, &view);
+    goat_save::save_to_file(&data, dir.join("goat.sav")).expect("save should write");
+}
+
+#[test]
+fn hard_retirement_age_is_forced_not_offered() {
+    use goat_core::tuning::RETIRE_AGE_HARD;
+
+    let dir = std::env::temp_dir().join(format!(
+        "goat_tui_smoke_hard_retire_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("scratch dir");
+    // One week before the hard cap, still under contract — the pre-existing
+    // age>=35 && form<40 suggestion wouldn't reliably fire here (form defaults
+    // high), and the soft out-of-contract path can't fire either.
+    seed_save_at_age_weeks(&dir, RETIRE_AGE_HARD * 52 - 1);
+
+    let script = "L\nF\n1\n"; // load, then advance exactly 1 week — crosses the hard age.
+    let stdout = run_scripted_in(script, Some(&dir)).expect("process should exit cleanly");
+
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert!(
+        stdout.contains("CAREER OVER"),
+        "crossing RETIRE_AGE_HARD must force retirement, not just offer it:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Retire now"),
+        "the hard cap must not go through the optional [R]/[C] suggestion prompt:\n{stdout}"
     );
 }
