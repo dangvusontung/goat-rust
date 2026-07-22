@@ -1067,6 +1067,8 @@ fn main() {
         let season_output_sum = state.pc_season_output;
         let s_goals = state.pc_season_goals;
         let s_matches = state.pc_season_matches;
+        let s_standout_matches = state.pc_season_standout_matches;
+        let s_transfer_requests = state.pc_season_transfer_requests;
 
         state = reduce(
             state,
@@ -1080,6 +1082,8 @@ fn main() {
                 decisive_moments: 0,
                 new_sporting_rep,
                 new_club_fan_rep,
+                season_standout_matches: s_standout_matches,
+                season_transfer_requests: s_transfer_requests,
             },
             &mut GoatRng::new(0),
         );

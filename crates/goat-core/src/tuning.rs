@@ -311,3 +311,10 @@ pub const MEDIA_DEFIANT: (i32, i32) = (-8, 10);
 pub const RETIRE_AGE_SOFT: u32 = 34;
 /// Hard retirement age: nobody plays on past it.
 pub const RETIRE_AGE_HARD: u32 = 40;
+
+// ── Pantheon raw-signal evidence (Design round 1) ───────────────────────────────
+
+/// A single-match output score at/above this counts as a "standout" performance for the
+/// Eye-Test Romantics' raw "moments" signal (Design round 1, decision 2). First-pass
+/// number — tune later per TASK-TUNE convention, not guessed against real playtest data.
+pub const STANDOUT_OUTPUT_THRESHOLD: i32 = 78;

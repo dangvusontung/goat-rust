@@ -74,6 +74,24 @@ pub struct WorldState {
     pub pc_league_titles: u32,
     pub pc_clubs_served: u32,
     pub pc_longest_club_tenure: u32,
+    // ── Pantheon raw-signal evidence (Design round 1) ─────────────────────────
+    /// Cumulative count of matches with pc_output >= STANDOUT_OUTPUT_THRESHOLD, career-wide.
+    /// Feeds the Eye-Test Romantics school directly (raw "moments", not a season average).
+    pub pc_career_standout_matches: u32,
+    /// This season's standout-match count, live — folded into pc_career_standout_matches
+    /// only at ApplySeasonEndLegacy (mirrors pc_season_goals -> pc_career_goals).
+    pub pc_season_standout_matches: u32,
+    /// Career-peak OVR (derive::ovr at the player's primary position), checked once per
+    /// season end. Feeds Stats Purists directly — a talent/ability number, structurally
+    /// different from the Output axis (match performance, not attribute ceiling).
+    pub pc_career_best_ovr: i32,
+    /// Cumulative count of AgitateForTransfer escalations, career-wide — unlike
+    /// pc_power_ladder (current rung, resets on contract/transfer), this never resets.
+    /// Feeds Loyalty Traditionalists directly (raw request count, not a clubs_served penalty).
+    pub pc_career_transfer_requests: u32,
+    /// This season's transfer-request count, live — folded into pc_career_transfer_requests
+    /// only at ApplySeasonEndLegacy.
+    pub pc_season_transfer_requests: u32,
     // ── Phase 7 reputation scalars ────────────────────────────────────────────
     pub pc_sporting_rep: i32,
     pub pc_club_fan_rep: i32,
@@ -192,6 +210,11 @@ impl WorldState {
             pc_league_titles: 0,
             pc_clubs_served: 1,
             pc_longest_club_tenure: 0,
+            pc_career_standout_matches: 0,
+            pc_season_standout_matches: 0,
+            pc_career_best_ovr: 0,
+            pc_career_transfer_requests: 0,
+            pc_season_transfer_requests: 0,
             pc_sporting_rep: 50,
             pc_club_fan_rep: 50,
             pc_contract_seasons_left: 2,
@@ -282,6 +305,10 @@ pub enum Intent {
         decisive_moments: u32,
         new_sporting_rep: i32,
         new_club_fan_rep: i32,
+        /// Standout matches (pc_output >= STANDOUT_OUTPUT_THRESHOLD) played this season.
+        season_standout_matches: u32,
+        /// AgitateForTransfer escalations this season.
+        season_transfer_requests: u32,
     },
 
     // ── Phase 8 intents ───────────────────────────────────────────────────────
@@ -521,10 +548,23 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             decisive_moments,
             new_sporting_rep,
             new_club_fan_rep,
+            season_standout_matches,
+            season_transfer_requests,
         } => {
             state.pc_career_goals += season_goals;
             state.pc_career_matches += season_matches;
             state.pc_career_output_sum += season_output_sum as i64;
+            state.pc_career_standout_matches += season_standout_matches;
+            state.pc_career_transfer_requests += season_transfer_requests;
+            // Career-peak OVR: computed here, not staged — a "peak so far" check is
+            // naturally season-cadenced, no per-match staging needed.
+            if let Some(pc_id) = state.pc_player_id {
+                let view = state.players.snapshot(pc_id);
+                let current_ovr =
+                    crate::derive::ovr(&view.current, state.players.get_primary_position(pc_id))
+                        .to_int();
+                state.pc_career_best_ovr = state.pc_career_best_ovr.max(current_ovr.clamp(0, 100));
+            }
             if won_title {
                 state.pc_league_titles += 1;
             }
@@ -564,6 +604,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
 
         Intent::AgitateForTransfer => {
             state.pc_power_ladder = (state.pc_power_ladder + 1).min(3);
+            state.pc_season_transfer_requests += 1;
             // Each rung burns Character rep (tightens officiating).
             state.pc_discipline_rep = (state.pc_discipline_rep + 8).min(100);
             state
@@ -779,6 +820,8 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_season_goals = 0;
             state.pc_season_matches = 0;
             state.pc_season_output = 0;
+            state.pc_season_standout_matches = 0;
+            state.pc_season_transfer_requests = 0;
             state.pc_yellow_cards_season = 0; // reset yellow cards each season
                                               // Preserve table from last season? No — start fresh each season.
             state.table_raw = [0u32; 80];
@@ -837,6 +880,9 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_season_output += pc_output;
             if pc_output > 0 {
                 state.pc_season_matches += 1;
+            }
+            if pc_output >= crate::tuning::STANDOUT_OUTPUT_THRESHOLD {
+                state.pc_season_standout_matches += 1;
             }
 
             // Form EMA: form = 0.85 × form + 0.15 × output

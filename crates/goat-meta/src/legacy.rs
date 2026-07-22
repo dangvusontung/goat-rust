@@ -25,6 +25,12 @@ pub struct LegacyEvidence {
     pub clubs_served: u32,
     /// Longest consecutive tenure at one club (in seasons).
     pub longest_club_tenure: u32,
+    /// Cumulative count of standout/big-match performances, career-wide (Design round 1).
+    pub career_standout_matches: u32,
+    /// Career-peak OVR (talent ceiling, not match-performance average).
+    pub career_best_ovr: i32,
+    /// Cumulative count of AgitateForTransfer escalations, career-wide.
+    pub career_transfer_requests: u32,
 }
 
 /// The 7+1 legacy axes (all 0–100 Fixed).

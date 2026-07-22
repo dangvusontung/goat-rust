@@ -222,6 +222,35 @@ fn save_load_restores_lifestyle_score_and_derived_tier() {
 }
 
 #[test]
+fn save_load_restores_pantheon_signals() {
+    // Exercises the full byte path for the v9 Pantheon raw-signal evidence, including
+    // the two live pc_season_* staging fields (a mid-season save must not lose them).
+    let mut state = setup_state();
+    state.pc_career_standout_matches = 12;
+    state.pc_season_standout_matches = 3;
+    state.pc_career_best_ovr = 87;
+    state.pc_career_transfer_requests = 4;
+    state.pc_season_transfer_requests = 1;
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join(format!(
+        "goat_save_pantheon_roundtrip_{}.gsav",
+        std::process::id()
+    ));
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(restored.pc_career_standout_matches, 12);
+    assert_eq!(restored.pc_season_standout_matches, 3);
+    assert_eq!(restored.pc_career_best_ovr, 87);
+    assert_eq!(restored.pc_career_transfer_requests, 4);
+    assert_eq!(restored.pc_season_transfer_requests, 1);
+}
+
+#[test]
 fn old_v7_save_without_lifestyle_score_defaults_to_balanced() {
     // Simulate an older save by truncating the bytes right before the v8 field.
     let state = setup_state();
@@ -232,4 +261,48 @@ fn old_v7_save_without_lifestyle_score_defaults_to_balanced() {
     // setup_state() never touches lifestyle, so the score defaults to 0 = Balanced.
     assert_eq!(restored.pc_lifestyle_score, Fixed::ZERO);
     assert_eq!(restored.pc_lifestyle, 1);
+}
+
+#[test]
+fn old_v8_save_without_pantheon_signals_defaults_to_zero() {
+    // A real v8 binary never wrote the 5 trailing v9 Pantheon-evidence fields
+    // (4 bytes each = 20 bytes). Simulate that by writing a full v9 save then
+    // truncating the last 20 bytes off the wire format before loading it back —
+    // exercises the actual `.unwrap_or(0)` backward-compat reads in `from_bytes`,
+    // not just the in-memory struct defaults.
+    let state = setup_state();
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let full_path =
+        std::env::temp_dir().join(format!("goat_save_v9_full_{}.gsav", std::process::id()));
+    save_to_file(&data, &full_path).unwrap();
+    let mut bytes = std::fs::read(&full_path).unwrap();
+    std::fs::remove_file(&full_path).ok();
+
+    // Truncate the 5 trailing v9 fields (pc_career_standout_matches,
+    // pc_season_standout_matches, pc_career_best_ovr, pc_career_transfer_requests,
+    // pc_season_transfer_requests — all 4-byte fields) to simulate a pre-v9 save.
+    let v8_len = bytes.len() - 5 * 4;
+    bytes.truncate(v8_len);
+
+    let truncated_path = std::env::temp_dir().join(format!(
+        "goat_save_v8_truncated_{}.gsav",
+        std::process::id()
+    ));
+    std::fs::write(&truncated_path, &bytes).unwrap();
+    let loaded = load_from_file(&truncated_path).unwrap();
+    std::fs::remove_file(&truncated_path).ok();
+
+    assert_eq!(loaded.pc_career_standout_matches, 0);
+    assert_eq!(loaded.pc_season_standout_matches, 0);
+    assert_eq!(loaded.pc_career_best_ovr, 0);
+    assert_eq!(loaded.pc_career_transfer_requests, 0);
+    assert_eq!(loaded.pc_season_transfer_requests, 0);
+
+    let restored = to_world_state(&loaded);
+    assert_eq!(restored.pc_career_standout_matches, 0);
+    assert_eq!(restored.pc_career_best_ovr, 0);
+    assert_eq!(restored.pc_career_transfer_requests, 0);
 }

@@ -327,6 +327,8 @@ fn end_season(mut state: WorldState) -> WorldState {
     let s_goals = state.pc_season_goals;
     let s_matches = state.pc_season_matches;
     let s_output = state.pc_season_output;
+    let s_standout_matches = state.pc_season_standout_matches;
+    let s_transfer_requests = state.pc_season_transfer_requests;
     let season = state.season_number;
 
     state = reduce(
@@ -341,6 +343,8 @@ fn end_season(mut state: WorldState) -> WorldState {
             decisive_moments: 0,
             new_sporting_rep: new_sporting,
             new_club_fan_rep: new_club_fan,
+            season_standout_matches: s_standout_matches,
+            season_transfer_requests: s_transfer_requests,
         },
         &mut GoatRng::new(0),
     );

@@ -5,32 +5,64 @@
 
 use goat_fixed::Fixed;
 
-use crate::legacy::LegacyAxes;
+use crate::legacy::{LegacyAxes, LegacyEvidence};
 
 // ── Schools ───────────────────────────────────────────────────────────────────
+
+/// Which raw counter (if any) a school reads directly, bypassing the composite axes,
+/// so each school has a headline signal nothing else shares (Design round 1).
+#[derive(Debug, Clone, Copy)]
+pub enum RawSignal {
+    /// Composite axes only — already close to a raw trophy/title read (winning +
+    /// accolades = 50% of Trophy Cabinet's existing weights), smallest delta of the four.
+    None,
+    /// Eye-Test Romantics: count of standout/big-match performances.
+    StandoutMatches,
+    /// Stats Purists: career-peak OVR — talent ceiling, not match-performance average.
+    BestOvr,
+    /// Loyalty Traditionalists: years at club minus transfer-request count, read directly.
+    LoyaltyRaw,
+}
 
 /// One of four competing frameworks for evaluating greatness.
 #[derive(Debug, Clone, Copy)]
 pub struct School {
     pub name: &'static str,
     pub tagline: &'static str,
-    /// Percentage weights for each axis (must sum to 100).
+    /// Percentage weights for each axis (must sum to 100). The composite-axes blend —
+    /// still meaningful, it's the "everything else" share of the score.
     /// Order: [winning, accolades, output, longevity, decisive, loyalty, icon, h2h]
     pub weights: [i32; 8],
+    /// Raw counter this school reads directly, if any.
+    pub raw_signal: RawSignal,
+    /// 0-100: how much raw_signal dominates over the composite-axes blend.
+    pub raw_weight_pct: i32,
 }
 
 impl School {
-    /// Compute a 0–100 score for the given axes under this school's weighting.
-    pub fn score(&self, axes: &LegacyAxes) -> Fixed {
+    /// Compute a 0–100 score blending the composite axes with this school's raw signal.
+    pub fn score(&self, ev: &LegacyEvidence, axes: &LegacyAxes) -> Fixed {
         let arr = axes.as_array();
-        let weighted: i32 = self
+        let composite_pct: i32 = self
             .weights
             .iter()
             .zip(arr.iter())
             .map(|(&w, ax)| w * ax.to_int())
             .sum::<i32>()
             / 100;
-        Fixed::from_int(weighted.clamp(0, 100))
+
+        let raw_pct: i32 = match self.raw_signal {
+            RawSignal::None => composite_pct,
+            RawSignal::StandoutMatches => (ev.career_standout_matches as i32 * 3).min(100),
+            RawSignal::BestOvr => ev.career_best_ovr.clamp(0, 100),
+            RawSignal::LoyaltyRaw => ((ev.longest_club_tenure as i32 * 8)
+                - (ev.career_transfer_requests as i32 * 15))
+                .clamp(0, 100),
+        };
+
+        let blended =
+            (raw_pct * self.raw_weight_pct + composite_pct * (100 - self.raw_weight_pct)) / 100;
+        Fixed::from_int(blended.clamp(0, 100))
     }
 }
 
@@ -41,21 +73,29 @@ pub const SCHOOLS: [School; NUM_SCHOOLS] = [
         name: "The Trophy Cabinet",
         tagline: "Winners fill stadiums. Nothing else matters.",
         weights: [35, 15, 10, 5, 20, 5, 5, 5],
+        raw_signal: RawSignal::None,
+        raw_weight_pct: 0,
     },
     School {
         name: "The Eye-Test Romantics",
         tagline: "One transcendent moment outlasts a decade of solid passing.",
         weights: [10, 20, 15, 5, 35, 5, 7, 3],
+        raw_signal: RawSignal::StandoutMatches,
+        raw_weight_pct: 65,
     },
     School {
         name: "The Stats Purists",
         tagline: "Over a thousand games the truth comes out. Always.",
         weights: [10, 15, 40, 20, 5, 5, 3, 2],
+        raw_signal: RawSignal::BestOvr,
+        raw_weight_pct: 65,
     },
     School {
         name: "The Loyalty Traditionalists",
         tagline: "A one-club legend is priceless. No fee in the world changes that.",
         weights: [15, 10, 10, 15, 10, 35, 3, 2],
+        raw_signal: RawSignal::LoyaltyRaw,
+        raw_weight_pct: 55,
     },
 ];
 
@@ -68,11 +108,13 @@ pub struct PastGreat {
     pub era: &'static str,
     pub nationality: &'static str,
     pub axes: LegacyAxes,
+    pub evidence: LegacyEvidence,
 }
 
 macro_rules! great {
     ($name:expr, $era:expr, $nat:expr,
-     $win:expr, $acc:expr, $out:expr, $lon:expr, $dec:expr, $loy:expr) => {
+     $win:expr, $acc:expr, $out:expr, $lon:expr, $dec:expr, $loy:expr,
+     $tenure:expr, $transfer_req:expr, $standout:expr, $best_ovr:expr) => {
         PastGreat {
             name: $name,
             era: $era,
@@ -87,8 +129,36 @@ macro_rules! great {
                 icon: LegacyAxes::STUB_50,
                 head_to_head: LegacyAxes::STUB_50,
             },
+            evidence: LegacyEvidence {
+                longest_club_tenure: $tenure,
+                career_transfer_requests: $transfer_req,
+                career_standout_matches: $standout,
+                career_best_ovr: $best_ovr,
+                ..constify_default()
+            },
         }
     };
+}
+
+/// `LegacyEvidence::default()` isn't callable in a `const` context via `..Default::default()`
+/// directly inside the macro's struct-literal position across editions reliably, so route
+/// through a tiny const fn instead.
+const fn constify_default() -> LegacyEvidence {
+    LegacyEvidence {
+        career_goals: 0,
+        career_matches: 0,
+        career_output_sum: 0,
+        best_season_avg_output: 0,
+        seasons_played: 0,
+        decisive_moments: 0,
+        player_of_year_wins: 0,
+        league_titles: 0,
+        clubs_served: 0,
+        longest_club_tenure: 0,
+        career_standout_matches: 0,
+        career_best_ovr: 0,
+        career_transfer_requests: 0,
+    }
 }
 
 pub const NUM_CANON: usize = 10;
@@ -100,6 +170,10 @@ pub const NUM_CANON: usize = 10;
 /// - "Keane" is a stats god who won little
 /// - "Pires" won nothing but has max decisive moments
 /// - "Andersen" is the perfect loyalty icon
+///
+/// Design round 1: each great also carries synthetic raw evidence (tenure/transfer_req/
+/// standout/best_ovr) so the 4 schools' new raw-signal reads genuinely disagree — see
+/// `tasks/TASK-DESIGN-round1-pantheon-saves.md` §2.5's table.
 pub const CANON: [PastGreat; NUM_CANON] = [
     // All-time consensus greats
     great!(
@@ -111,7 +185,11 @@ pub const CANON: [PastGreat; NUM_CANON] = [
         88,
         85,
         75,
-        60
+        60,
+        14,
+        2,
+        40,
+        92
     ),
     great!(
         "Van der Berg",
@@ -122,20 +200,136 @@ pub const CANON: [PastGreat; NUM_CANON] = [
         82,
         90,
         65,
-        85
+        85,
+        16,
+        1,
+        30,
+        88
     ),
     // Trophy machines, moderate output
-    great!("Dominguez", "2005–2018", "Spanish", 95, 80, 65, 70, 70, 35),
-    great!("Petrov", "2003–2016", "Russian", 75, 60, 70, 80, 50, 75),
+    great!(
+        "Dominguez",
+        "2005–2018",
+        "Spanish",
+        95,
+        80,
+        65,
+        70,
+        70,
+        35,
+        4,
+        6,
+        12,
+        78
+    ),
+    great!(
+        "Petrov",
+        "2003–2016",
+        "Russian",
+        75,
+        60,
+        70,
+        80,
+        50,
+        75,
+        8,
+        3,
+        18,
+        80
+    ),
     // Stats gods, light on trophies
-    great!("Keane", "1998–2014", "Irish", 30, 35, 95, 95, 40, 90),
-    great!("Nakamura", "2002–2017", "Japanese", 20, 30, 90, 90, 35, 95),
+    great!(
+        "Keane",
+        "1998–2014",
+        "Irish",
+        30,
+        35,
+        95,
+        95,
+        40,
+        90,
+        10,
+        1,
+        15,
+        90
+    ),
+    great!(
+        "Nakamura",
+        "2002–2017",
+        "Japanese",
+        20,
+        30,
+        90,
+        90,
+        35,
+        95,
+        12,
+        2,
+        14,
+        87
+    ),
     // Decisive-moment legends
-    great!("Pires", "1999–2012", "French", 25, 45, 75, 70, 100, 40),
-    great!("Muñoz", "2007–2020", "Argentine", 50, 55, 80, 65, 90, 45),
+    great!(
+        "Pires",
+        "1999–2012",
+        "French",
+        25,
+        45,
+        75,
+        70,
+        100,
+        40,
+        6,
+        4,
+        48,
+        75
+    ),
+    great!(
+        "Muñoz",
+        "2007–2020",
+        "Argentine",
+        50,
+        55,
+        80,
+        65,
+        90,
+        45,
+        7,
+        3,
+        40,
+        79
+    ),
     // Loyalty icons
-    great!("Andersen", "2001–2016", "Danish", 40, 30, 70, 85, 45, 100),
-    great!("Okonkwo", "2004–2019", "Nigerian", 45, 40, 75, 80, 55, 95),
+    great!(
+        "Andersen",
+        "2001–2016",
+        "Danish",
+        40,
+        30,
+        70,
+        85,
+        45,
+        100,
+        15,
+        0,
+        20,
+        76
+    ),
+    great!(
+        "Okonkwo",
+        "2004–2019",
+        "Nigerian",
+        45,
+        40,
+        75,
+        80,
+        55,
+        95,
+        14,
+        0,
+        22,
+        78
+    ),
 ];
 
 // ── Ranking ───────────────────────────────────────────────────────────────────
@@ -143,22 +337,29 @@ pub const CANON: [PastGreat; NUM_CANON] = [
 /// Rank the PC among the canon under a given school (1-based, lower = better).
 ///
 /// Returns (pc_rank, total_in_canon+1) where total = NUM_CANON + 1 (PC included).
-pub fn rank_in_canon(pc_axes: &LegacyAxes, school_idx: usize) -> (usize, usize) {
+pub fn rank_in_canon(
+    pc_ev: &LegacyEvidence,
+    pc_axes: &LegacyAxes,
+    school_idx: usize,
+) -> (usize, usize) {
     let school = &SCHOOLS[school_idx];
-    let pc_score = school.score(pc_axes);
+    let pc_score = school.score(pc_ev, pc_axes);
     let rank = 1 + CANON
         .iter()
-        .filter(|g| school.score(&g.axes) > pc_score)
+        .filter(|g| school.score(&g.evidence, &g.axes) > pc_score)
         .count();
     (rank, NUM_CANON + 1)
 }
 
 /// Score comparisons for all schools. Returns [(pc_score, rank); NUM_SCHOOLS].
-pub fn all_rankings(pc_axes: &LegacyAxes) -> [(Fixed, usize, usize); NUM_SCHOOLS] {
+pub fn all_rankings(
+    pc_ev: &LegacyEvidence,
+    pc_axes: &LegacyAxes,
+) -> [(Fixed, usize, usize); NUM_SCHOOLS] {
     let mut result = [(Fixed::ZERO, 0usize, 0usize); NUM_SCHOOLS];
     for (i, entry) in result.iter_mut().enumerate() {
-        let score = SCHOOLS[i].score(pc_axes);
-        let (rank, total) = rank_in_canon(pc_axes, i);
+        let score = SCHOOLS[i].score(pc_ev, pc_axes);
+        let (rank, total) = rank_in_canon(pc_ev, pc_axes, i);
         *entry = (score, rank, total);
     }
     result
