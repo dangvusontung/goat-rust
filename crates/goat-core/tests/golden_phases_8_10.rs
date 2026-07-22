@@ -88,7 +88,7 @@ fn transfer_changes_club() {
             to_div_idx: 0,
             new_wage: 120,
             new_length: 3,
-            new_club_name: "Arsenal",
+            new_club_name: "Arsenal".to_string(),
             facilities_mult: Fixed::from_int(1),
             fee_bonus: 200,
         },
@@ -341,6 +341,8 @@ fn apply_season_end_legacy(
             new_club_fan_rep: 50,
             season_standout_matches,
             season_transfer_requests,
+            season_caps: 0,
+            season_international_goals: 0,
         },
         &mut GoatRng::new(0),
     )
