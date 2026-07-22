@@ -235,10 +235,13 @@ mod tests {
         let upgrade = push_peaked_player(&mut pop, 1, FORWARD, 75);
 
         let candidates = candidates_by_position(&pop, 0);
-        let target =
-            weakest_position_target(CLUB as usize, &pop, &squad, &candidates, i64::MAX, 0);
+        let target = weakest_position_target(CLUB as usize, &pop, &squad, &candidates, i64::MAX, 0);
 
-        assert_eq!(target, Some(upgrade), "must return the genuine external upgrade");
+        assert_eq!(
+            target,
+            Some(upgrade),
+            "must return the genuine external upgrade"
+        );
         let target_idx = target.unwrap();
         assert_ne!(
             pop.club[target_idx] as usize, CLUB as usize,
@@ -287,7 +290,10 @@ mod tests {
 
         let a = candidates_by_position(&pop, 0);
         let b = candidates_by_position(&pop, 0);
-        assert_eq!(a, b, "same population twice must produce identical sorted lists");
+        assert_eq!(
+            a, b,
+            "same population twice must produce identical sorted lists"
+        );
 
         for list in &a {
             let ovrs: Vec<u8> = list.iter().map(|&i| pop.current_ovr(i, 0)).collect();
