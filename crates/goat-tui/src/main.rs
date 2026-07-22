@@ -1005,6 +1005,8 @@ fn build_legacy_evidence(state: &WorldState) -> LegacyEvidence {
         career_transfer_requests: state.pc_career_transfer_requests,
         career_caps: state.pc_career_caps,
         career_international_goals: state.pc_career_international_goals,
+        career_world_cups_won: state.pc_career_world_cups_won,
+        career_continental_championships_won: state.pc_career_continental_championships_won,
     }
 }
 
@@ -1186,6 +1188,13 @@ fn run_awards_and_pundits(
             // the calendar-event renderer), so nothing accrues caps this season.
             season_caps: 0,
             season_international_goals: 0,
+            // National-team tournaments (Design round 4, Slice 4) are simulated by
+            // `goat-world::national_tournament` but not yet dispatched from the live TUI
+            // loop (no day-driven "a tournament fixture is due" dispatcher exists yet,
+            // same deferred-to-Slice-5 gap as the domestic-cup/continental club
+            // competitions) -- so nothing accrues here yet either.
+            season_world_cups_won: 0,
+            season_continental_championships_won: 0,
         },
         &mut GoatRng::new(0),
     );
