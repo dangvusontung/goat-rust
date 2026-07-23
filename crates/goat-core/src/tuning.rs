@@ -186,6 +186,22 @@ pub const INJURY_LIFESTYLE_X10_PRO: u32 = 7;
 pub const INJURY_LIFESTYLE_X10_BALANCED: u32 = 10;
 pub const INJURY_LIFESTYLE_X10_FLASHY: u32 = 15;
 
+// ── Durability / injury-proneness (BL7, Design round 9) ───────────────────────
+// A fixed, innate per-PC trait rolled once at creation — how fragile or tough this
+// particular player's body is, independent of lifestyle/training choices. Neutral
+// (10 = ×1.0) reproduces pre-existing injury numbers exactly (additive variance, not
+// a rebalance). Range [7,13] (±30% around neutral) mirrors `INJURY_LIFESTYLE_X10_*`'s
+// existing spread (7..15, also centred so Balanced=10 is the untouched baseline).
+
+/// Multiplicative salt deriving the durability roll's seed from the player's creation
+/// seed — an independent substream, same idiom as `NOISE_SALT`'s per-attribute noise.
+pub const DURABILITY_SALT: u64 = 0x517c_c1b7_2722_0a95;
+/// Min/max durability roll (×10), uniform, inclusive.
+pub const DURABILITY_X10_MIN: u8 = 7;
+pub const DURABILITY_X10_MAX: u8 = 13;
+/// Neutral roll — reproduces pre-existing injury_prob output unchanged.
+pub const DURABILITY_X10_NEUTRAL: u32 = 10;
+
 /// Effective ceiling: fraction of *potential* a lifestyle lets the player actually
 /// reach. Flashy burns a little of the ceiling (0.96); Professional/Balanced reach
 /// full potential. Never raises a current attr above its potential (pillar §2.4).

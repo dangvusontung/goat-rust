@@ -14,9 +14,9 @@ use crate::roles::{
 };
 use crate::tactical_identity::TacticalIdentity;
 use crate::tuning::{
-    CEILING_MAX, CEILING_MIN, IMP_BASE_PCT, KEY_BASE_PCT, MENTAL_START_PCT, NOISE_SALT,
-    NOISE_WIDTH_PER_SPIKE, NONE_POT_ABS_LOW, NONE_POT_HIGH_PCT, PHYSICAL_START_PCT, SEC_BASE_PCT,
-    TECHNICAL_START_PCT,
+    CEILING_MAX, CEILING_MIN, DURABILITY_SALT, DURABILITY_X10_MAX, DURABILITY_X10_MIN,
+    IMP_BASE_PCT, KEY_BASE_PCT, MENTAL_START_PCT, NOISE_SALT, NOISE_WIDTH_PER_SPIKE,
+    NONE_POT_ABS_LOW, NONE_POT_HIGH_PCT, PHYSICAL_START_PCT, SEC_BASE_PCT, TECHNICAL_START_PCT,
 };
 
 /// Choices the player makes at career-creation time (bible §4).
@@ -107,14 +107,29 @@ pub fn generate_player_biased(
     // Step 6 — familiarity seeding
     let familiarity = seed_familiarity(family, primary_role);
 
+    // Step 7 — durability/injury-proneness trait (BL7, Design round 9): independent
+    // substream from `seed`, same idiom as `per_attr_noise`'s per-attribute noise —
+    // does not consume from the sequential `rng` used above, so ceiling/spikiness/role
+    // rolls stay untouched.
+    let durability_x10 = roll_durability_x10(seed);
+
     PlayerView {
         name: choices.name.clone(),
         current,
         potential,
         familiarity,
         primary_position: primary_pos,
+        durability_x10,
         ..PlayerView::default()
     }
+}
+
+/// Roll the innate durability trait (×10 fixed-point; BL7) once, deterministically from
+/// the player's creation seed. Uniform in `[DURABILITY_X10_MIN, DURABILITY_X10_MAX]`.
+fn roll_durability_x10(seed: u64) -> u8 {
+    let durability_seed = seed.wrapping_add(DURABILITY_SALT);
+    let mut rng = GoatRng::new(durability_seed);
+    rng.next_range_u8(DURABILITY_X10_MIN, DURABILITY_X10_MAX)
 }
 
 /// Pick the primary role, weighted toward the chosen position family.
@@ -403,6 +418,36 @@ mod tests {
         for r in 0..NUM_ROLES {
             assert_eq!(a.familiarity[r], b.familiarity[r]);
         }
+    }
+
+    #[test]
+    fn durability_is_deterministic_per_seed() {
+        let c = choices(PrimaryPosition::CM);
+        let a = generate_player(4242, &c);
+        let b = generate_player(4242, &c);
+        assert_eq!(a.durability_x10, b.durability_x10);
+    }
+
+    #[test]
+    fn durability_varies_across_seeds() {
+        use crate::tuning::{DURABILITY_X10_MAX, DURABILITY_X10_MIN};
+        let c = choices(PrimaryPosition::CM);
+        let mut values = std::collections::BTreeSet::new();
+        for seed in 0u64..30 {
+            let p = generate_player(seed, &c);
+            assert!(
+                (DURABILITY_X10_MIN..=DURABILITY_X10_MAX).contains(&p.durability_x10),
+                "durability_x10 {} outside designed range [{},{}]",
+                p.durability_x10,
+                DURABILITY_X10_MIN,
+                DURABILITY_X10_MAX
+            );
+            values.insert(p.durability_x10);
+        }
+        assert!(
+            values.len() > 1,
+            "durability_x10 should vary across different seeds"
+        );
     }
 
     #[test]
