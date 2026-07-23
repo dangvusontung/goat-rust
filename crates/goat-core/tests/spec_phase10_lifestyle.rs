@@ -203,10 +203,17 @@ fn lifestyle_pro_dominates_flashy_across_seeds() {
 #[test]
 fn golden_lifestyle_seed3() {
     // (lifestyle, expected_peak_ovr, expected_injured_weeks)
+    // Re-frozen after BL7 durability/injury-proneness trait (Design round 9): seed 3's
+    // rolled `durability_x10` isn't the neutral midpoint, so injured-week counts shifted
+    // for this seed across all three lifestyle tiers. Expected — this coefficient adds
+    // per-seed injury variance by design (see `week.rs::durability_neutral_value_
+    // reproduces_pre_existing_injury_numbers` for proof the *formula* is unchanged at
+    // neutral durability). Pro-dominates-Flashy ordering (peak and injuries) still
+    // holds, same as before.
     let golden = [
-        (PROFESSIONAL, 88, 81),
-        (1u8, 88, 153), // Balanced — must match pre-lifestyle behavior
-        (FLASHY, 85, 146),
+        (PROFESSIONAL, 88, 66),
+        (1u8, 88, 113), // Balanced — must match pre-lifestyle behavior
+        (FLASHY, 85, 158),
     ];
     for (lifestyle, exp_peak, exp_inj) in golden {
         let (peak, inj) = run_career(3, lifestyle, 900);

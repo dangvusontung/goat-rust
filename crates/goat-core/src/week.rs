@@ -12,13 +12,13 @@ use crate::roles::{FamiliarityTier, RoleId, ROLE_WEIGHT_TABLE};
 use crate::tuning::{
     BASE_DECAY_PER_WEEK, BASE_GROWTH_PER_WEEK, BASE_INJURY_PER_1000, BREAKTHROUGH_BONUS,
     BREAKTHROUGH_PER_1000, DECLINE_LIFESTYLE_BALANCED, DECLINE_LIFESTYLE_FLASHY,
-    DECLINE_LIFESTYLE_PRO, ENERGY_AUTO_DOWNGRADE, ENERGY_COST_HIGH, ENERGY_COST_LOW,
-    ENERGY_COST_MED, ENERGY_MAX, ENERGY_PASSIVE_RECOVERY, ENERGY_RECOVERY_INJURED, FAM_XP_AWKWARD,
-    FAM_XP_COMPETENT, FAM_XP_IMP_PER_WEEK, FAM_XP_KEY_PER_WEEK, FAM_XP_UNCONVINCING,
-    GROWTH_MULT_HIGH, GROWTH_MULT_LOW, GROWTH_MULT_MED, GROWTH_SINGLE_WEEK_CAP,
-    GROWTH_VARIANCE_RAW, INJURY_LIFESTYLE_X10_BALANCED, INJURY_LIFESTYLE_X10_FLASHY,
-    INJURY_LIFESTYLE_X10_PRO, INJURY_WEEKS_MAX, INJURY_WEEKS_MIN, LIFESTYLE_CEILING_BALANCED,
-    LIFESTYLE_CEILING_FLASHY, LIFESTYLE_CEILING_PRO, W_IMP, W_KEY,
+    DECLINE_LIFESTYLE_PRO, DURABILITY_X10_NEUTRAL, ENERGY_AUTO_DOWNGRADE, ENERGY_COST_HIGH,
+    ENERGY_COST_LOW, ENERGY_COST_MED, ENERGY_MAX, ENERGY_PASSIVE_RECOVERY, ENERGY_RECOVERY_INJURED,
+    FAM_XP_AWKWARD, FAM_XP_COMPETENT, FAM_XP_IMP_PER_WEEK, FAM_XP_KEY_PER_WEEK,
+    FAM_XP_UNCONVINCING, GROWTH_MULT_HIGH, GROWTH_MULT_LOW, GROWTH_MULT_MED,
+    GROWTH_SINGLE_WEEK_CAP, GROWTH_VARIANCE_RAW, INJURY_LIFESTYLE_X10_BALANCED,
+    INJURY_LIFESTYLE_X10_FLASHY, INJURY_LIFESTYLE_X10_PRO, INJURY_WEEKS_MAX, INJURY_WEEKS_MIN,
+    LIFESTYLE_CEILING_BALANCED, LIFESTYLE_CEILING_FLASHY, LIFESTYLE_CEILING_PRO, W_IMP, W_KEY,
 };
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -139,7 +139,8 @@ pub fn advance_week(
     players.set_energy(pc_id, new_energy);
 
     // ── Injury check ─────────────────────────────────────────────────────────
-    let inj_prob = injury_prob(new_energy, intensity, age_years, lifestyle);
+    let durability_x10 = players.get_durability_x10(pc_id);
+    let inj_prob = injury_prob(new_energy, intensity, age_years, lifestyle, durability_x10);
     if rng.next_range_u64(0, 999) < inj_prob as u64 {
         let dur = rng.next_range_u8(INJURY_WEEKS_MIN, INJURY_WEEKS_MAX) as u32;
         players.set_injury_weeks(pc_id, dur);
@@ -323,7 +324,13 @@ fn apply_passive_decay(
 }
 
 /// Injury probability per 1 000 rolls.
-fn injury_prob(energy: Fixed, intensity: Intensity, age_years: u32, lifestyle: u8) -> u32 {
+fn injury_prob(
+    energy: Fixed,
+    intensity: Intensity,
+    age_years: u32,
+    lifestyle: u8,
+    durability_x10: u8,
+) -> u32 {
     // Fatigue multiplier: 1.0 at full, 3.0 at 0 energy.
     let energy_pct = energy.to_int().clamp(0, 100) as u32;
     let fatigue_x10 = 10 + 20 * (100 - energy_pct) / 100;
@@ -345,7 +352,27 @@ fn injury_prob(energy: Fixed, intensity: Intensity, age_years: u32, lifestyle: u
     // Balanced is 10 (×1.0), so the divisor restores the pre-lifestyle baseline.
     let lifestyle_x10 = lifestyle_injury_x10(lifestyle);
 
-    BASE_INJURY_PER_1000 * fatigue_x10 * intensity_x10 * age_x10 * lifestyle_x10 / 10_000
+    // Durability multiplier (×10, BL7): the innate trait is stored "higher = tougher",
+    // so it's mirrored around neutral before use — a high roll must LOWER the injury
+    // coefficient, not raise it. At the neutral roll (10) this is a no-op (mirrors to
+    // itself), reproducing the pre-this-doc four-factor output exactly.
+    let durability_injury_x10 = durability_to_injury_x10(durability_x10);
+
+    BASE_INJURY_PER_1000
+        * fatigue_x10
+        * intensity_x10
+        * age_x10
+        * lifestyle_x10
+        * durability_injury_x10
+        / 100_000
+}
+
+/// Mirror a "higher = tougher" durability roll into an injury-risk multiplier (×10)
+/// where higher = riskier — the opposite direction, since a durable player must have a
+/// LOWER injury multiplier. Reflects around the neutral value so `DURABILITY_X10_NEUTRAL`
+/// maps to itself (no-op at the midpoint).
+fn durability_to_injury_x10(durability_x10: u8) -> u32 {
+    2 * DURABILITY_X10_NEUTRAL - durability_x10 as u32
 }
 
 /// Injury-risk multiplier (×10) for a lifestyle (0=Pro, 2=Flashy, else Balanced).
@@ -574,6 +601,66 @@ mod tests {
         assert!(
             acc_at_38 <= acc_at_30,
             "physical attr should decline (or at worst stay) after 30: {acc_at_30:?} → {acc_at_38:?}"
+        );
+    }
+
+    #[test]
+    fn higher_durability_reduces_injury_probability() {
+        use crate::tuning::{DURABILITY_X10_MAX, DURABILITY_X10_MIN};
+        let energy = Fixed::from_int(70);
+        let age_years = 30;
+        let lifestyle = 2u8; // Flashy — highest baseline risk, gives headroom either way
+
+        let low_durability = injury_prob(
+            energy,
+            Intensity::High,
+            age_years,
+            lifestyle,
+            DURABILITY_X10_MIN,
+        );
+        let high_durability = injury_prob(
+            energy,
+            Intensity::High,
+            age_years,
+            lifestyle,
+            DURABILITY_X10_MAX,
+        );
+
+        assert!(
+            high_durability < low_durability,
+            "higher durability_x10 must yield strictly lower injury probability: \
+             low-durability={low_durability} high-durability={high_durability}"
+        );
+    }
+
+    #[test]
+    fn durability_neutral_value_reproduces_pre_existing_injury_numbers() {
+        // Replicates the pre-this-doc four-factor formula inline (fatigue × intensity ×
+        // age × lifestyle / 10_000) and asserts the five-factor formula at the neutral
+        // durability roll produces the byte-identical result.
+        let energy = Fixed::from_int(80);
+        let age_years = 25;
+        let lifestyle = 1u8; // Balanced
+
+        let energy_pct = energy.to_int().clamp(0, 100) as u32;
+        let fatigue_x10 = 10 + 20 * (100 - energy_pct) / 100;
+        let intensity_x10 = 10; // Medium
+        let age_x10 = 10; // 21..=27
+        let lifestyle_x10 = INJURY_LIFESTYLE_X10_BALANCED;
+        let pre_existing =
+            BASE_INJURY_PER_1000 * fatigue_x10 * intensity_x10 * age_x10 * lifestyle_x10 / 10_000;
+
+        let with_neutral_durability = injury_prob(
+            energy,
+            Intensity::Medium,
+            age_years,
+            lifestyle,
+            DURABILITY_X10_NEUTRAL as u8,
+        );
+
+        assert_eq!(
+            with_neutral_durability, pre_existing,
+            "neutral durability_x10 must reproduce pre-existing injury_prob output exactly"
         );
     }
 }
