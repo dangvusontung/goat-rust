@@ -194,6 +194,21 @@ beats: edit `beats.json` following `docs/BEATS-AUTHORING-GUIDE.md`, then run
   constants in each crate's `tuning` module — never inline magic numbers. Bible numbers
   are placeholders illustrating shape; implement them as the starting values.
 
+## Git hygiene
+
+- `.gitignore`'s `/target/` only matches the workspace root. Anything under `spikes/`
+  or other nested Cargo projects gets its own `target/` — verify `**/target/` (already
+  present) actually covers it before adding a new spike, and run `git status` after
+  the first build to confirm nothing under a nested `target/` is offered up to `git add`.
+- Before staging, `git status` and eyeball the list for build output, IDE files, or
+  anything that isn't source — don't `git add -A`/`git add .` blindly in a directory
+  you haven't just run `cargo build` in.
+- If a large or generated file ever does get committed, don't just delete it in a new
+  commit — that keeps the blob in history. Flag it to the user; removing it for real
+  needs `git rm --cached` (untrack going forward) and, separately, a history rewrite
+  (`git filter-repo`) if the blob already bloated `.git` — the latter needs explicit
+  user sign-off since it force-pushes and breaks other clones.
+
 ## Test discipline
 
 - **Golden-seed tests first.** Every deterministic pipeline gets a test asserting exact
