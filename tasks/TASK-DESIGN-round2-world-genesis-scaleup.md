@@ -766,6 +766,72 @@ couple this into `TASK-DESIGN-round5-club-economy.md`'s (BL3) budget-spending sy
 isn't built yet. Recorded as an explicit future hook: BL3 (or a later round) can multiply an
 additional "club medical quality" coefficient into this same formula without redesigning it.
 
+**BL5 revisit (2026-07-28) — threshold framework discussed, still not fully designed.**
+
+Tùng picked BL5 up first in a 2026-07-28 session. Confirmed so far: mechanism is a
+**combination** of all three options above (Legacy label + Eye-Test Romantics signal + pundit
+thread), **PC-only** (not background/rival players). Threshold direction floated and accepted
+by Tùng (not yet formally locked): gap = `potential_ovr` minus the player's **peak** actual OVR
+reached during their career (not OVR at retirement, since decline makes every retiree look
+"wasted" under that measure) — counts as narrative-worthy only if **both** `potential_ovr` was
+high to begin with (≥85) **and** the gap is ≥~15% of `potential_ovr` (or ~12 OVR points
+absolute), large enough to be distinct from the ~4% gap `lifestyle_ceiling` already leaves on
+every Flashy player. Session then branched into two adjacent findings before parking again (see
+below) — BL5 itself is still open, not superseded.
+
+**BL5.1 — Goal/Assist split (spun out of a BL5 stats-by-position tangent, 2026-07-28) — scoped,
+not yet designed/confirmed.**
+
+Tùng asked whether BL5's position stats should include goals/assists/passes, which surfaced a
+real gap: only `goals` is tracked anywhere (`pc_season_goals`/`pc_career_goals` in `state.rs`);
+assists and passes don't exist as fields. Tùng confirmed assists must be tracked. Investigated
+the match engine (`crates/goat-match`) to see how feasible this is: it's PC-centric —
+`MatchResult`/`ActiveMatchState` only carry team-level `goals_for`/`goals_against`, no
+individual-teammate events. But `ScoreEvent::GoalFor`'s own doc comment
+(`crates/goat-match/src/beats.rs:38`) already says *"May or may not be credited directly to the
+player"* — the original design anticipated this split but it was never implemented. Today's
+counting logic (`crates/goat-tui/src/main.rs:918-921`) blindly counts every `GoalFor` moment as
+a PC goal regardless of whether the underlying beat choice was a shot (`library.rs`: "Drive it
+across goal") or a cross/pass (`library.rs`: "Whip a cross to the near post") — i.e. the beats
+library already narratively distinguishes shooting choices from passing/crossing choices, the
+plumbing to route that into stats just isn't there. Proposed scope (small, not a match-engine
+rewrite): split `ScoreEvent::GoalFor` into `GoalFor`/`AssistFor` variants, tag each beat/choice
+in `library.rs` by its real nature, fix the counting sites (`main.rs`, and `career_sim.rs` if it
+counts similarly), add `pc_season_assists`/`pc_career_assists` to `state.rs` mirroring the
+`goals` pattern exactly. Not yet formally confirmed by Tùng as final scope — surfaced, agreed in
+principle, not locked.
+
+**BL5.2 — `decisive_moments` is a dead stub — discovered 2026-07-28, not yet designed.**
+
+While discussing a "clutch vs. clown" idea (PC either scores in decisive moments or chokes and
+gets roasted by fans — ties BL5.1's shoot/pass choice into consequence), found that
+`pc_decisive_moments` (`state.rs:106`) and its `ApplySeasonEndLegacy` intent parameter
+(`state.rs:450`) are real and already feed `legacy.rs`'s Legacy scoring ("Goals or assists in
+finals or decisive moments"). But **every call site passes it as a hardcoded `0`**
+(`career_sim.rs:1144`, `main.rs:2335`) — the field has existed since round 2/pantheon work but
+has never once been populated from actual gameplay. Open question, not yet answered: what
+counts as a "decisive moment" — last-minutes-of-a-close-match goals, cup-final/title-decider/
+relegation-battle fixtures, or both. Needs its own design pass once picked back up; the "clown"
+(negative/fan-backlash) half of this idea is unbuilt and overlaps with BL6 below.
+
+**BL8 — "Hype exceeds reality" youth-sub narrative (Macheda archetype) — raised by Tùng,
+2026-07-28, not yet designed.**
+
+Distinct from BL5: BL5 is a player *known* to have high potential who never closes the gap over
+a full career. This is a different shape — a young player (17-19), likely with only modest/
+unremarkable potential, who scores in a couple of decisive moments off the bench in a small
+sample of appearances, gets disproportionately hyped by media/fans relative to their real
+ceiling, and then fails to develop further — the hype was never earned, not a case of decline.
+Confirmed by Tùng as a genuinely new idea, explicitly kept separate from the BL5.2 clutch/clown
+discussion rather than merged into it. Three pieces identified, none built: (1) small-sample
+variance in decisive moments specifically for young substitutes — depends on BL5.2's
+decisive-moment detection once that exists, but applied to sub appearances by young players
+specifically; (2) a "hype" value distinct from and initially decoupled from real `potential`,
+that spikes disproportionately off a handful of decisive moments — no code or bible text for
+this exists in any form today; (3) hype decay/collapse as real performance (driven by existing
+`current`/`potential` growth) fails to keep pace over subsequent seasons. Not designed further —
+needs its own round to work out the "hype" value's shape and how it decays.
+
 ## Decisions Design needs from Tùng before Dev starts (collected from above)
 
 1. **A2.1**: uniform 20-clubs-per-tier across all nations (low risk — `CLUBS_PER_DIV` moves
