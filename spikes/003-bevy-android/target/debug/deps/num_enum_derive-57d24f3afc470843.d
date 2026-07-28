@@ -1,9 +1,0 @@
-/home/tungdvs/projects/goat-rust/spikes/003-bevy-android/target/debug/deps/num_enum_derive-57d24f3afc470843.d: /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/lib.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/enum_attributes.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/parsing.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/utils.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/variant_attributes.rs
-
-/home/tungdvs/projects/goat-rust/spikes/003-bevy-android/target/debug/deps/libnum_enum_derive-57d24f3afc470843.so: /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/lib.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/enum_attributes.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/parsing.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/utils.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/variant_attributes.rs
-
-/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/lib.rs:
-/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/enum_attributes.rs:
-/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/parsing.rs:
-/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/utils.rs:
-/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num_enum_derive-0.7.6/src/variant_attributes.rs:

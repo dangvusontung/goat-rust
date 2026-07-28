@@ -1,9 +1,0 @@
-/home/tungdvs/projects/goat-rust/spikes/003-bevy-android/target/debug/deps/bevy_render_macros-23522a0475d813ab.d: /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/lib.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/as_bind_group.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/extract_component.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/extract_resource.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/specializer.rs
-
-/home/tungdvs/projects/goat-rust/spikes/003-bevy-android/target/debug/deps/libbevy_render_macros-23522a0475d813ab.so: /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/lib.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/as_bind_group.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/extract_component.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/extract_resource.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/specializer.rs
-
-/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/lib.rs:
-/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/as_bind_group.rs:
-/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/extract_component.rs:
-/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/extract_resource.rs:
-/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_render_macros-0.19.0/src/specializer.rs:
