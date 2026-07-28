@@ -1,0 +1,1 @@
+{"rustc":12019306335353385202,"features":"","declared_features":"","target":0,"profile":0,"path":0,"deps":[[6086914534779127652,"build_script_build",false,11482180515487623081]],"local":[{"RerunIfChanged":{"output":"x86_64-linux-android/debug/build/android-activity-5624b3c0ca8956ed/output","paths":["build.rs"]}}],"rustflags":[],"config":0,"compile_kind":0}

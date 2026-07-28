@@ -1,0 +1,11 @@
+/home/tungdvs/projects/goat-rust/spikes/003-bevy-android/target/x86_64-linux-android/debug/deps/bevy_audio-87de74bdc362dc76.d: /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/lib.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/audio.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/audio_output.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/audio_source.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/pitch.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/sinks.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/volume.rs
+
+/home/tungdvs/projects/goat-rust/spikes/003-bevy-android/target/x86_64-linux-android/debug/deps/libbevy_audio-87de74bdc362dc76.rmeta: /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/lib.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/audio.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/audio_output.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/audio_source.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/pitch.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/sinks.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/volume.rs
+
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/lib.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/audio.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/audio_output.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/audio_source.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/pitch.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/sinks.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bevy_audio-0.19.0/src/volume.rs:
