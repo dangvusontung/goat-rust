@@ -597,7 +597,7 @@ fn run_game_loop(
         if has_season {
             writeln!(
                 out,
-                "\n  [W] Train  [F] Fast-fwd  [S] Routine  [P] Play match  [K] Skip match"
+                "\n  [C] Continue  [W] Train  [F] Fast-fwd  [S] Routine  [P] Play match  [K] Skip match"
             )
             .unwrap();
             writeln!(
@@ -620,6 +620,83 @@ fn run_game_loop(
         match lines.next() {
             Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                 "Q" | "QUIT" => return,
+                "C" => {
+                    // Manage-by-exception default (tasks/TASK-AUTO-ADVANCE-TRAINING.md):
+                    // one key trains the current week via the exact [W] path, then stops
+                    // at the next decision — a due match, a noteworthy event, or a
+                    // flashpoint. Break weeks never surface here: ApplyRoundResult
+                    // already elapses them as rest weeks, so the menu week always has a
+                    // match due; the only auto-step is this week's training.
+                    if !state.pc_week_training_done {
+                        state =
+                            reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(week_rng_seed));
+                        display_events(out, &state.last_week_events);
+                        display_flashpoints(out, &state.last_week_flashpoints);
+                        state = dispatch_national_flashpoints(
+                            out,
+                            state,
+                            world,
+                            beat_lib,
+                            pc_traits,
+                            &mut pc_qualifying,
+                            &mut pc_tournament,
+                        );
+                        if !state.last_week_events.is_empty() {
+                            // A noteworthy event (injury, breakthrough, ...) is a stop
+                            // of its own — the due match is offered on the next [C].
+                            continue;
+                        }
+                    }
+                    if !has_season {
+                        continue;
+                    }
+                    // Offer the due match — same Play/Skip as the manual [P]/[K] keys.
+                    writeln!(
+                        out,
+                        "  Round {}/{} due this week — [P] Play  [K] Skip  (anything else: back to menu)",
+                        state.season_round + 1,
+                        ROUNDS_PER_SEASON
+                    )
+                    .unwrap();
+                    write!(out, "  > ").unwrap();
+                    out.flush().unwrap();
+                    match lines.next() {
+                        Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
+                            "P" => {
+                                state = run_next_round(
+                                    lines,
+                                    out,
+                                    state,
+                                    true,
+                                    beat_lib,
+                                    pc_traits,
+                                    world,
+                                    &mut pc_cup_alive,
+                                    &mut pc_continental,
+                                    &mut pc_qualifying,
+                                    &mut pc_tournament,
+                                )
+                            }
+                            "K" => {
+                                state = run_next_round(
+                                    lines,
+                                    out,
+                                    state,
+                                    false,
+                                    beat_lib,
+                                    pc_traits,
+                                    world,
+                                    &mut pc_cup_alive,
+                                    &mut pc_continental,
+                                    &mut pc_qualifying,
+                                    &mut pc_tournament,
+                                )
+                            }
+                            _ => {} // defer — back to the menu, match offered again next [C]
+                        },
+                        _ => return,
+                    }
+                }
                 "W" => {
                     // The reducer no-ops a second `W` in the same fixture round
                     // (`pc_week_training_done` gate) — snapshot the flag first so we
