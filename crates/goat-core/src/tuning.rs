@@ -383,3 +383,24 @@ pub const DECISIVE_IMPORTANCE_X10: [u32; 10] = [
 pub const DECISIVE_RESULT_WIN_X10: u32 = 10; // 1.0
 pub const DECISIVE_RESULT_DRAW_X10: u32 = 5; // 0.5
 pub const DECISIVE_RESULT_LOSS_X10: u32 = 0; // 0.0
+
+// ── Decisive-moment table tension (BL5.2 v2) ─────────────────────────────────
+// An ordinary League fixture late in a still-live title race or relegation
+// battle carries more weight than a mathematically dead one. "Alive" is judged
+// mathematically (Tùng's wording): the points gap can still be closed with the
+// rounds remaining (max one-sided swing = 3 × rounds left). All placeholder
+// values, flagged for sign-off like the coefficient ladder above.
+/// Rounds per season, mirrored from goat-world (goat-core stays headless — the
+/// same hand-sync idiom as the `N = 20` CLUBS_PER_DIV in `ApplyRoundResult`).
+pub const DECISIVE_ROUNDS_PER_SEASON: u32 = 38;
+/// Only the final this-many rounds get tension-adjusted at all; earlier league
+/// matches always use their static rung.
+pub const DECISIVE_TENSION_LAST_ROUNDS: u32 = 8;
+/// Effective ×10 coefficient for a late-season League/Derby match with the title
+/// race or drop battle still mathematically alive (sits between Derby=12 and
+/// DomesticCupLate=16).
+pub const DECISIVE_TENSION_X10: u32 = 15;
+/// Drop-zone size for the drop-battle check: the bottom this-many clubs of the
+/// 20-club division are "in the relegation battle" (hand-synced with the
+/// season-end promotion/relegation shape, same idiom as above).
+pub const DECISIVE_RELEGATION_SPOTS: usize = 3;
