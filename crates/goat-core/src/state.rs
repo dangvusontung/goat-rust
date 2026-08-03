@@ -1183,8 +1183,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 0 => crate::tuning::DECISIVE_RESULT_DRAW_X10,
                 _ => crate::tuning::DECISIVE_RESULT_LOSS_X10,
             };
-            let importance_x10 =
-                crate::tuning::DECISIVE_IMPORTANCE_X10[fixture_importance as usize];
+            let importance_x10 = decisive_effective_importance_x10(&state, fixture_importance);
             state.pc_season_decisive_moments +=
                 (pc_decisive_count * importance_x10 * result_x10 + 50) / 100;
             if pc_output > 0 {
@@ -1250,6 +1249,50 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.season_round += 1;
             state
         }
+    }
+}
+
+/// BL5.2 v2 (league-table tension): the fixture's ×10 importance coefficient,
+/// adjusted for live table stakes late in the season. Only League-family rungs
+/// are tension-adjusted (cup/continental rungs carry their own stakes already),
+/// and only in the final `DECISIVE_TENSION_LAST_ROUNDS` rounds; the check runs
+/// on the table BEFORE this round's results land (the stakes going into the
+/// match). "Alive" is mathematical: the gap can still be closed with the rounds
+/// remaining (max one-sided swing = 3 × rounds left).
+/// - Title race or drop battle still alive → `max(base, DECISIVE_TENSION_X10)`.
+/// - Nothing left on the line (a `League` match only — a Derby keeps its
+///   intrinsic rivalry stakes) → the `DeadRubber` coefficient.
+fn decisive_effective_importance_x10(state: &WorldState, importance: FixtureImportance) -> u32 {
+    use crate::tuning::*;
+    let base = DECISIVE_IMPORTANCE_X10[importance as usize];
+    if !matches!(
+        importance,
+        FixtureImportance::League | FixtureImportance::Derby
+    ) {
+        return base;
+    }
+    if state.season_round + DECISIVE_TENSION_LAST_ROUNDS < DECISIVE_ROUNDS_PER_SEASON {
+        return base;
+    }
+    const N: usize = 20; // CLUBS_PER_DIV — same hand-sync as the table update above
+    let pts = |row: usize| state.table_raw[row] * 3 + state.table_raw[N + row];
+    let mut sorted: Vec<u32> = (0..N).map(&pts).collect();
+    sorted.sort_unstable_by(|a, b| b.cmp(a)); // points only — deterministic, no club identity
+    let pc_pts = pts(state.pc_club_idx as usize % N);
+    let leader_pts = sorted[0];
+    // Points of the last safe club (index N-SPOTS-1): the drop-line reference.
+    let safety_pts = sorted[N - DECISIVE_RELEGATION_SPOTS - 1];
+    // Rounds left AFTER this one; the handler runs before season_round increments.
+    let rounds_left = DECISIVE_ROUNDS_PER_SEASON.saturating_sub(state.season_round + 1);
+    let max_swing = rounds_left * 3;
+    let title_alive = leader_pts - pc_pts <= max_swing;
+    let drop_alive = pc_pts.abs_diff(safety_pts) <= max_swing;
+    if title_alive || drop_alive {
+        base.max(DECISIVE_TENSION_X10)
+    } else if importance == FixtureImportance::League {
+        DECISIVE_IMPORTANCE_X10[FixtureImportance::DeadRubber as usize]
+    } else {
+        base
     }
 }
 
@@ -1753,5 +1796,106 @@ mod tests {
             s.pc_decisive_moments, 4,
             "career counter survives the reset"
         );
+    }
+
+    /// BL5.2 v2 (table tension): late in the season a League match with the title
+    /// race or drop battle mathematically alive is weighted UP (×15), one with
+    /// nothing on the line is weighted DOWN to DeadRubber (×5), and early-season
+    /// matches are never touched. The check reads the table BEFORE the round's
+    /// results land.
+    #[test]
+    fn decisive_weighting_tracks_late_season_table_tension() {
+        use goat_calendar::FixtureImportance as FI;
+        const N: usize = 20;
+
+        // Write a points total into table_raw for one club row (W×3 + D).
+        fn set_pts(raw: &mut [u32; 100], row: usize, pts: u32) {
+            raw[row] = pts / 3;
+            raw[N + row] = pts % 3;
+        }
+        // Baseline table: everyone on 20 except club 1 (the leader) on 70; the
+        // PC (club 0) starts on `pc_pts`.
+        fn table_with(pc_pts: u32) -> [u32; 100] {
+            let mut raw = [0u32; 100];
+            for row in 0..N {
+                set_pts(&mut raw, row, 20);
+            }
+            set_pts(&mut raw, 1, 70);
+            set_pts(&mut raw, 0, pc_pts);
+            raw
+        }
+        fn play_round(s: WorldState, importance: FI, pc_result: i8) -> WorldState {
+            reduce(
+                s,
+                Intent::ApplyRoundResult {
+                    competition_id: crate::calendar_loop::LEAGUE_COMPETITION_ID,
+                    pc_goals: 0,
+                    pc_assists: 0,
+                    pc_decisive_count: 2,
+                    fixture_importance: importance,
+                    pc_output: 60,
+                    pc_result,
+                    round_results: Vec::new(),
+                    rest_weeks: 0,
+                    week_ends: true,
+                },
+                &mut make_rng(),
+            )
+        }
+
+        // Late season (round 33 of 38 → 4 rounds left, max swing 12).
+        // PC on 60, leader on 70: gap 10 ≤ 12 → title race ALIVE → ×15:
+        // contribution = (2×15×10 + 50)/100 = 3.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.season_round = 33;
+        s.table_raw = table_with(60);
+        let s = play_round(s, FI::League, 1);
+        assert_eq!(
+            s.pc_season_decisive_moments, 3,
+            "live title race weights up"
+        );
+
+        // Same round, PC on 40: 30 off the top (dead) and 20 clear of the drop
+        // line (dead) → DeadRubber ×5: contribution = (2×5×10 + 50)/100 = 1.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.season_round = 33;
+        s.table_raw = table_with(40);
+        let s = play_round(s, FI::League, 1);
+        assert_eq!(s.pc_season_decisive_moments, 1, "dead rubber weights down");
+
+        // Same round, PC on 25: 5 off the last-safe line (20) → drop battle
+        // ALIVE → ×15: contribution = 3.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.season_round = 33;
+        s.table_raw = table_with(25);
+        let s = play_round(s, FI::League, 1);
+        assert_eq!(
+            s.pc_season_decisive_moments, 3,
+            "live drop battle weights up"
+        );
+
+        // Identical table as the title-race case but EARLY (round 10): no tension
+        // window → static League ×10: contribution = (2×10×10 + 50)/100 = 2.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.season_round = 10;
+        s.table_raw = table_with(60);
+        let s = play_round(s, FI::League, 1);
+        assert_eq!(
+            s.pc_season_decisive_moments, 2,
+            "early season ignores the table"
+        );
+
+        // A dead-rubber Derby is NOT downgraded (intrinsic rivalry stakes), but a
+        // live one is still upgraded: dead → ×12 → (2×12×10 + 50)/100 = 2.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.season_round = 33;
+        s.table_raw = table_with(40);
+        let s = play_round(s, FI::Derby, 1);
+        assert_eq!(s.pc_season_decisive_moments, 2, "dead derby keeps its rung");
     }
 }
