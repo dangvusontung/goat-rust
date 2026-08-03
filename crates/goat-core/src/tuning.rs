@@ -359,3 +359,27 @@ pub const START_PCT_NATURAL: u32 = 85;
 pub const START_PCT_COMPETENT: u32 = 60;
 pub const START_PCT_UNCONVINCING: u32 = 30;
 pub const START_PCT_AWKWARD: u32 = 10;
+
+// ── Decisive-moment weighting (BL5.2) ────────────────────────────────────────
+// Static match-value coefficient per `goat_calendar::FixtureImportance` rung,
+// ×10 integers (no floats in sim). Placeholder scale from the BL5.2 task doc,
+// flagged for sign-off once seen against a real career-sim run. Index by the
+// enum's ordinal (DeadRubber=0 … ContinentalTier1Final=9).
+/// ×10 coefficient per FixtureImportance rung.
+pub const DECISIVE_IMPORTANCE_X10: [u32; 10] = [
+    5,  // DeadRubber = 0.5
+    10, // League = 1.0
+    12, // Derby = 1.2
+    13, // ContinentalTier3 = 1.3
+    13, // DomesticCupEarly = 1.3
+    15, // ContinentalTier2 = 1.5
+    16, // DomesticCupLate = 1.6
+    18, // ContinentalTier1 = 1.8
+    20, // DomesticCupFinal = 2.0
+    20, // ContinentalTier1Final = 2.0
+];
+/// ×10 result multipliers: a decisive moment in a match you still lost
+/// contributes nothing to this axis (the "lean simple" default from the doc).
+pub const DECISIVE_RESULT_WIN_X10: u32 = 10; // 1.0
+pub const DECISIVE_RESULT_DRAW_X10: u32 = 5; // 0.5
+pub const DECISIVE_RESULT_LOSS_X10: u32 = 0; // 0.0

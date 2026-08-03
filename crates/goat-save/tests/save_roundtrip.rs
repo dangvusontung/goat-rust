@@ -517,8 +517,8 @@ fn old_v11_save_without_club_budgets_defaults_to_empty() {
     // academy_boosts's empty-list 4-byte length prefix, followed by v14's manager section:
     // manager_blob's own 4-byte byte-length prefix + its empty-pool 4-byte inner manager
     // count, then club_manager's and free_agents' empty-list 4-byte length prefixes,
-    // then v15's two assist u32s (BL5.1).
-    let v11_len = bytes.len() - (4 + 3 * 8) - 4 - (4 + 4 + 4 + 4) - 2 * 4;
+    // then v15's two assist u32s (BL5.1) and v16's decisive-moments u32 (BL5.2).
+    let v11_len = bytes.len() - (4 + 3 * 8) - 4 - (4 + 4 + 4 + 4) - 2 * 4 - 4;
     bytes.truncate(v11_len);
 
     let v11_path = std::env::temp_dir().join(format!(
@@ -593,8 +593,9 @@ fn old_v12_save_without_academy_boosts_defaults_to_empty() {
     // Trailing encoding: academy_boosts (4-byte count + 3 * 1-byte entries), followed by
     // v14's manager section: manager_blob's own 4-byte byte-length prefix + its empty-pool
     // 4-byte inner manager count, then club_manager's and free_agents' empty-list 4-byte
-    // length prefixes, then v15's two assist u32s (BL5.1).
-    let v12_len = bytes.len() - (4 + 3) - (4 + 4 + 4 + 4) - 2 * 4;
+    // length prefixes, then v15's two assist u32s (BL5.1) and v16's decisive-moments
+    // u32 (BL5.2).
+    let v12_len = bytes.len() - (4 + 3) - (4 + 4 + 4 + 4) - 2 * 4 - 4;
     bytes.truncate(v12_len);
 
     let v12_path = std::env::temp_dir().join(format!(
@@ -662,9 +663,10 @@ fn old_v13_save_without_managers_defaults_to_empty() {
 
     // Trailing encoding: manager_blob's own 4-byte byte-length prefix + its 1-manager
     // content, then club_manager's 4-byte count + 1 entry (4 bytes), then free_agents'
-    // empty-list 4-byte length prefix, then v15's two assist u32s (BL5.1).
+    // empty-list 4-byte length prefix, then v15's two assist u32s (BL5.1) and v16's
+    // decisive-moments u32 (BL5.2).
     let manager_blob_len = data.manager_blob.len();
-    let v13_len = bytes.len() - (4 + manager_blob_len) - (4 + 4) - 4 - 2 * 4;
+    let v13_len = bytes.len() - (4 + manager_blob_len) - (4 + 4) - 4 - 2 * 4 - 4;
     bytes.truncate(v13_len);
 
     let v13_path = std::env::temp_dir().join(format!(
@@ -842,8 +844,9 @@ fn old_v14_save_without_assists_defaults_to_zero() {
     let mut bytes = std::fs::read(&full_path).unwrap();
     std::fs::remove_file(&full_path).ok();
 
-    // Trailing encoding: pc_season_assists + pc_career_assists (2 × 4-byte u32).
-    let v14_len = bytes.len() - 2 * 4;
+    // Trailing encoding: pc_season_assists + pc_career_assists (2 × 4-byte u32),
+    // then v16's pc_season_decisive_moments (4-byte u32).
+    let v14_len = bytes.len() - 2 * 4 - 4;
     bytes.truncate(v14_len);
 
     let v14_path = std::env::temp_dir().join(format!(
@@ -856,8 +859,68 @@ fn old_v14_save_without_assists_defaults_to_zero() {
 
     assert_eq!(loaded.pc_season_assists, 0);
     assert_eq!(loaded.pc_career_assists, 0);
+    assert_eq!(
+        loaded.pc_season_decisive_moments, 0,
+        "a pre-v16 save must default the decisive-moments staging counter too"
+    );
 
     let restored = to_world_state(&loaded, &test_world());
     assert_eq!(restored.pc_season_assists, 0);
     assert_eq!(restored.pc_career_assists, 0);
+}
+
+#[test]
+fn save_load_restores_decisive_moments_through_bytes() {
+    // v16+: the live season staging counter must survive a full byte round-trip,
+    // same idiom as every other pc_season_* staging field.
+    let mut state = setup_state();
+    state.pc_season_decisive_moments = 9;
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join(format!(
+        "goat_save_decisive_roundtrip_{}.gsav",
+        std::process::id()
+    ));
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap(), &test_world());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(restored.pc_season_decisive_moments, 9);
+}
+
+#[test]
+fn old_v15_save_without_decisive_moments_defaults_to_zero() {
+    // A real v15 binary never wrote the trailing v16 u32 (4 bytes). Simulate that
+    // by truncating it off a real v16 buffer — exercises the actual `.unwrap_or(0)`
+    // backward-compat read in `from_bytes` (same idiom as the v14/v15 test above).
+    let mut state = setup_state();
+    state.pc_season_decisive_moments = 5;
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let full_path =
+        std::env::temp_dir().join(format!("goat_save_v16_full_{}.gsav", std::process::id()));
+    save_to_file(&data, &full_path).unwrap();
+    let mut bytes = std::fs::read(&full_path).unwrap();
+    std::fs::remove_file(&full_path).ok();
+
+    // Trailing encoding: pc_season_decisive_moments (1 × 4-byte u32).
+    let v15_len = bytes.len() - 4;
+    bytes.truncate(v15_len);
+
+    let v15_path = std::env::temp_dir().join(format!(
+        "goat_save_v15_truncated_{}.gsav",
+        std::process::id()
+    ));
+    std::fs::write(&v15_path, &bytes).unwrap();
+    let loaded = load_from_file(&v15_path).unwrap();
+    std::fs::remove_file(&v15_path).ok();
+
+    assert_eq!(loaded.pc_season_decisive_moments, 0);
+
+    let restored = to_world_state(&loaded, &test_world());
+    assert_eq!(restored.pc_season_decisive_moments, 0);
 }

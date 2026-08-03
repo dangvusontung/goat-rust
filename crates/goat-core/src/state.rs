@@ -7,6 +7,11 @@
 use goat_fixed::Fixed;
 use goat_rng::RngSource;
 
+// Re-exported so intent constructors (renderers, tests) can name the
+// `ApplyRoundResult::fixture_importance` field's type without taking a direct
+// dependency on `goat-calendar` (BL5.2).
+pub use goat_calendar::FixtureImportance;
+
 use crate::attrs::{AttrId, NUM_ATTRS};
 use crate::calendar_loop::{advance_calendar_week, CalendarFlashpoint};
 use crate::generation::{self, CreationChoices};
@@ -109,6 +114,10 @@ pub struct WorldState {
     pub pc_best_season_avg_output: i32,
     pub pc_seasons_played: u32,
     pub pc_decisive_moments: u32,
+    /// This season's decisive-moment count, live (BL5.2) — folded into
+    /// `pc_decisive_moments` only at ApplySeasonEndLegacy's `decisive_moments`
+    /// param (mirrors pc_season_goals -> pc_career_goals).
+    pub pc_season_decisive_moments: u32,
     pub pc_player_of_year_wins: u32,
     pub pc_league_titles: u32,
     pub pc_clubs_served: u32,
@@ -301,6 +310,7 @@ impl WorldState {
             pc_best_season_avg_output: 0,
             pc_seasons_played: 0,
             pc_decisive_moments: 0,
+            pc_season_decisive_moments: 0,
             pc_player_of_year_wins: 0,
             pc_league_titles: 0,
             pc_clubs_served: 1,
@@ -602,6 +612,13 @@ pub enum Intent {
         pc_goals: u32,
         /// PC's assists this round (0 if they didn't play or skipped) — BL5.1.
         pc_assists: u32,
+        /// PC's decisive-moment candidates this round (BL5.2), counted by the
+        /// renderer from the match's moments via `goat_match::sim::is_decisive`.
+        /// Weighted below by `fixture_importance` and `pc_result`.
+        pc_decisive_count: u32,
+        /// Static importance rung of this round's fixture (BL5.2) — which
+        /// `DECISIVE_IMPORTANCE_X10` coefficient the count is weighted by.
+        fixture_importance: goat_calendar::FixtureImportance,
         /// PC output this round (0 if didn't play).
         pc_output: i32,
         /// Did the PC's team win/draw/lose?  (1/0/-1)
@@ -1070,6 +1087,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_season_matches = 0;
             state.pc_season_output = 0;
             state.pc_season_standout_matches = 0;
+            state.pc_season_decisive_moments = 0;
             state.pc_season_transfer_requests = 0;
             state.pc_season_caps = 0;
             state.pc_season_international_goals = 0;
@@ -1117,6 +1135,8 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             competition_id,
             pc_goals,
             pc_assists,
+            pc_decisive_count,
+            fixture_importance,
             pc_output,
             pc_result,
             round_results,
@@ -1154,6 +1174,19 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_season_goals += pc_goals;
             state.pc_season_assists += pc_assists;
             state.pc_season_output += pc_output;
+            // BL5.2 decisive moments: the raw candidate count is weighted by the
+            // fixture's static importance rung and the match result, then rounded
+            // half-up into the whole-moment accumulator:
+            //   contribution = (count × importance_x10 × result_x10 + 50) / 100
+            let result_x10 = match pc_result {
+                1 => crate::tuning::DECISIVE_RESULT_WIN_X10,
+                0 => crate::tuning::DECISIVE_RESULT_DRAW_X10,
+                _ => crate::tuning::DECISIVE_RESULT_LOSS_X10,
+            };
+            let importance_x10 =
+                crate::tuning::DECISIVE_IMPORTANCE_X10[fixture_importance as usize];
+            state.pc_season_decisive_moments +=
+                (pc_decisive_count * importance_x10 * result_x10 + 50) / 100;
             if pc_output > 0 {
                 state.pc_season_matches += 1;
             }
@@ -1591,6 +1624,8 @@ mod tests {
                 competition_id: crate::calendar_loop::LEAGUE_COMPETITION_ID,
                 pc_goals: 2,
                 pc_assists: 1,
+                pc_decisive_count: 0,
+                fixture_importance: goat_calendar::FixtureImportance::League,
                 pc_output: 70,
                 pc_result: 1,
                 round_results: Vec::new(),
@@ -1642,5 +1677,81 @@ mod tests {
             "season counter resets at StartSeason"
         );
         assert_eq!(s.pc_career_assists, 1, "career counter survives the reset");
+    }
+
+    /// BL5.2: the per-round decisive-candidate count is weighted by fixture
+    /// importance and result (rounded half-up), accrues into the live season
+    /// counter, folds into the career counter at season end, and resets at
+    /// StartSeason — the same shape as goals/assists.
+    #[test]
+    fn decisive_moments_are_weighted_accrued_folded_and_reset() {
+        let round = |pc_decisive_count, fixture_importance, pc_result| -> Intent {
+            Intent::ApplyRoundResult {
+                competition_id: crate::calendar_loop::LEAGUE_COMPETITION_ID,
+                pc_goals: 0,
+                pc_assists: 0,
+                pc_decisive_count,
+                fixture_importance,
+                pc_output: 60,
+                pc_result,
+                round_results: Vec::new(),
+                rest_weeks: 0,
+                week_ends: true,
+            }
+        };
+        use goat_calendar::FixtureImportance as FI;
+
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+
+        // Win, League (×10 ×10): (2×10×10 + 50)/100 = 2.
+        let s = reduce(s, round(2, FI::League, 1), &mut make_rng());
+        assert_eq!(s.pc_season_decisive_moments, 2);
+        // Draw, League (×10 ×5): (2×10×5 + 50)/100 = 1 — documents the half-up
+        // rounding: 1.0 exactly, no upward drift.
+        let s = reduce(s, round(2, FI::League, 0), &mut make_rng());
+        assert_eq!(s.pc_season_decisive_moments, 3);
+        // A single drawn League moment: (1×10×5 + 50)/100 = 1 — 0.5 rounds UP.
+        let s = reduce(s, round(1, FI::League, 0), &mut make_rng());
+        assert_eq!(s.pc_season_decisive_moments, 4);
+        // Loss zeroes the contribution entirely, even at final-level importance.
+        let s = reduce(s, round(3, FI::DomesticCupFinal, -1), &mut make_rng());
+        assert_eq!(s.pc_season_decisive_moments, 4);
+        assert_eq!(
+            s.pc_decisive_moments, 0,
+            "career counter only folds at season end"
+        );
+
+        let s_decisive = s.pc_season_decisive_moments;
+        let s = reduce(
+            s,
+            Intent::ApplySeasonEndLegacy {
+                season_goals: 0,
+                season_assists: 0,
+                season_matches: 4,
+                season_output_sum: 240,
+                won_title: false,
+                player_of_year: false,
+                finish_position: 10,
+                decisive_moments: s_decisive,
+                new_sporting_rep: 50,
+                new_club_fan_rep: 50,
+                season_standout_matches: 0,
+                season_transfer_requests: 0,
+                season_caps: 0,
+                season_international_goals: 0,
+                season_world_cups_won: 0,
+                season_continental_championships_won: 0,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_decisive_moments, 4);
+
+        let s = reduce(s, Intent::StartSeason { fixtures: vec![] }, &mut make_rng());
+        assert_eq!(s.pc_season_decisive_moments, 0);
+        assert_eq!(
+            s.pc_decisive_moments, 4,
+            "career counter survives the reset"
+        );
     }
 }
