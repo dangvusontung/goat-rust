@@ -888,7 +888,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
     // Sim PC match.
     let pc_fixture =
         goat_world::fixture_for_round(world_seed, season, div_idx, &div_clubs, pc_club_id, round);
-    let (pc_goals, pc_output, pc_result, match_dto) = if let Some(f) = pc_fixture {
+    let (pc_goals, pc_assists, pc_output, pc_result, match_dto) = if let Some(f) = pc_fixture {
         let is_home = f.home == pc_club_id;
         let opp_id = if is_home { f.away } else { f.home };
         let opp = &world.clubs[opp_id];
@@ -897,6 +897,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
         if is_suspended {
             let (gf, ga) = goat_world::sim_team_match(own_str, opp.strength, &mut match_rng);
             (
+                0,
                 0,
                 0,
                 0i8,
@@ -947,6 +948,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
                 .map(|m| {
                     let icon = match m.goal_event {
                         Some(goat_match::beats::ScoreEvent::GoalFor) => "⚽",
+                        Some(goat_match::beats::ScoreEvent::AssistFor) => "🅰",
                         Some(goat_match::beats::ScoreEvent::GoalAgainst) => "❌",
                         None => {
                             if m.success {
@@ -965,6 +967,11 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
                 .iter()
                 .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::GoalFor)))
                 .count() as u32;
+            let pc_assists = result
+                .moments
+                .iter()
+                .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::AssistFor)))
+                .count() as u32;
             let pc_result: i8 = if result.goals_for > result.goals_against {
                 1
             } else if result.goals_for < result.goals_against {
@@ -975,6 +982,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
 
             (
                 pc_goals,
+                pc_assists,
                 result.player_output,
                 pc_result,
                 MatchResultDto {
@@ -990,6 +998,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
         }
     } else {
         (
+            0,
             0,
             0,
             0i8,
@@ -1063,6 +1072,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
         Intent::ApplyRoundResult {
             competition_id: LEAGUE_COMPETITION_ID,
             pc_goals,
+            pc_assists,
             pc_output,
             pc_result,
             round_results,
@@ -1359,6 +1369,7 @@ pub fn get_season_awards() -> Vec<AwardDto> {
 pub fn apply_season_end() -> GoatGameState {
     let state = take_state();
     let season_goals = state.pc_season_goals;
+    let season_assists = state.pc_season_assists;
     let season_matches = state.pc_season_matches;
     let season_output = state.pc_season_output;
     let season_standout_matches = state.pc_season_standout_matches;
@@ -1436,6 +1447,7 @@ pub fn apply_season_end() -> GoatGameState {
         state,
         Intent::ApplySeasonEndLegacy {
             season_goals,
+            season_assists,
             season_matches,
             season_output_sum: season_output,
             won_title,
@@ -1736,6 +1748,12 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
             .iter()
             .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
             .count() as u32;
+        let pc_assists = session
+            .state
+            .moments
+            .iter()
+            .filter(|m| matches!(m.goal_event, Some(ScoreEvent::AssistFor)))
+            .count() as u32;
         let pc_output = session.state.player_output;
         let goals_for = session.state.goals_for;
         let goals_against = session.state.goals_against;
@@ -1760,6 +1778,7 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
             .map(|m| {
                 let icon = match m.goal_event {
                     Some(ScoreEvent::GoalFor) => "⚽",
+                    Some(ScoreEvent::AssistFor) => "🅰",
                     Some(ScoreEvent::GoalAgainst) => "❌",
                     None => {
                         if m.success {
@@ -1853,6 +1872,7 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
                 Intent::ApplyRoundResult {
                     competition_id: LEAGUE_COMPETITION_ID,
                     pc_goals,
+                    pc_assists,
                     pc_output,
                     pc_result,
                     round_results,

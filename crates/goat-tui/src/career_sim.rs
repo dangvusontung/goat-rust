@@ -212,6 +212,7 @@ struct SeasonSnap {
     form: i32,
     table_pos: usize,
     goals: u32,
+    assists: u32,
     matches: u32,
 }
 
@@ -322,6 +323,7 @@ fn main() {
         for m in &r.moments {
             let tag = match m.goal_event {
                 Some(ScoreEvent::GoalFor) => " ⚽ GOAL!",
+                Some(ScoreEvent::AssistFor) => " 🅰 ASSIST!",
                 Some(ScoreEvent::GoalAgainst) => " (they score)",
                 _ if m.success => " ✓",
                 _ => " ✗",
@@ -345,9 +347,14 @@ fn main() {
             .iter()
             .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
             .count();
+        let player_assists = r
+            .moments
+            .iter()
+            .filter(|m| matches!(m.goal_event, Some(ScoreEvent::AssistFor)))
+            .count();
         println!("  {}", "─".repeat(52));
         println!(
-            "  FULL TIME  {}-{}  {res}   |   your rating {}   goals {player_goals}   cards {cards}",
+            "  FULL TIME  {}-{}  {res}   |   your rating {}   goals {player_goals}   assists {player_assists}   cards {cards}",
             r.goals_for, r.goals_against, r.player_output
         );
         return;
@@ -411,7 +418,8 @@ fn main() {
         println!("  Rd  Opponent           Score  Res  Out  Gls  Cards");
         println!("  {}", "─".repeat(52));
 
-        let (mut tot_out, mut tot_goals, mut min_o, mut max_o) = (0i64, 0u32, 100i32, 0i32);
+        let (mut tot_out, mut tot_goals, mut tot_assists, mut min_o, mut max_o) =
+            (0i64, 0u32, 0u32, 100i32, 0i32);
         let (mut w, mut d, mut l, mut yel, mut red, mut played) = (0, 0, 0, 0u32, 0u32, 0u32);
 
         for round in 0..ROUNDS_PER_SEASON {
@@ -479,6 +487,11 @@ fn main() {
                 .iter()
                 .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
                 .count() as u32;
+            let assists = r
+                .moments
+                .iter()
+                .filter(|m| matches!(m.goal_event, Some(ScoreEvent::AssistFor)))
+                .count() as u32;
             let (gf, ga) = (r.goals_for, r.goals_against);
             let res_int: i8 = match gf.cmp(&ga) {
                 std::cmp::Ordering::Greater => 1,
@@ -524,6 +537,7 @@ fn main() {
                 Intent::ApplyRoundResult {
                     competition_id: LEAGUE_COMPETITION_ID,
                     pc_goals: goals,
+                    pc_assists: assists,
                     pc_output: r.player_output,
                     pc_result: res_int,
                     round_results,
@@ -555,6 +569,7 @@ fn main() {
             played += 1;
             tot_out += r.player_output as i64;
             tot_goals += goals;
+            tot_assists += assists;
             min_o = min_o.min(r.player_output);
             max_o = max_o.max(r.player_output);
             yel += r.yellow_cards as u32;
@@ -571,7 +586,7 @@ fn main() {
         println!("  {}", "─".repeat(52));
         println!("\n  SEASON SUMMARY");
         println!(
-            "  Played {played}  W{w} D{d} L{l}  |  Goals {tot_goals}  |  League position {pos}/{}",
+            "  Played {played}  W{w} D{d} L{l}  |  Goals {tot_goals}  Assists {tot_assists}  |  League position {pos}/{}",
             div_clubs.len()
         );
         println!("  Output: avg {avg}  min {min_o}  max {max_o}   Cards: {yel}Y {red}R");
@@ -1080,6 +1095,9 @@ fn main() {
                 Intent::ApplyRoundResult {
                     competition_id: LEAGUE_COMPETITION_ID,
                     pc_goals: player_goals,
+                    // Batch path rolls goals from attrs without beat moments, so
+                    // there is no assist source here — assists stay 0 in this mode.
+                    pc_assists: 0,
                     pc_output,
                     pc_result,
                     round_results,
@@ -1115,6 +1133,7 @@ fn main() {
             form: state.pc_form.to_int(),
             table_pos,
             goals: state.pc_season_goals,
+            assists: state.pc_season_assists,
             matches: state.pc_season_matches,
         });
 
@@ -1128,6 +1147,7 @@ fn main() {
         let new_club_fan_rep = state.pc_club_fan_rep + 1;
         let season_output_sum = state.pc_season_output;
         let s_goals = state.pc_season_goals;
+        let s_assists = state.pc_season_assists;
         let s_matches = state.pc_season_matches;
         let s_standout_matches = state.pc_season_standout_matches;
         let s_transfer_requests = state.pc_season_transfer_requests;
@@ -1136,6 +1156,7 @@ fn main() {
             state,
             Intent::ApplySeasonEndLegacy {
                 season_goals: s_goals,
+                season_assists: s_assists,
                 season_matches: s_matches,
                 season_output_sum,
                 won_title,
@@ -1351,8 +1372,8 @@ fn main() {
         print!("  {:>4}", short.trim());
     }
     println!(
-        "  {:>4}  {:>3}  {:>5}  {:>5}",
-        "Form", "Pos", "Match", "Goals"
+        "  {:>4}  {:>3}  {:>5}  {:>5}  {:>5}",
+        "Form", "Pos", "Match", "Goals", "Ast"
     );
     println!("  {}", "─".repeat(74));
 
@@ -1363,8 +1384,8 @@ fn main() {
             print!("  {:>4}", val);
         }
         println!(
-            "  {:>4}  {:>3}  {:>5}  {:>5}  {}",
-            s.form, s.table_pos, s.matches, s.goals, phase
+            "  {:>4}  {:>3}  {:>5}  {:>5}  {:>5}  {}",
+            s.form, s.table_pos, s.matches, s.goals, s.assists, phase
         );
     }
 
@@ -1442,6 +1463,7 @@ fn main() {
     let best_form_season = snaps.iter().max_by_key(|s| s.form).unwrap();
     let titles: usize = snaps.iter().filter(|s| s.table_pos == 1).count();
     let career_goals: u32 = snaps.iter().map(|s| s.goals).sum();
+    let career_assists: u32 = snaps.iter().map(|s| s.assists).sum();
     let career_apps: u32 = snaps.iter().map(|s| s.matches).sum();
 
     println!(
@@ -1454,7 +1476,10 @@ fn main() {
     );
     println!(
         "║  {:76} ║",
-        format!("Career apps    : {}  Goals: {}", career_apps, career_goals)
+        format!(
+            "Career apps    : {}  Goals: {}  Assists: {}",
+            career_apps, career_goals, career_assists
+        )
     );
     // Lifestyle is an emergent, weekly-nudged readout (bible §8.6) — report the actual
     // final tier (`state.pc_lifestyle`), not the CLI `--lifestyle` seed, which can and

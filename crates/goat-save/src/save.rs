@@ -46,7 +46,10 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// `free_agents` (both length-prefixed `Vec<u32>` `ManagerId` lists) — path-dependent
 /// fire/rehire history and rolling form that cannot be regenerated from `world_seed` alone.
 /// Another pure tail-append, same idiom as v12/v13.
-pub const VERSION: u32 = 14;
+/// v15+: (BL5.1 goal/assist split) adds `pc_season_assists`/`pc_career_assists` as two
+/// trailing u32s — a pure tail-append, same idiom as v12/v13/v14; pre-15 saves default
+/// both to 0 via `.unwrap_or(0)` reads.
+pub const VERSION: u32 = 15;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -154,6 +157,11 @@ pub struct SaveData {
     pub club_manager: Vec<u32>,
     /// Currently-unemployed manager indices into the unpacked `manager_blob`.
     pub free_agents: Vec<u32>,
+    // ── Goal/assist split (v15+, BL5.1) ───────────────────────────────────────
+    /// Live season counter, persisted (like `pc_season_goals`) so a mid-season
+    /// save/load doesn't lose it; folded into the career counter at season end.
+    pub pc_season_assists: u32,
+    pub pc_career_assists: u32,
 }
 
 #[derive(Debug)]
@@ -270,6 +278,8 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         manager_blob: encode_managers(&state.managers),
         club_manager: state.club_manager.clone(),
         free_agents: state.free_agents.clone(),
+        pc_season_assists: state.pc_season_assists,
+        pc_career_assists: state.pc_career_assists,
     }
 }
 
@@ -630,6 +640,8 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.managers = decode_managers(&data.manager_blob);
     state.club_manager = data.club_manager.clone();
     state.free_agents = data.free_agents.clone();
+    state.pc_season_assists = data.pc_season_assists;
+    state.pc_career_assists = data.pc_career_assists;
 
     state
 }
@@ -753,6 +765,9 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     for &id in &d.free_agents {
         push_u32(&mut v, id);
     }
+    // v15+ — goal/assist split (BL5.1): two trailing u32s, pure tail-append.
+    push_u32(&mut v, d.pc_season_assists);
+    push_u32(&mut v, d.pc_career_assists);
     v
 }
 
@@ -945,6 +960,9 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     for _ in 0..free_agents_len {
         free_agents.push(read_u32(b, &mut cur).unwrap_or(0));
     }
+    // Goal/assist split (v15+; default 0 for older saves).
+    let pc_season_assists = read_u32(b, &mut cur).unwrap_or(0);
+    let pc_career_assists = read_u32(b, &mut cur).unwrap_or(0);
 
     Ok(SaveData {
         world_seed,
@@ -1016,6 +1034,8 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         manager_blob,
         club_manager,
         free_agents,
+        pc_season_assists,
+        pc_career_assists,
     })
 }
 

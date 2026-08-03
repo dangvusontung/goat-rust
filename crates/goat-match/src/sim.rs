@@ -232,6 +232,7 @@ impl BeatLibrary {
             },
             score_event: match raw.score_event.as_deref() {
                 Some("goal_for") => Some(ScoreEvent::GoalFor),
+                Some("assist_for") => Some(ScoreEvent::AssistFor),
                 Some("goal_against") => Some(ScoreEvent::GoalAgainst),
                 _ => None,
             },
@@ -520,7 +521,8 @@ pub fn advance_beat(
 
     if let Some(ev) = outcome.score_event {
         match ev {
-            ScoreEvent::GoalFor => ms.goals_for += 1,
+            // An assist is still a goal for the PC's team — a teammate finished it.
+            ScoreEvent::GoalFor | ScoreEvent::AssistFor => ms.goals_for += 1,
             ScoreEvent::GoalAgainst => ms.goals_against += 1,
         }
     }

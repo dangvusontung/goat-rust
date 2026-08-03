@@ -68,6 +68,7 @@ fn suspension_in_one_competition_does_not_block_availability_in_another() {
         Intent::ApplyRoundResult {
             competition_id: LEAGUE_COMPETITION_ID,
             pc_goals: 1,
+            pc_assists: 0,
             pc_output: 70,
             pc_result: 1,
             round_results: Vec::new(),
@@ -156,6 +157,7 @@ fn simultaneous_suspensions_in_two_competitions_decrement_independently() {
         Intent::ApplyRoundResult {
             competition_id: LEAGUE_COMPETITION_ID,
             pc_goals: 0,
+            pc_assists: 0,
             pc_output: 0,
             pc_result: 0,
             round_results: Vec::new(),
@@ -206,6 +208,7 @@ fn served_out_suspension_is_removed_from_the_ledger() {
         Intent::ApplyRoundResult {
             competition_id: LEAGUE_COMPETITION_ID,
             pc_goals: 0,
+            pc_assists: 0,
             pc_output: 0,
             pc_result: 0,
             round_results: Vec::new(),
