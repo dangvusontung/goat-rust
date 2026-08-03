@@ -49,7 +49,11 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// v15+: (BL5.1 goal/assist split) adds `pc_season_assists`/`pc_career_assists` as two
 /// trailing u32s — a pure tail-append, same idiom as v12/v13/v14; pre-15 saves default
 /// both to 0 via `.unwrap_or(0)` reads.
-pub const VERSION: u32 = 15;
+/// v16+: (BL5.2 decisive moments) adds `pc_season_decisive_moments` — the live season
+/// staging counter for `pc_decisive_moments` (which was already persisted). Persisted
+/// like every other `pc_season_*` staging field so a mid-season save/load doesn't lose
+/// it. Pure tail-append; pre-16 saves default it to 0.
+pub const VERSION: u32 = 16;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -162,6 +166,10 @@ pub struct SaveData {
     /// save/load doesn't lose it; folded into the career counter at season end.
     pub pc_season_assists: u32,
     pub pc_career_assists: u32,
+    // ── Decisive moments (v16+, BL5.2) ────────────────────────────────────────
+    /// Live season staging counter for `pc_decisive_moments` (already persisted
+    /// above); folded into the career counter at season end.
+    pub pc_season_decisive_moments: u32,
 }
 
 #[derive(Debug)]
@@ -280,6 +288,7 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         free_agents: state.free_agents.clone(),
         pc_season_assists: state.pc_season_assists,
         pc_career_assists: state.pc_career_assists,
+        pc_season_decisive_moments: state.pc_season_decisive_moments,
     }
 }
 
@@ -642,6 +651,7 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.free_agents = data.free_agents.clone();
     state.pc_season_assists = data.pc_season_assists;
     state.pc_career_assists = data.pc_career_assists;
+    state.pc_season_decisive_moments = data.pc_season_decisive_moments;
 
     state
 }
@@ -768,6 +778,8 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     // v15+ — goal/assist split (BL5.1): two trailing u32s, pure tail-append.
     push_u32(&mut v, d.pc_season_assists);
     push_u32(&mut v, d.pc_career_assists);
+    // v16+ — decisive moments (BL5.2): one trailing u32, pure tail-append.
+    push_u32(&mut v, d.pc_season_decisive_moments);
     v
 }
 
@@ -963,6 +975,8 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     // Goal/assist split (v15+; default 0 for older saves).
     let pc_season_assists = read_u32(b, &mut cur).unwrap_or(0);
     let pc_career_assists = read_u32(b, &mut cur).unwrap_or(0);
+    // Decisive moments (v16+; default 0 for older saves).
+    let pc_season_decisive_moments = read_u32(b, &mut cur).unwrap_or(0);
 
     Ok(SaveData {
         world_seed,
@@ -1036,6 +1050,7 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         free_agents,
         pc_season_assists,
         pc_career_assists,
+        pc_season_decisive_moments,
     })
 }
 

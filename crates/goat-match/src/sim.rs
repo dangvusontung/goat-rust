@@ -32,6 +32,10 @@ const FAM_MATCH_BONUS: Fixed = Fixed::raw(60);
 const ROLE_BIAS_FIT_PCT: i32 = 25;
 const ROLE_BIAS_AGAINST_PCT: i32 = -60;
 
+/// BL5.2 decisive-moment detection: only beats at or after this minute can count
+/// as decisive candidates (late-game window; placeholder cutoff, tune with data).
+pub const DECISIVE_MINUTE_CUTOFF: u32 = 80;
+
 // ── Beat library ──────────────────────────────────────────────────────────────
 
 /// Compiled, ready-to-use beat library loaded from the JSON data file.
@@ -392,6 +396,16 @@ pub struct MomentSummary {
     pub setup_text: String,
     pub outcome_text: String,
     pub goal_event: Option<ScoreEvent>,
+    /// Live score immediately BEFORE this beat's own outcome was applied (BL5.2) —
+    /// a beat that scores the tying goal is judged against the score it broke,
+    /// not the score it created.
+    pub goals_for_before: u32,
+    pub goals_against_before: u32,
+    /// The taken choice's success/failure branch score-events (BL5.2), regardless
+    /// of which branch actually fired — needed to know whether this beat was
+    /// stakes-bearing (could plausibly have ended in a goal either way).
+    pub success_event: Option<ScoreEvent>,
+    pub failure_event: Option<ScoreEvent>,
 }
 
 /// Final result of a completed match.
@@ -404,6 +418,37 @@ pub struct MatchResult {
     pub familiarity_xp: [Fixed; NUM_ROLES],
     pub yellow_cards: u8,
     pub red_card: bool,
+}
+
+/// BL5.2: is this moment a "decisive candidate"? Pure predicate over the recorded
+/// moment — no position bias by construction (replaces the rejected curated-`"key"`-tag
+/// approach, which skewed 6-attacking/1-defensive). All of:
+/// 1. The beat was stakes-bearing: the taken choice's success OR failure branch
+///    carries a `score_event` (a goal was plausibly on the line either way).
+/// 2. Late game: `minute >= DECISIVE_MINUTE_CUTOFF`.
+/// 3. Close score going in: |goals_for_before − goals_against_before| <= 1.
+/// 4. The outcome mattered: either the PC's side scored (GoalFor/AssistFor on a
+///    success), or a threatened concession was prevented (the failure branch
+///    carries GoalAgainst, but no GoalAgainst actually happened — whether a card
+///    was shown on the beat is deliberately irrelevant: the card roll is
+///    independent of and runs after contest resolution).
+pub fn is_decisive(m: &MomentSummary) -> bool {
+    let stakes_bearing = m.success_event.is_some() || m.failure_event.is_some();
+    if !stakes_bearing || m.minute < DECISIVE_MINUTE_CUTOFF {
+        return false;
+    }
+    let gap = m.goals_for_before as i32 - m.goals_against_before as i32;
+    if gap.abs() > 1 {
+        return false;
+    }
+    let scored = m.success
+        && matches!(
+            m.goal_event,
+            Some(ScoreEvent::GoalFor) | Some(ScoreEvent::AssistFor)
+        );
+    let stopped_threat = matches!(m.failure_event, Some(ScoreEvent::GoalAgainst))
+        && !matches!(m.goal_event, Some(ScoreEvent::GoalAgainst));
+    scored || stopped_threat
 }
 
 /// Live match state stored between `MakeMatchChoice` intents.
@@ -519,6 +564,11 @@ pub fn advance_beat(
     let stamina_cost = Fixed::from_int((BASE_STAMINA_COST + outcome.stamina_cost) as i32);
     ms.stamina = (ms.stamina - stamina_cost).clamp(Fixed::ZERO, STARTING_STAMINA);
 
+    // Capture the score BEFORE this beat's own event lands (BL5.2): a decisive
+    // moment is judged against the score it broke, not the score it created.
+    let goals_for_before = ms.goals_for;
+    let goals_against_before = ms.goals_against;
+
     if let Some(ev) = outcome.score_event {
         match ev {
             // An assist is still a goal for the PC's team — a teammate finished it.
@@ -537,6 +587,10 @@ pub fn advance_beat(
         setup_text: beat.setup.clone(),
         outcome_text: outcome.text.clone(),
         goal_event: outcome.score_event,
+        goals_for_before,
+        goals_against_before,
+        success_event: choice.success.score_event,
+        failure_event: choice.failure.score_event,
     });
 
     ms.headspace

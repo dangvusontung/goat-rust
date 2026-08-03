@@ -888,7 +888,9 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
     // Sim PC match.
     let pc_fixture =
         goat_world::fixture_for_round(world_seed, season, div_idx, &div_clubs, pc_club_id, round);
-    let (pc_goals, pc_assists, pc_output, pc_result, match_dto) = if let Some(f) = pc_fixture {
+    let (pc_goals, pc_assists, pc_decisive, pc_output, pc_result, match_dto) = if let Some(f) =
+        pc_fixture
+    {
         let is_home = f.home == pc_club_id;
         let opp_id = if is_home { f.away } else { f.home };
         let opp = &world.clubs[opp_id];
@@ -897,6 +899,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
         if is_suspended {
             let (gf, ga) = goat_world::sim_team_match(own_str, opp.strength, &mut match_rng);
             (
+                0,
                 0,
                 0,
                 0,
@@ -972,6 +975,11 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
                 .iter()
                 .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::AssistFor)))
                 .count() as u32;
+            let pc_decisive = result
+                .moments
+                .iter()
+                .filter(|m| goat_match::sim::is_decisive(m))
+                .count() as u32;
             let pc_result: i8 = if result.goals_for > result.goals_against {
                 1
             } else if result.goals_for < result.goals_against {
@@ -983,6 +991,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
             (
                 pc_goals,
                 pc_assists,
+                pc_decisive,
                 result.player_output,
                 pc_result,
                 MatchResultDto {
@@ -998,6 +1007,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
         }
     } else {
         (
+            0,
             0,
             0,
             0,
@@ -1073,6 +1083,8 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
             competition_id: LEAGUE_COMPETITION_ID,
             pc_goals,
             pc_assists,
+            pc_decisive_count: pc_decisive,
+            fixture_importance: goat_core::state::FixtureImportance::League,
             pc_output,
             pc_result,
             round_results,
@@ -1370,6 +1382,7 @@ pub fn apply_season_end() -> GoatGameState {
     let state = take_state();
     let season_goals = state.pc_season_goals;
     let season_assists = state.pc_season_assists;
+    let season_decisive = state.pc_season_decisive_moments;
     let season_matches = state.pc_season_matches;
     let season_output = state.pc_season_output;
     let season_standout_matches = state.pc_season_standout_matches;
@@ -1453,7 +1466,7 @@ pub fn apply_season_end() -> GoatGameState {
             won_title,
             player_of_year,
             finish_position: finish_pos,
-            decisive_moments: 0,
+            decisive_moments: season_decisive,
             new_sporting_rep: new_sporting,
             new_club_fan_rep: new_club_fan,
             season_standout_matches,
@@ -1754,6 +1767,12 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
             .iter()
             .filter(|m| matches!(m.goal_event, Some(ScoreEvent::AssistFor)))
             .count() as u32;
+        let pc_decisive = session
+            .state
+            .moments
+            .iter()
+            .filter(|m| goat_match::sim::is_decisive(m))
+            .count() as u32;
         let pc_output = session.state.player_output;
         let goals_for = session.state.goals_for;
         let goals_against = session.state.goals_against;
@@ -1873,6 +1892,8 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
                     competition_id: LEAGUE_COMPETITION_ID,
                     pc_goals,
                     pc_assists,
+                    pc_decisive_count: pc_decisive,
+                    fixture_importance: goat_core::state::FixtureImportance::League,
                     pc_output,
                     pc_result,
                     round_results,

@@ -198,88 +198,99 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
         let div_clubs = &world.leagues[div_idx].clubs;
 
         // Simulate PC's own match via the beat engine.
-        let (pc_goals, pc_assists, pc_output, match_result_goals) = if let Some(_fixture) =
-            fixture_for_round(seed, season, div_idx, div_clubs, pc_club_id, round)
-        {
-            let opp_club_id = {
-                let all = round_fixtures(seed, season, div_idx, div_clubs, round);
-                all.iter()
-                    .find(|f| f.home == pc_club_id || f.away == pc_club_id)
-                    .map(|f| if f.home == pc_club_id { f.away } else { f.home })
-                    .unwrap_or(0)
-            };
-            let opp = &world.clubs[opp_club_id];
-            let view = state.players.snapshot(pc_id);
-            let match_seed = seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
-            let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
-            let ref_personality = RefPersonality::from_rng(&mut rp_rng);
+        let (pc_goals, pc_assists, pc_decisive, pc_output, match_result_goals) =
+            if let Some(_fixture) =
+                fixture_for_round(seed, season, div_idx, div_clubs, pc_club_id, round)
+            {
+                let opp_club_id = {
+                    let all = round_fixtures(seed, season, div_idx, div_clubs, round);
+                    all.iter()
+                        .find(|f| f.home == pc_club_id || f.away == pc_club_id)
+                        .map(|f| if f.home == pc_club_id { f.away } else { f.home })
+                        .unwrap_or(0)
+                };
+                let opp = &world.clubs[opp_club_id];
+                let view = state.players.snapshot(pc_id);
+                let match_seed = seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
+                let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+                let ref_personality = RefPersonality::from_rng(&mut rp_rng);
 
-            let setup = MatchSetup {
-                player_role: role_for_position(position),
-                player_attrs: view.current,
-                player_familiarity: view.familiarity,
-                own_strength: world.clubs[pc_club_id].strength,
-                opp_strength: opp.strength,
-                opp_name: opp.name.clone(),
-                form: state.pc_form,
-                player_aggression: view.current[AttrId::Aggression as usize]
-                    .to_int()
-                    .clamp(1, 99) as u8,
-                ref_personality,
-                dirty_rep: state.pc_discipline_rep,
-                player_traits: PlayerTraits::default(),
-            };
+                let setup = MatchSetup {
+                    player_role: role_for_position(position),
+                    player_attrs: view.current,
+                    player_familiarity: view.familiarity,
+                    own_strength: world.clubs[pc_club_id].strength,
+                    opp_strength: opp.strength,
+                    opp_name: opp.name.clone(),
+                    form: state.pc_form,
+                    player_aggression: view.current[AttrId::Aggression as usize]
+                        .to_int()
+                        .clamp(1, 99) as u8,
+                    ref_personality,
+                    dirty_rep: state.pc_discipline_rep,
+                    player_traits: PlayerTraits::default(),
+                };
 
-            let result = auto_play_match(beat_lib, setup, &mut GoatRng::new(match_seed));
+                let result = auto_play_match(beat_lib, setup, &mut GoatRng::new(match_seed));
 
-            // Apply match effects.
-            state = reduce(
-                state,
-                Intent::ApplyMatchResult {
-                    familiarity_xp: result.familiarity_xp,
-                    energy_cost: Fixed::from_int(25),
-                    injury_weeks: None,
-                },
-                &mut GoatRng::new(0),
-            );
-            if result.yellow_cards > 0 || result.red_card {
+                // Apply match effects.
                 state = reduce(
                     state,
-                    Intent::ApplyCardResult {
-                        competition_id: LEAGUE_COMPETITION_ID,
-                        yellow_cards: result.yellow_cards as u32,
-                        red_card: result.red_card,
+                    Intent::ApplyMatchResult {
+                        familiarity_xp: result.familiarity_xp,
+                        energy_cost: Fixed::from_int(25),
+                        injury_weeks: None,
                     },
                     &mut GoatRng::new(0),
                 );
-            }
+                if result.yellow_cards > 0 || result.red_card {
+                    state = reduce(
+                        state,
+                        Intent::ApplyCardResult {
+                            competition_id: LEAGUE_COMPETITION_ID,
+                            yellow_cards: result.yellow_cards as u32,
+                            red_card: result.red_card,
+                        },
+                        &mut GoatRng::new(0),
+                    );
+                }
 
-            let goals = result
-                .moments
-                .iter()
-                .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::GoalFor)))
-                .count() as u32;
-            let assists = result
-                .moments
-                .iter()
-                .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::AssistFor)))
-                .count() as u32;
-            let result_int: i8 = if result.goals_for > result.goals_against {
-                1
-            } else if result.goals_for < result.goals_against {
-                -1
+                let goals = result
+                    .moments
+                    .iter()
+                    .filter(|m| {
+                        matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::GoalFor))
+                    })
+                    .count() as u32;
+                let assists = result
+                    .moments
+                    .iter()
+                    .filter(|m| {
+                        matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::AssistFor))
+                    })
+                    .count() as u32;
+                let decisive = result
+                    .moments
+                    .iter()
+                    .filter(|m| goat_match::sim::is_decisive(m))
+                    .count() as u32;
+                let result_int: i8 = if result.goals_for > result.goals_against {
+                    1
+                } else if result.goals_for < result.goals_against {
+                    -1
+                } else {
+                    0
+                };
+                (
+                    goals,
+                    assists,
+                    decisive,
+                    result.player_output,
+                    Some((result.goals_for, result.goals_against, result_int)),
+                )
             } else {
-                0
+                (0, 0, 0, 0, None)
             };
-            (
-                goals,
-                assists,
-                result.player_output,
-                Some((result.goals_for, result.goals_against, result_int)),
-            )
-        } else {
-            (0, 0, 0, None)
-        };
 
         // Sim all other rounds' matches.
         let all_fixtures = round_fixtures(seed, season, div_idx, div_clubs, round);
@@ -319,6 +330,8 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                 competition_id: LEAGUE_COMPETITION_ID,
                 pc_goals,
                 pc_assists,
+                pc_decisive_count: pc_decisive,
+                fixture_importance: goat_calendar::FixtureImportance::League,
                 pc_output,
                 pc_result,
                 round_results,
@@ -353,6 +366,7 @@ fn end_season(mut state: WorldState) -> WorldState {
 
     let s_goals = state.pc_season_goals;
     let s_assists = state.pc_season_assists;
+    let s_decisive = state.pc_season_decisive_moments;
     let s_matches = state.pc_season_matches;
     let s_output = state.pc_season_output;
     let s_standout_matches = state.pc_season_standout_matches;
@@ -369,7 +383,7 @@ fn end_season(mut state: WorldState) -> WorldState {
             won_title,
             player_of_year: season_avg > 75,
             finish_position: finish_pos,
-            decisive_moments: 0,
+            decisive_moments: s_decisive,
             new_sporting_rep: new_sporting,
             new_club_fan_rep: new_club_fan,
             season_standout_matches: s_standout_matches,
