@@ -521,3 +521,92 @@ fn save_overwrite_requires_explicit_confirmation() {
          then the Y-confirmed overwrite) — the N-declined attempt must not count:\n{stdout}"
     );
 }
+
+// ── Auto-advance training (TASK-AUTO-ADVANCE-TRAINING) ───────────────────────
+//
+// The [C] Continue default: auto-trains the current week via the exact [W]
+// path, then stops only for a decision — a due match, a noteworthy event, or
+// a flashpoint. Break weeks never surface in the loop at all: ApplyRoundResult
+// elapses them as rest weeks, so they need (and get) no keypress.
+
+/// Script prefix that actually reaches the in-game menu with the CURRENT world
+/// genesis: new game, blank name, ST, seed 42, first nation/division/club,
+/// start. (The older `new_game_*` helpers above predate the world-genesis
+/// scale-up's prompt order and no longer reach the menu — that pre-existing
+/// red baseline is not this task's scope.)
+fn new_game_reaching_menu() -> String {
+    "N\n\n1\n42\n1\n1\n1\nS\n".to_string()
+}
+
+#[test]
+fn continue_trains_week_and_offers_match_once_in_one_match_week() {
+    // [C] auto-trains the current week (age 0w -> 1w, no [W] keypress) and
+    // stops once to offer the due match; deferring returns to the menu with
+    // the round still unplayed.
+    let script = format!("{}C\nX\nQ\n", new_game_reaching_menu());
+    let stdout = run_scripted(&script).expect("process should exit cleanly");
+    assert!(
+        stdout.contains("Round 1/38 due this week"),
+        "[C] should stop once to offer the round-1 match:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Age 16y1w"),
+        "[C] should have auto-trained one week without a [W] keypress:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("due this week").count(),
+        1,
+        "a deferred match must not re-offer within the same [C]:\n{stdout}"
+    );
+}
+
+#[test]
+fn continue_two_match_week_stops_once_per_match() {
+    // Week 2 has 2 matches (rounds 2 and 3). [C] must stop for BOTH in
+    // sequence — no silent collapse — with no extra week ticked in between.
+    let script = format!("{}K\nC\nK\nC\nX\nQ\n", new_game_reaching_menu());
+    let stdout = run_scripted(&script).expect("process should exit cleanly");
+    assert!(
+        stdout.contains("Round 2/38 due this week"),
+        "first stop of the 2-match week (round 2):\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Round 3/38 due this week"),
+        "second stop of the 2-match week (round 3) — both matches must be offered:\n{stdout}"
+    );
+    // After skipping round 2 (mid double-fixture week), the second [C] offers
+    // round 3 WITHOUT ticking another week — age never passes 16y2w before the
+    // round-3 offer.
+    let offer_pos = stdout.find("Round 3/38 due this week").unwrap();
+    assert!(
+        !stdout[..offer_pos].contains("Age 16y3w"),
+        "no week may elapse between the two matches of the same week:\n{stdout}"
+    );
+}
+
+#[test]
+fn continue_break_week_elapses_without_a_keypress() {
+    // Rounds 1–5 skipped: Game Week 5 is a break week with no fixture. It must
+    // elapse on its own — the next [C] trains the NEXT match week exactly once
+    // and offers round 6; no round header ever reads Game Week 5.
+    let script = format!("{}K\nK\nK\nK\nK\nC\nX\nQ\n", new_game_reaching_menu());
+    let stdout = run_scripted(&script).expect("process should exit cleanly");
+    assert!(
+        stdout.contains("Round 6/38 due this week"),
+        "after the break, [C] should offer round 6:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("Game Week 4"),
+        "round 5 (the match right before the break) should have been played:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("Game Week 5"),
+        "the break week (Game Week 5) has no fixture — no header may reference it:\n{stdout}"
+    );
+    // Five skipped match weeks (round 3 shares its week with round 2, and the
+    // break week elapses as rest) + one auto-trained week after the break = 6w.
+    assert!(
+        stdout.contains("Age 16y6w"),
+        "the break week must elapse silently — 5 skipped rounds + 1 auto-train = 6 weeks:\n{stdout}"
+    );
+}
