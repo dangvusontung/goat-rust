@@ -331,6 +331,7 @@ fn apply_season_end_legacy(
         s,
         Intent::ApplySeasonEndLegacy {
             season_goals: 0,
+            season_assists: 0,
             season_matches: 0,
             season_output_sum: 0,
             won_title: false,
@@ -387,6 +388,7 @@ fn season_end_legacy_folds_national_tournament_wins() {
             s,
             Intent::ApplySeasonEndLegacy {
                 season_goals: 0,
+                season_assists: 0,
                 season_matches: 0,
                 season_output_sum: 0,
                 won_title: false,
@@ -469,6 +471,7 @@ fn round_result_counts_standout_matches_at_threshold() {
             Intent::ApplyRoundResult {
                 competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
                 pc_goals: 0,
+                pc_assists: 0,
                 pc_output,
                 pc_result: 0,
                 round_results: Vec::new(),
@@ -507,6 +510,7 @@ fn start_season_resets_standout_and_transfer_request_counters() {
         Intent::ApplyRoundResult {
             competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
             pc_goals: 0,
+            pc_assists: 0,
             pc_output: 100,
             pc_result: 0,
             round_results: Vec::new(),

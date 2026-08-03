@@ -800,6 +800,7 @@ fn run_next_round(
             Intent::ApplyRoundResult {
                 competition_id: LEAGUE_COMPETITION_ID,
                 pc_goals: 0,
+                pc_assists: 0,
                 pc_output: 0,
                 pc_result: 0,
                 round_results,
@@ -847,7 +848,7 @@ fn run_next_round(
     // Find PC's fixture this round.
     let pc_fixture = fixture_for_round(world_seed, season, div_idx, &div_clubs, pc_club_id, round);
 
-    let (pc_goals, pc_output, pc_result, match_result_opt) = match pc_fixture {
+    let (pc_goals, pc_assists, pc_output, pc_result, match_result_opt) = match pc_fixture {
         Some(f) => {
             let is_home = f.home == pc_club_id;
             let opp_id = if is_home { f.away } else { f.home };
@@ -920,6 +921,11 @@ fn run_next_round(
                 .iter()
                 .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
                 .count() as u32;
+            let pc_assists = result
+                .moments
+                .iter()
+                .filter(|m| matches!(m.goal_event, Some(ScoreEvent::AssistFor)))
+                .count() as u32;
             let pc_result: i8 = if result.goals_for > result.goals_against {
                 1
             } else if result.goals_for < result.goals_against {
@@ -955,9 +961,15 @@ fn run_next_round(
                 state.pc_discipline_rep = (state.pc_discipline_rep - 1).max(0);
             }
 
-            (pc_goals, result.player_output, pc_result, Some(result))
+            (
+                pc_goals,
+                pc_assists,
+                result.player_output,
+                pc_result,
+                Some(result),
+            )
         }
-        None => (0, 0, 0i8, None),
+        None => (0, 0, 0, 0i8, None),
     };
 
     // Simulate all other matches in this round.
@@ -1018,6 +1030,7 @@ fn run_next_round(
         Intent::ApplyRoundResult {
             competition_id: LEAGUE_COMPETITION_ID,
             pc_goals,
+            pc_assists,
             pc_output,
             pc_result,
             round_results,
@@ -2097,9 +2110,10 @@ fn render_season_review(
     .unwrap();
     writeln!(
         out,
-        "║  Your season: {} matches  {} goals  Output avg: {}",
+        "║  Your season: {} matches  {} goals  {} assists  Output avg: {}",
         state.pc_season_matches,
         state.pc_season_goals,
+        state.pc_season_assists,
         if state.pc_season_matches > 0 {
             state.pc_season_output / state.pc_season_matches as i32
         } else {
@@ -2313,6 +2327,7 @@ fn run_awards_and_pundits(
 
     // Capture before moving state into reduce.
     let s_goals = state.pc_season_goals;
+    let s_assists = state.pc_season_assists;
     let s_matches = state.pc_season_matches;
     let s_output = state.pc_season_output;
     let s_standout_matches = state.pc_season_standout_matches;
@@ -2327,6 +2342,7 @@ fn run_awards_and_pundits(
         state,
         Intent::ApplySeasonEndLegacy {
             season_goals: s_goals,
+            season_assists: s_assists,
             season_matches: s_matches,
             season_output_sum: s_output,
             won_title,
@@ -3350,6 +3366,7 @@ fn render_match_result(out: &mut impl Write, result: &MatchResult, opp: &str) {
     {
         let icon = match m.goal_event {
             Some(ScoreEvent::GoalFor) => "⚽",
+            Some(ScoreEvent::AssistFor) => "🅰",
             Some(ScoreEvent::GoalAgainst) => "❌",
             None => {
                 if m.success {

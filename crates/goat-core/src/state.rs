@@ -50,6 +50,8 @@ pub struct WorldState {
     pub pc_form: Fixed,
     /// Goals scored by the PC in the current season.
     pub pc_season_goals: u32,
+    /// Assists made by the PC in the current season (BL5.1 goal/assist split).
+    pub pc_season_assists: u32,
     /// Matches played by PC this season.
     pub pc_season_matches: u32,
     /// Cumulative output across PC's matches this season.
@@ -99,6 +101,9 @@ pub struct WorldState {
     pub pc_discipline_rep: i32,
     // ── Phase 7 legacy evidence ───────────────────────────────────────────────
     pub pc_career_goals: u32,
+    /// Career assists (BL5.1). Deliberately NOT fed into Legacy scoring yet —
+    /// assist weighting is a parked design question (future hook).
+    pub pc_career_assists: u32,
     pub pc_career_matches: u32,
     pub pc_career_output_sum: i64,
     pub pc_best_season_avg_output: i32,
@@ -277,6 +282,7 @@ impl WorldState {
             season_round: 0,
             pc_form: Fixed::from_int(50),
             pc_season_goals: 0,
+            pc_season_assists: 0,
             pc_season_matches: 0,
             pc_season_output: 0,
             table_raw: [0u32; 100],
@@ -289,6 +295,7 @@ impl WorldState {
             pc_suspensions: Vec::new(),
             pc_discipline_rep: 50,
             pc_career_goals: 0,
+            pc_career_assists: 0,
             pc_career_matches: 0,
             pc_career_output_sum: 0,
             pc_best_season_avg_output: 0,
@@ -439,6 +446,9 @@ pub enum Intent {
     /// Called once per season (by the TUI) after the season summary is computed.
     ApplySeasonEndLegacy {
         season_goals: u32,
+        /// PC's assists this season (BL5.1) — folded into `pc_career_assists`
+        /// exactly like `season_goals` folds into `pc_career_goals`.
+        season_assists: u32,
         season_matches: u32,
         /// Sum of all match output scores this season.
         season_output_sum: i32,
@@ -590,6 +600,8 @@ pub enum Intent {
         competition_id: goat_calendar::CompetitionId,
         /// PC's goals this round (0 if they didn't play or skipped).
         pc_goals: u32,
+        /// PC's assists this round (0 if they didn't play or skipped) — BL5.1.
+        pc_assists: u32,
         /// PC output this round (0 if didn't play).
         pc_output: i32,
         /// Did the PC's team win/draw/lose?  (1/0/-1)
@@ -736,6 +748,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
 
         Intent::ApplySeasonEndLegacy {
             season_goals,
+            season_assists,
             season_matches,
             season_output_sum,
             won_title,
@@ -752,6 +765,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             season_continental_championships_won,
         } => {
             state.pc_career_goals += season_goals;
+            state.pc_career_assists += season_assists;
             state.pc_career_matches += season_matches;
             state.pc_career_output_sum += season_output_sum as i64;
             state.pc_career_standout_matches += season_standout_matches;
@@ -1052,6 +1066,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.season_number += 1;
             state.season_round = 0;
             state.pc_season_goals = 0;
+            state.pc_season_assists = 0;
             state.pc_season_matches = 0;
             state.pc_season_output = 0;
             state.pc_season_standout_matches = 0;
@@ -1101,6 +1116,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
         Intent::ApplyRoundResult {
             competition_id,
             pc_goals,
+            pc_assists,
             pc_output,
             pc_result,
             round_results,
@@ -1136,6 +1152,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
 
             // Update PC season stats.
             state.pc_season_goals += pc_goals;
+            state.pc_season_assists += pc_assists;
             state.pc_season_output += pc_output;
             if pc_output > 0 {
                 state.pc_season_matches += 1;
@@ -1559,5 +1576,71 @@ mod tests {
             "a continental-championship win must not also bump the World Cup counter"
         );
         assert_eq!(s.pc_season_continental_championships_won, 1);
+    }
+
+    /// BL5.1 goal/assist split: assists accrue per round into the live season counter,
+    /// fold into the career counter at `ApplySeasonEndLegacy`, and reset at
+    /// `StartSeason` — mirroring `pc_season_goals`/`pc_career_goals` exactly.
+    #[test]
+    fn assists_accrue_fold_and_reset_like_goals() {
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        let s = reduce(
+            s,
+            Intent::ApplyRoundResult {
+                competition_id: crate::calendar_loop::LEAGUE_COMPETITION_ID,
+                pc_goals: 2,
+                pc_assists: 1,
+                pc_output: 70,
+                pc_result: 1,
+                round_results: Vec::new(),
+                rest_weeks: 0,
+                week_ends: true,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_season_goals, 2);
+        assert_eq!(s.pc_season_assists, 1);
+        assert_eq!(
+            s.pc_career_assists, 0,
+            "the career counter only folds at season end"
+        );
+
+        let s_goals = s.pc_season_goals;
+        let s_assists = s.pc_season_assists;
+        let s_matches = s.pc_season_matches;
+        let s_output = s.pc_season_output;
+        let s = reduce(
+            s,
+            Intent::ApplySeasonEndLegacy {
+                season_goals: s_goals,
+                season_assists: s_assists,
+                season_matches: s_matches,
+                season_output_sum: s_output,
+                won_title: false,
+                player_of_year: false,
+                finish_position: 10,
+                decisive_moments: 0,
+                new_sporting_rep: 50,
+                new_club_fan_rep: 50,
+                season_standout_matches: 0,
+                season_transfer_requests: 0,
+                season_caps: 0,
+                season_international_goals: 0,
+                season_world_cups_won: 0,
+                season_continental_championships_won: 0,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_career_goals, 2);
+        assert_eq!(s.pc_career_assists, 1);
+
+        let s = reduce(s, Intent::StartSeason { fixtures: vec![] }, &mut make_rng());
+        assert_eq!(s.pc_season_goals, 0);
+        assert_eq!(
+            s.pc_season_assists, 0,
+            "season counter resets at StartSeason"
+        );
+        assert_eq!(s.pc_career_assists, 1, "career counter survives the reset");
     }
 }

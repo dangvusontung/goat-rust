@@ -198,7 +198,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
         let div_clubs = &world.leagues[div_idx].clubs;
 
         // Simulate PC's own match via the beat engine.
-        let (pc_goals, pc_output, match_result_goals) = if let Some(_fixture) =
+        let (pc_goals, pc_assists, pc_output, match_result_goals) = if let Some(_fixture) =
             fixture_for_round(seed, season, div_idx, div_clubs, pc_club_id, round)
         {
             let opp_club_id = {
@@ -259,6 +259,11 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                 .iter()
                 .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::GoalFor)))
                 .count() as u32;
+            let assists = result
+                .moments
+                .iter()
+                .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::AssistFor)))
+                .count() as u32;
             let result_int: i8 = if result.goals_for > result.goals_against {
                 1
             } else if result.goals_for < result.goals_against {
@@ -268,11 +273,12 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
             };
             (
                 goals,
+                assists,
                 result.player_output,
                 Some((result.goals_for, result.goals_against, result_int)),
             )
         } else {
-            (0, 0, None)
+            (0, 0, 0, None)
         };
 
         // Sim all other rounds' matches.
@@ -312,6 +318,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
             Intent::ApplyRoundResult {
                 competition_id: LEAGUE_COMPETITION_ID,
                 pc_goals,
+                pc_assists,
                 pc_output,
                 pc_result,
                 round_results,
@@ -345,6 +352,7 @@ fn end_season(mut state: WorldState) -> WorldState {
     let new_club_fan = (state.pc_club_fan_rep + 1).min(100);
 
     let s_goals = state.pc_season_goals;
+    let s_assists = state.pc_season_assists;
     let s_matches = state.pc_season_matches;
     let s_output = state.pc_season_output;
     let s_standout_matches = state.pc_season_standout_matches;
@@ -355,6 +363,7 @@ fn end_season(mut state: WorldState) -> WorldState {
         state,
         Intent::ApplySeasonEndLegacy {
             season_goals: s_goals,
+            season_assists: s_assists,
             season_matches: s_matches,
             season_output_sum: s_output,
             won_title,

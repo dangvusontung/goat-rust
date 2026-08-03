@@ -9,6 +9,9 @@ use goat_fixed::Fixed;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LegacyEvidence {
     pub career_goals: u32,
+    // BL5.1: `pc_career_assists` exists on WorldState but is deliberately NOT fed in
+    // here — Legacy stays goals-only until the assist-weighting design question is
+    // asked. Future hook: add `career_assists` and let a later axis pass weight it.
     pub career_matches: u32,
     /// Sum of per-match output scores (0–100 each).
     pub career_output_sum: i64,
