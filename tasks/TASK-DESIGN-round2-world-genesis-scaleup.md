@@ -272,6 +272,17 @@ shifts each *real* country's generated clubs, instead of a *fictional* one's. Ac
 has **not** been updated to match yet — this is a real-country name list swap-in, tracked as
 follow-up implementation work, not done by this doc edit alone.
 
+**Implemented 2026-08-04:** the swap-in landed. `world.rs` now builds nations from the
+static `names::NATIONS` table (20 real countries, fixed order), and club names come from
+per-country offline-authored word banks (`crates/goat-world/src/names.rs`) picked by PRNG
+at genesis — nation-flavored by construction, no runtime LLM. Same pass also fixed a latent
+name-collapse bug: xorshift's first output is correlated across sequentially-related club
+seeds, which had collapsed club-name diversity to 2-3 repeated names per league; names are
+now picked via an avalanche hash (`splitmix64` finalizer) of the club seed with per-nation
+dedupe retry. Stature/tactical-identity mechanisms are unchanged (though the nation RNG
+stream position shifted, so all per-seed stature values rerolled — no test asserted the old
+ones).
+
 `Nation` (`world.rs:12-32`) goes from a 2-variant enum to a generated `Vec<GeneratedNation>` (or
 similar), each with:
 - A generated name (same word-bank-and-seed approach as A1.2, a new fictional-country word

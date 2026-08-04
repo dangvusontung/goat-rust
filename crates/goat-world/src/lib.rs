@@ -14,6 +14,7 @@ pub mod economy;
 pub mod fixtures;
 pub mod history;
 pub mod manager;
+pub mod names;
 pub mod national_tournament;
 pub mod population;
 pub mod promotion;
