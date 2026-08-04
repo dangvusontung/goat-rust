@@ -451,6 +451,31 @@ pub fn is_decisive(m: &MomentSummary) -> bool {
     scored || stopped_threat
 }
 
+/// BL5.3: is this decisive moment also CLUTCH — the high-leverage subset that
+/// actually moved the needle (so the clutch index isn't a duplicate of the
+/// decisive count)?
+/// - Scored (GoalFor/AssistFor) while level or trailing going in: an equalizer
+///   or go-ahead goal. An insurance goal while already ahead (gap_before = +1)
+///   stays decisive but is NOT clutch.
+/// - A threatened concession prevented: always clutch — any late stop in a
+///   one-goal game keeps points/hope alive.
+pub fn is_clutch(m: &MomentSummary) -> bool {
+    if !is_decisive(m) {
+        return false;
+    }
+    let scored = m.success
+        && matches!(
+            m.goal_event,
+            Some(ScoreEvent::GoalFor) | Some(ScoreEvent::AssistFor)
+        );
+    if scored {
+        let gap = m.goals_for_before as i32 - m.goals_against_before as i32;
+        gap <= 0
+    } else {
+        true
+    }
+}
+
 /// Live match state stored between `MakeMatchChoice` intents.
 #[derive(Debug, Clone)]
 pub struct ActiveMatchState {

@@ -198,7 +198,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
         let div_clubs = &world.leagues[div_idx].clubs;
 
         // Simulate PC's own match via the beat engine.
-        let (pc_goals, pc_assists, pc_decisive, pc_output, match_result_goals) =
+        let (pc_goals, pc_assists, pc_decisive, pc_clutch, pc_output, match_result_goals) =
             if let Some(_fixture) =
                 fixture_for_round(seed, season, div_idx, div_clubs, pc_club_id, round)
             {
@@ -274,6 +274,11 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                     .iter()
                     .filter(|m| goat_match::sim::is_decisive(m))
                     .count() as u32;
+                let clutch = result
+                    .moments
+                    .iter()
+                    .filter(|m| goat_match::sim::is_clutch(m))
+                    .count() as u32;
                 let result_int: i8 = if result.goals_for > result.goals_against {
                     1
                 } else if result.goals_for < result.goals_against {
@@ -285,11 +290,12 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                     goals,
                     assists,
                     decisive,
+                    clutch,
                     result.player_output,
                     Some((result.goals_for, result.goals_against, result_int)),
                 )
             } else {
-                (0, 0, 0, 0, None)
+                (0, 0, 0, 0, 0, None)
             };
 
         // Sim all other rounds' matches.
@@ -331,6 +337,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                 pc_goals,
                 pc_assists,
                 pc_decisive_count: pc_decisive,
+                pc_clutch_count: pc_clutch,
                 fixture_importance: goat_calendar::FixtureImportance::League,
                 pc_output,
                 pc_result,
@@ -367,6 +374,7 @@ fn end_season(mut state: WorldState) -> WorldState {
     let s_goals = state.pc_season_goals;
     let s_assists = state.pc_season_assists;
     let s_decisive = state.pc_season_decisive_moments;
+    let s_clutch = state.pc_season_clutch_index;
     let s_matches = state.pc_season_matches;
     let s_output = state.pc_season_output;
     let s_standout_matches = state.pc_season_standout_matches;
@@ -384,6 +392,7 @@ fn end_season(mut state: WorldState) -> WorldState {
             player_of_year: season_avg > 75,
             finish_position: finish_pos,
             decisive_moments: s_decisive,
+            season_clutch_index: s_clutch,
             new_sporting_rep: new_sporting,
             new_club_fan_rep: new_club_fan,
             season_standout_matches: s_standout_matches,

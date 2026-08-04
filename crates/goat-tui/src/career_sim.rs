@@ -357,9 +357,14 @@ fn main() {
             .iter()
             .filter(|m| goat_match::sim::is_decisive(m))
             .count();
+        let player_clutch = r
+            .moments
+            .iter()
+            .filter(|m| goat_match::sim::is_clutch(m))
+            .count();
         println!("  {}", "─".repeat(52));
         println!(
-            "  FULL TIME  {}-{}  {res}   |   your rating {}   goals {player_goals}   assists {player_assists}   decisive {player_decisive}   cards {cards}",
+            "  FULL TIME  {}-{}  {res}   |   your rating {}   goals {player_goals}   assists {player_assists}   decisive {player_decisive}   clutch {player_clutch}   cards {cards}",
             r.goals_for, r.goals_against, r.player_output
         );
         return;
@@ -502,6 +507,11 @@ fn main() {
                 .iter()
                 .filter(|m| goat_match::sim::is_decisive(m))
                 .count() as u32;
+            let clutch = r
+                .moments
+                .iter()
+                .filter(|m| goat_match::sim::is_clutch(m))
+                .count() as u32;
             let (gf, ga) = (r.goals_for, r.goals_against);
             let res_int: i8 = match gf.cmp(&ga) {
                 std::cmp::Ordering::Greater => 1,
@@ -549,6 +559,7 @@ fn main() {
                     pc_goals: goals,
                     pc_assists: assists,
                     pc_decisive_count: decisive,
+                    pc_clutch_count: clutch,
                     fixture_importance: goat_calendar::FixtureImportance::League,
                     pc_output: r.player_output,
                     pc_result: res_int,
@@ -598,8 +609,9 @@ fn main() {
         println!("  {}", "─".repeat(52));
         println!("\n  SEASON SUMMARY");
         println!(
-            "  Played {played}  W{w} D{d} L{l}  |  Goals {tot_goals}  Assists {tot_assists}  Decisive {}  |  League position {pos}/{}",
+            "  Played {played}  W{w} D{d} L{l}  |  Goals {tot_goals}  Assists {tot_assists}  Decisive {}  Clutch {}  |  League position {pos}/{}",
             state.pc_season_decisive_moments,
+            state.pc_season_clutch_index,
             div_clubs.len()
         );
         println!("  Output: avg {avg}  min {min_o}  max {max_o}   Cards: {yel}Y {red}R");
@@ -1113,6 +1125,7 @@ fn main() {
                     pc_assists: 0,
                     // Same for decisive moments — no moments to detect them from.
                     pc_decisive_count: 0,
+                    pc_clutch_count: 0,
                     fixture_importance: goat_calendar::FixtureImportance::League,
                     pc_output,
                     pc_result,
@@ -1165,6 +1178,7 @@ fn main() {
         let s_goals = state.pc_season_goals;
         let s_assists = state.pc_season_assists;
         let s_decisive = state.pc_season_decisive_moments;
+        let s_clutch = state.pc_season_clutch_index;
         let s_matches = state.pc_season_matches;
         let s_standout_matches = state.pc_season_standout_matches;
         let s_transfer_requests = state.pc_season_transfer_requests;
@@ -1180,6 +1194,7 @@ fn main() {
                 player_of_year: season_avg > 75,
                 finish_position: table_pos as u32,
                 decisive_moments: s_decisive,
+                season_clutch_index: s_clutch,
                 new_sporting_rep,
                 new_club_fan_rep,
                 season_standout_matches: s_standout_matches,

@@ -29,8 +29,8 @@ use goat_match::{
     beats::ScoreEvent,
     discipline::RefPersonality,
     sim::{
-        advance_beat, auto_play_match, is_decisive, start_match, ActiveMatchState, BeatLibrary,
-        MatchResult, MatchSetup,
+        advance_beat, auto_play_match, is_clutch, is_decisive, start_match, ActiveMatchState,
+        BeatLibrary, MatchResult, MatchSetup,
     },
 };
 use goat_meta::{
@@ -879,6 +879,7 @@ fn run_next_round(
                 pc_goals: 0,
                 pc_assists: 0,
                 pc_decisive_count: 0,
+                pc_clutch_count: 0,
                 fixture_importance: goat_calendar::FixtureImportance::League,
                 pc_output: 0,
                 pc_result: 0,
@@ -927,7 +928,7 @@ fn run_next_round(
     // Find PC's fixture this round.
     let pc_fixture = fixture_for_round(world_seed, season, div_idx, &div_clubs, pc_club_id, round);
 
-    let (pc_goals, pc_assists, pc_decisive, pc_output, pc_result, match_result_opt) =
+    let (pc_goals, pc_assists, pc_decisive, pc_clutch, pc_output, pc_result, match_result_opt) =
         match pc_fixture {
             Some(f) => {
                 let is_home = f.home == pc_club_id;
@@ -1007,6 +1008,7 @@ fn run_next_round(
                     .filter(|m| matches!(m.goal_event, Some(ScoreEvent::AssistFor)))
                     .count() as u32;
                 let pc_decisive = result.moments.iter().filter(|m| is_decisive(m)).count() as u32;
+                let pc_clutch = result.moments.iter().filter(|m| is_clutch(m)).count() as u32;
                 let pc_result: i8 = if result.goals_for > result.goals_against {
                     1
                 } else if result.goals_for < result.goals_against {
@@ -1046,12 +1048,13 @@ fn run_next_round(
                     pc_goals,
                     pc_assists,
                     pc_decisive,
+                    pc_clutch,
                     result.player_output,
                     pc_result,
                     Some(result),
                 )
             }
-            None => (0, 0, 0, 0, 0i8, None),
+            None => (0, 0, 0, 0, 0, 0i8, None),
         };
 
     // Simulate all other matches in this round.
@@ -1123,6 +1126,7 @@ fn run_next_round(
             pc_goals,
             pc_assists,
             pc_decisive_count: pc_decisive,
+            pc_clutch_count: pc_clutch,
             fixture_importance,
             pc_output,
             pc_result,
@@ -2430,6 +2434,7 @@ fn run_awards_and_pundits(
     let s_world_cups_won = state.pc_season_world_cups_won;
     let s_continental_championships_won = state.pc_season_continental_championships_won;
     let s_decisive_moments = state.pc_season_decisive_moments;
+    let s_clutch_index = state.pc_season_clutch_index;
 
     // Update legacy evidence via intent.
     state = reduce(
@@ -2443,6 +2448,7 @@ fn run_awards_and_pundits(
             player_of_year: player_of_year_won,
             finish_position: finish_pos,
             decisive_moments: s_decisive_moments,
+            season_clutch_index: s_clutch_index,
             new_sporting_rep: new_sporting,
             new_club_fan_rep: new_club_fan,
             season_standout_matches: s_standout_matches,
