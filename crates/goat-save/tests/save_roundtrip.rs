@@ -517,8 +517,9 @@ fn old_v11_save_without_club_budgets_defaults_to_empty() {
     // academy_boosts's empty-list 4-byte length prefix, followed by v14's manager section:
     // manager_blob's own 4-byte byte-length prefix + its empty-pool 4-byte inner manager
     // count, then club_manager's and free_agents' empty-list 4-byte length prefixes,
-    // then v15's two assist u32s (BL5.1) and v16's decisive-moments u32 (BL5.2).
-    let v11_len = bytes.len() - (4 + 3 * 8) - 4 - (4 + 4 + 4 + 4) - 2 * 4 - 4;
+    // then v15's two assist u32s (BL5.1), v16's decisive-moments u32 (BL5.2), and
+    // v17's two clutch-index u32s (BL5.3).
+    let v11_len = bytes.len() - (4 + 3 * 8) - 4 - (4 + 4 + 4 + 4) - 2 * 4 - 4 - 2 * 4;
     bytes.truncate(v11_len);
 
     let v11_path = std::env::temp_dir().join(format!(
@@ -594,8 +595,8 @@ fn old_v12_save_without_academy_boosts_defaults_to_empty() {
     // v14's manager section: manager_blob's own 4-byte byte-length prefix + its empty-pool
     // 4-byte inner manager count, then club_manager's and free_agents' empty-list 4-byte
     // length prefixes, then v15's two assist u32s (BL5.1) and v16's decisive-moments
-    // u32 (BL5.2).
-    let v12_len = bytes.len() - (4 + 3) - (4 + 4 + 4 + 4) - 2 * 4 - 4;
+    // u32 (BL5.2), and v17's two clutch-index u32s (BL5.3).
+    let v12_len = bytes.len() - (4 + 3) - (4 + 4 + 4 + 4) - 2 * 4 - 4 - 2 * 4;
     bytes.truncate(v12_len);
 
     let v12_path = std::env::temp_dir().join(format!(
@@ -664,9 +665,9 @@ fn old_v13_save_without_managers_defaults_to_empty() {
     // Trailing encoding: manager_blob's own 4-byte byte-length prefix + its 1-manager
     // content, then club_manager's 4-byte count + 1 entry (4 bytes), then free_agents'
     // empty-list 4-byte length prefix, then v15's two assist u32s (BL5.1) and v16's
-    // decisive-moments u32 (BL5.2).
+    // decisive-moments u32 (BL5.2), and v17's two clutch-index u32s (BL5.3).
     let manager_blob_len = data.manager_blob.len();
-    let v13_len = bytes.len() - (4 + manager_blob_len) - (4 + 4) - 4 - 2 * 4 - 4;
+    let v13_len = bytes.len() - (4 + manager_blob_len) - (4 + 4) - 4 - 2 * 4 - 4 - 2 * 4;
     bytes.truncate(v13_len);
 
     let v13_path = std::env::temp_dir().join(format!(
@@ -846,7 +847,7 @@ fn old_v14_save_without_assists_defaults_to_zero() {
 
     // Trailing encoding: pc_season_assists + pc_career_assists (2 × 4-byte u32),
     // then v16's pc_season_decisive_moments (4-byte u32).
-    let v14_len = bytes.len() - 2 * 4 - 4;
+    let v14_len = bytes.len() - 2 * 4 - 4 - 2 * 4;
     bytes.truncate(v14_len);
 
     let v14_path = std::env::temp_dir().join(format!(
@@ -907,8 +908,9 @@ fn old_v15_save_without_decisive_moments_defaults_to_zero() {
     let mut bytes = std::fs::read(&full_path).unwrap();
     std::fs::remove_file(&full_path).ok();
 
-    // Trailing encoding: pc_season_decisive_moments (1 × 4-byte u32).
-    let v15_len = bytes.len() - 4;
+    // Trailing encoding: pc_season_decisive_moments (1 × 4-byte u32), then v17's
+    // two clutch-index u32s (BL5.3).
+    let v15_len = bytes.len() - 4 - 2 * 4;
     bytes.truncate(v15_len);
 
     let v15_path = std::env::temp_dir().join(format!(
@@ -923,4 +925,67 @@ fn old_v15_save_without_decisive_moments_defaults_to_zero() {
 
     let restored = to_world_state(&loaded, &test_world());
     assert_eq!(restored.pc_season_decisive_moments, 0);
+}
+
+// ── Clutch index (BL5.3, v17) ────────────────────────────────────────────────
+
+#[test]
+fn save_load_restores_clutch_index_through_bytes() {
+    // v17+: both clutch counters must survive a full byte round-trip, same idiom
+    // as the assists/decisive counters.
+    let mut state = setup_state();
+    state.pc_season_clutch_index = 6;
+    state.pc_career_clutch_index = 24;
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join(format!(
+        "goat_save_clutch_roundtrip_{}.gsav",
+        std::process::id()
+    ));
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap(), &test_world());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(restored.pc_season_clutch_index, 6);
+    assert_eq!(restored.pc_career_clutch_index, 24);
+}
+
+#[test]
+fn old_v16_save_without_clutch_index_defaults_to_zero() {
+    // A real v16 binary never wrote the two trailing v17 u32s (8 bytes). Simulate
+    // that by truncating them off a real v17 buffer — exercises the actual
+    // `.unwrap_or(0)` backward-compat reads (same idiom as the tests above).
+    let mut state = setup_state();
+    state.pc_season_clutch_index = 3;
+    state.pc_career_clutch_index = 17;
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let full_path =
+        std::env::temp_dir().join(format!("goat_save_v17_full_{}.gsav", std::process::id()));
+    save_to_file(&data, &full_path).unwrap();
+    let mut bytes = std::fs::read(&full_path).unwrap();
+    std::fs::remove_file(&full_path).ok();
+
+    // Trailing encoding: pc_season_clutch_index + pc_career_clutch_index (2 × 4-byte).
+    let v16_len = bytes.len() - 2 * 4;
+    bytes.truncate(v16_len);
+
+    let v16_path = std::env::temp_dir().join(format!(
+        "goat_save_v16_truncated_{}.gsav",
+        std::process::id()
+    ));
+    std::fs::write(&v16_path, &bytes).unwrap();
+    let loaded = load_from_file(&v16_path).unwrap();
+    std::fs::remove_file(&v16_path).ok();
+
+    assert_eq!(loaded.pc_season_clutch_index, 0);
+    assert_eq!(loaded.pc_career_clutch_index, 0);
+
+    let restored = to_world_state(&loaded, &test_world());
+    assert_eq!(restored.pc_season_clutch_index, 0);
+    assert_eq!(restored.pc_career_clutch_index, 0);
 }

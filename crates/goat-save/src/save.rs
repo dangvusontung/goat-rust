@@ -53,7 +53,10 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// staging counter for `pc_decisive_moments` (which was already persisted). Persisted
 /// like every other `pc_season_*` staging field so a mid-season save/load doesn't lose
 /// it. Pure tail-append; pre-16 saves default it to 0.
-pub const VERSION: u32 = 16;
+/// v17+: (BL5.3 clutch index) adds `pc_season_clutch_index`/`pc_career_clutch_index`
+/// as two trailing u32s — a pure tail-append, same idiom as v15/v16; pre-17 saves
+/// default both to 0.
+pub const VERSION: u32 = 17;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -170,6 +173,11 @@ pub struct SaveData {
     /// Live season staging counter for `pc_decisive_moments` (already persisted
     /// above); folded into the career counter at season end.
     pub pc_season_decisive_moments: u32,
+    // ── Clutch index (v17+, BL5.3) ────────────────────────────────────────────
+    /// Live season staging counter, persisted like every other `pc_season_*`
+    /// staging field; folded into the career index at season end.
+    pub pc_season_clutch_index: u32,
+    pub pc_career_clutch_index: u32,
 }
 
 #[derive(Debug)]
@@ -289,6 +297,8 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_season_assists: state.pc_season_assists,
         pc_career_assists: state.pc_career_assists,
         pc_season_decisive_moments: state.pc_season_decisive_moments,
+        pc_season_clutch_index: state.pc_season_clutch_index,
+        pc_career_clutch_index: state.pc_career_clutch_index,
     }
 }
 
@@ -652,6 +662,8 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.pc_season_assists = data.pc_season_assists;
     state.pc_career_assists = data.pc_career_assists;
     state.pc_season_decisive_moments = data.pc_season_decisive_moments;
+    state.pc_season_clutch_index = data.pc_season_clutch_index;
+    state.pc_career_clutch_index = data.pc_career_clutch_index;
 
     state
 }
@@ -780,6 +792,9 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     push_u32(&mut v, d.pc_career_assists);
     // v16+ — decisive moments (BL5.2): one trailing u32, pure tail-append.
     push_u32(&mut v, d.pc_season_decisive_moments);
+    // v17+ — clutch index (BL5.3): two trailing u32s, pure tail-append.
+    push_u32(&mut v, d.pc_season_clutch_index);
+    push_u32(&mut v, d.pc_career_clutch_index);
     v
 }
 
@@ -977,6 +992,9 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     let pc_career_assists = read_u32(b, &mut cur).unwrap_or(0);
     // Decisive moments (v16+; default 0 for older saves).
     let pc_season_decisive_moments = read_u32(b, &mut cur).unwrap_or(0);
+    // Clutch index (v17+; default 0 for older saves).
+    let pc_season_clutch_index = read_u32(b, &mut cur).unwrap_or(0);
+    let pc_career_clutch_index = read_u32(b, &mut cur).unwrap_or(0);
 
     Ok(SaveData {
         world_seed,
@@ -1051,6 +1069,8 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_season_assists,
         pc_career_assists,
         pc_season_decisive_moments,
+        pc_season_clutch_index,
+        pc_career_clutch_index,
     })
 }
 

@@ -888,17 +888,136 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
     // Sim PC match.
     let pc_fixture =
         goat_world::fixture_for_round(world_seed, season, div_idx, &div_clubs, pc_club_id, round);
-    let (pc_goals, pc_assists, pc_decisive, pc_output, pc_result, match_dto) = if let Some(f) =
-        pc_fixture
-    {
-        let is_home = f.home == pc_club_id;
-        let opp_id = if is_home { f.away } else { f.home };
-        let opp = &world.clubs[opp_id];
-        let own_str = world.clubs[pc_club_id].strength;
+    let (pc_goals, pc_assists, pc_decisive, pc_clutch, pc_output, pc_result, match_dto) =
+        if let Some(f) = pc_fixture {
+            let is_home = f.home == pc_club_id;
+            let opp_id = if is_home { f.away } else { f.home };
+            let opp = &world.clubs[opp_id];
+            let own_str = world.clubs[pc_club_id].strength;
 
-        if is_suspended {
-            let (gf, ga) = goat_world::sim_team_match(own_str, opp.strength, &mut match_rng);
+            if is_suspended {
+                let (gf, ga) = goat_world::sim_team_match(own_str, opp.strength, &mut match_rng);
+                (
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0i8,
+                    MatchResultDto {
+                        player_output: 0,
+                        goals_for: gf,
+                        goals_against: ga,
+                        rating_label: "SUSPENDED".to_string(),
+                        moments: Vec::new(),
+                        yellow_cards: 0,
+                        red_card: false,
+                    },
+                )
+            } else {
+                let pc_id = state.pc_player_id.unwrap_or(0);
+                let view = state.players.snapshot(pc_id);
+
+                let ref_personality = {
+                    let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+                    RefPersonality::from_rng(&mut rp_rng)
+                };
+
+                let setup = MatchSetup {
+                    player_role: match_role_for_position(state.pc_position),
+                    player_attrs: view.current,
+                    player_familiarity: view.familiarity,
+                    own_strength: own_str,
+                    opp_strength: opp.strength,
+                    opp_name: opp.name.clone(),
+                    form: state.pc_form,
+                    player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+                        .to_int()
+                        .clamp(1, 99) as u8,
+                    ref_personality,
+                    dirty_rep: state.pc_discipline_rep,
+                    player_traits: PlayerTraits::default(),
+                };
+
+                let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
+
+                let stars = "★".repeat((result.player_output / 20 + 1).clamp(1, 5) as usize)
+                    + &"☆".repeat(5 - (result.player_output / 20 + 1).clamp(1, 5) as usize);
+                let moments: Vec<String> = result
+                    .moments
+                    .iter()
+                    .filter(|m| m.goal_event.is_some() || m.success)
+                    .take(5)
+                    .map(|m| {
+                        let icon = match m.goal_event {
+                            Some(goat_match::beats::ScoreEvent::GoalFor) => "⚽",
+                            Some(goat_match::beats::ScoreEvent::AssistFor) => "🅰",
+                            Some(goat_match::beats::ScoreEvent::GoalAgainst) => "❌",
+                            None => {
+                                if m.success {
+                                    "✓"
+                                } else {
+                                    "✗"
+                                }
+                            }
+                        };
+                        format!("{icon} {}'  {}", m.minute, m.outcome_text)
+                    })
+                    .collect();
+
+                let pc_goals = result
+                    .moments
+                    .iter()
+                    .filter(|m| {
+                        matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::GoalFor))
+                    })
+                    .count() as u32;
+                let pc_assists = result
+                    .moments
+                    .iter()
+                    .filter(|m| {
+                        matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::AssistFor))
+                    })
+                    .count() as u32;
+                let pc_decisive = result
+                    .moments
+                    .iter()
+                    .filter(|m| goat_match::sim::is_decisive(m))
+                    .count() as u32;
+                let pc_clutch = result
+                    .moments
+                    .iter()
+                    .filter(|m| goat_match::sim::is_clutch(m))
+                    .count() as u32;
+                let pc_result: i8 = if result.goals_for > result.goals_against {
+                    1
+                } else if result.goals_for < result.goals_against {
+                    -1
+                } else {
+                    0
+                };
+
+                (
+                    pc_goals,
+                    pc_assists,
+                    pc_decisive,
+                    pc_clutch,
+                    result.player_output,
+                    pc_result,
+                    MatchResultDto {
+                        player_output: result.player_output,
+                        goals_for: result.goals_for,
+                        goals_against: result.goals_against,
+                        rating_label: stars,
+                        moments,
+                        yellow_cards: result.yellow_cards as u32,
+                        red_card: result.red_card,
+                    },
+                )
+            }
+        } else {
             (
+                0,
                 0,
                 0,
                 0,
@@ -906,123 +1025,15 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
                 0i8,
                 MatchResultDto {
                     player_output: 0,
-                    goals_for: gf,
-                    goals_against: ga,
-                    rating_label: "SUSPENDED".to_string(),
+                    goals_for: 0,
+                    goals_against: 0,
+                    rating_label: String::new(),
                     moments: Vec::new(),
                     yellow_cards: 0,
                     red_card: false,
                 },
             )
-        } else {
-            let pc_id = state.pc_player_id.unwrap_or(0);
-            let view = state.players.snapshot(pc_id);
-
-            let ref_personality = {
-                let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
-                RefPersonality::from_rng(&mut rp_rng)
-            };
-
-            let setup = MatchSetup {
-                player_role: match_role_for_position(state.pc_position),
-                player_attrs: view.current,
-                player_familiarity: view.familiarity,
-                own_strength: own_str,
-                opp_strength: opp.strength,
-                opp_name: opp.name.clone(),
-                form: state.pc_form,
-                player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
-                    .to_int()
-                    .clamp(1, 99) as u8,
-                ref_personality,
-                dirty_rep: state.pc_discipline_rep,
-                player_traits: PlayerTraits::default(),
-            };
-
-            let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
-
-            let stars = "★".repeat((result.player_output / 20 + 1).clamp(1, 5) as usize)
-                + &"☆".repeat(5 - (result.player_output / 20 + 1).clamp(1, 5) as usize);
-            let moments: Vec<String> = result
-                .moments
-                .iter()
-                .filter(|m| m.goal_event.is_some() || m.success)
-                .take(5)
-                .map(|m| {
-                    let icon = match m.goal_event {
-                        Some(goat_match::beats::ScoreEvent::GoalFor) => "⚽",
-                        Some(goat_match::beats::ScoreEvent::AssistFor) => "🅰",
-                        Some(goat_match::beats::ScoreEvent::GoalAgainst) => "❌",
-                        None => {
-                            if m.success {
-                                "✓"
-                            } else {
-                                "✗"
-                            }
-                        }
-                    };
-                    format!("{icon} {}'  {}", m.minute, m.outcome_text)
-                })
-                .collect();
-
-            let pc_goals = result
-                .moments
-                .iter()
-                .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::GoalFor)))
-                .count() as u32;
-            let pc_assists = result
-                .moments
-                .iter()
-                .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::AssistFor)))
-                .count() as u32;
-            let pc_decisive = result
-                .moments
-                .iter()
-                .filter(|m| goat_match::sim::is_decisive(m))
-                .count() as u32;
-            let pc_result: i8 = if result.goals_for > result.goals_against {
-                1
-            } else if result.goals_for < result.goals_against {
-                -1
-            } else {
-                0
-            };
-
-            (
-                pc_goals,
-                pc_assists,
-                pc_decisive,
-                result.player_output,
-                pc_result,
-                MatchResultDto {
-                    player_output: result.player_output,
-                    goals_for: result.goals_for,
-                    goals_against: result.goals_against,
-                    rating_label: stars,
-                    moments,
-                    yellow_cards: result.yellow_cards as u32,
-                    red_card: result.red_card,
-                },
-            )
-        }
-    } else {
-        (
-            0,
-            0,
-            0,
-            0,
-            0i8,
-            MatchResultDto {
-                player_output: 0,
-                goals_for: 0,
-                goals_against: 0,
-                rating_label: String::new(),
-                moments: Vec::new(),
-                yellow_cards: 0,
-                red_card: false,
-            },
-        )
-    };
+        };
 
     // Sim all round fixtures.
     let all_fixtures = goat_world::round_fixtures(world_seed, season, div_idx, &div_clubs, round);
@@ -1084,6 +1095,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
             pc_goals,
             pc_assists,
             pc_decisive_count: pc_decisive,
+            pc_clutch_count: pc_clutch,
             fixture_importance: goat_core::state::FixtureImportance::League,
             pc_output,
             pc_result,
@@ -1383,6 +1395,7 @@ pub fn apply_season_end() -> GoatGameState {
     let season_goals = state.pc_season_goals;
     let season_assists = state.pc_season_assists;
     let season_decisive = state.pc_season_decisive_moments;
+    let season_clutch = state.pc_season_clutch_index;
     let season_matches = state.pc_season_matches;
     let season_output = state.pc_season_output;
     let season_standout_matches = state.pc_season_standout_matches;
@@ -1467,6 +1480,7 @@ pub fn apply_season_end() -> GoatGameState {
             player_of_year,
             finish_position: finish_pos,
             decisive_moments: season_decisive,
+            season_clutch_index: season_clutch,
             new_sporting_rep: new_sporting,
             new_club_fan_rep: new_club_fan,
             season_standout_matches,
@@ -1773,6 +1787,12 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
             .iter()
             .filter(|m| goat_match::sim::is_decisive(m))
             .count() as u32;
+        let pc_clutch = session
+            .state
+            .moments
+            .iter()
+            .filter(|m| goat_match::sim::is_clutch(m))
+            .count() as u32;
         let pc_output = session.state.player_output;
         let goals_for = session.state.goals_for;
         let goals_against = session.state.goals_against;
@@ -1893,6 +1913,7 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
                     pc_goals,
                     pc_assists,
                     pc_decisive_count: pc_decisive,
+                    pc_clutch_count: pc_clutch,
                     fixture_importance: goat_core::state::FixtureImportance::League,
                     pc_output,
                     pc_result,

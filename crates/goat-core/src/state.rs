@@ -118,6 +118,14 @@ pub struct WorldState {
     /// `pc_decisive_moments` only at ApplySeasonEndLegacy's `decisive_moments`
     /// param (mirrors pc_season_goals -> pc_career_goals).
     pub pc_season_decisive_moments: u32,
+    /// Career clutch index (BL5.3): the high-leverage subset of decisive
+    /// moments (equalizers, go-ahead goals, late game-saving stops), weighted
+    /// by the same importance×result formula. Deliberately NOT fed into
+    /// Legacy scoring yet — future hook, same idiom as career assists.
+    pub pc_career_clutch_index: u32,
+    /// This season's clutch index, live — folded into `pc_career_clutch_index`
+    /// only at ApplySeasonEndLegacy's `season_clutch_index` param.
+    pub pc_season_clutch_index: u32,
     pub pc_player_of_year_wins: u32,
     pub pc_league_titles: u32,
     pub pc_clubs_served: u32,
@@ -311,6 +319,8 @@ impl WorldState {
             pc_seasons_played: 0,
             pc_decisive_moments: 0,
             pc_season_decisive_moments: 0,
+            pc_career_clutch_index: 0,
+            pc_season_clutch_index: 0,
             pc_player_of_year_wins: 0,
             pc_league_titles: 0,
             pc_clubs_served: 1,
@@ -468,6 +478,9 @@ pub enum Intent {
         finish_position: u32,
         /// Decisive moments scored this season (e.g. winning goals in must-win games).
         decisive_moments: u32,
+        /// Clutch index accrued this season (BL5.3) — the high-leverage subset of
+        /// `decisive_moments`, folded into `pc_career_clutch_index` the same way.
+        season_clutch_index: u32,
         new_sporting_rep: i32,
         new_club_fan_rep: i32,
         /// Standout matches (pc_output >= STANDOUT_OUTPUT_THRESHOLD) played this season.
@@ -616,6 +629,10 @@ pub enum Intent {
         /// renderer from the match's moments via `goat_match::sim::is_decisive`.
         /// Weighted below by `fixture_importance` and `pc_result`.
         pc_decisive_count: u32,
+        /// PC's clutch moments this round (BL5.3) — the high-leverage subset of
+        /// the decisive count, via `goat_match::sim::is_clutch`. Weighted by the
+        /// exact same formula below.
+        pc_clutch_count: u32,
         /// Static importance rung of this round's fixture (BL5.2) — which
         /// `DECISIVE_IMPORTANCE_X10` coefficient the count is weighted by.
         fixture_importance: goat_calendar::FixtureImportance,
@@ -772,6 +789,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             player_of_year,
             finish_position: _finish_position,
             decisive_moments,
+            season_clutch_index,
             new_sporting_rep,
             new_club_fan_rep,
             season_standout_matches,
@@ -807,6 +825,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 state.pc_player_of_year_wins += 1;
             }
             state.pc_decisive_moments += decisive_moments;
+            state.pc_career_clutch_index += season_clutch_index;
             state.pc_seasons_played += 1;
             // Update best season avg output.
             let season_avg = if season_matches > 0 {
@@ -1088,6 +1107,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_season_output = 0;
             state.pc_season_standout_matches = 0;
             state.pc_season_decisive_moments = 0;
+            state.pc_season_clutch_index = 0;
             state.pc_season_transfer_requests = 0;
             state.pc_season_caps = 0;
             state.pc_season_international_goals = 0;
@@ -1136,6 +1156,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             pc_goals,
             pc_assists,
             pc_decisive_count,
+            pc_clutch_count,
             fixture_importance,
             pc_output,
             pc_result,
@@ -1174,9 +1195,10 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_season_goals += pc_goals;
             state.pc_season_assists += pc_assists;
             state.pc_season_output += pc_output;
-            // BL5.2 decisive moments: the raw candidate count is weighted by the
-            // fixture's static importance rung and the match result, then rounded
-            // half-up into the whole-moment accumulator:
+            // BL5.2 decisive moments / BL5.3 clutch index: each raw count is
+            // weighted by the fixture's (tension-adjusted) importance rung and
+            // the match result, then rounded half-up into the whole-moment
+            // accumulator — one shared formula for both counters:
             //   contribution = (count × importance_x10 × result_x10 + 50) / 100
             let result_x10 = match pc_result {
                 1 => crate::tuning::DECISIVE_RESULT_WIN_X10,
@@ -1184,8 +1206,9 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 _ => crate::tuning::DECISIVE_RESULT_LOSS_X10,
             };
             let importance_x10 = decisive_effective_importance_x10(&state, fixture_importance);
-            state.pc_season_decisive_moments +=
-                (pc_decisive_count * importance_x10 * result_x10 + 50) / 100;
+            let contribution = |count: u32| (count * importance_x10 * result_x10 + 50) / 100;
+            state.pc_season_decisive_moments += contribution(pc_decisive_count);
+            state.pc_season_clutch_index += contribution(pc_clutch_count);
             if pc_output > 0 {
                 state.pc_season_matches += 1;
             }
@@ -1668,6 +1691,7 @@ mod tests {
                 pc_goals: 2,
                 pc_assists: 1,
                 pc_decisive_count: 0,
+                pc_clutch_count: 0,
                 fixture_importance: goat_calendar::FixtureImportance::League,
                 pc_output: 70,
                 pc_result: 1,
@@ -1699,6 +1723,7 @@ mod tests {
                 player_of_year: false,
                 finish_position: 10,
                 decisive_moments: 0,
+                season_clutch_index: 0,
                 new_sporting_rep: 50,
                 new_club_fan_rep: 50,
                 season_standout_matches: 0,
@@ -1734,6 +1759,7 @@ mod tests {
                 pc_goals: 0,
                 pc_assists: 0,
                 pc_decisive_count,
+                pc_clutch_count: 0,
                 fixture_importance,
                 pc_output: 60,
                 pc_result,
@@ -1777,6 +1803,7 @@ mod tests {
                 player_of_year: false,
                 finish_position: 10,
                 decisive_moments: s_decisive,
+                season_clutch_index: 0,
                 new_sporting_rep: 50,
                 new_club_fan_rep: 50,
                 season_standout_matches: 0,
@@ -1832,6 +1859,7 @@ mod tests {
                     pc_goals: 0,
                     pc_assists: 0,
                     pc_decisive_count: 2,
+                    pc_clutch_count: 0,
                     fixture_importance: importance,
                     pc_output: 60,
                     pc_result,
@@ -1897,5 +1925,80 @@ mod tests {
         s.table_raw = table_with(40);
         let s = play_round(s, FI::Derby, 1);
         assert_eq!(s.pc_season_decisive_moments, 2, "dead derby keeps its rung");
+    }
+
+    /// BL5.3: the clutch counter uses the exact same importance×result weighting
+    /// as the decisive counter (one shared formula), accrues live, folds at
+    /// season end, and resets at StartSeason.
+    #[test]
+    fn clutch_index_shares_weighting_and_folds_like_decisive() {
+        use goat_calendar::FixtureImportance as FI;
+        let round = |pc_clutch_count, pc_result| -> Intent {
+            Intent::ApplyRoundResult {
+                competition_id: crate::calendar_loop::LEAGUE_COMPETITION_ID,
+                pc_goals: 0,
+                pc_assists: 0,
+                pc_decisive_count: 0,
+                pc_clutch_count,
+                fixture_importance: FI::League,
+                pc_output: 60,
+                pc_result,
+                round_results: Vec::new(),
+                rest_weeks: 0,
+                week_ends: true,
+            }
+        };
+
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+
+        // Win, League (×10 ×10): (1×10×10 + 50)/100 = 1.
+        let s = reduce(s, round(1, 1), &mut make_rng());
+        assert_eq!(s.pc_season_clutch_index, 1);
+        // Draw, League (×10 ×5): (1×10×5 + 50)/100 = 1 — 0.5 rounds half-up.
+        let s = reduce(s, round(1, 0), &mut make_rng());
+        assert_eq!(s.pc_season_clutch_index, 2);
+        // Loss zeroes the contribution regardless of count.
+        let s = reduce(s, round(5, -1), &mut make_rng());
+        assert_eq!(s.pc_season_clutch_index, 2);
+        // Decisive counter untouched by clutch-only input (and vice versa).
+        assert_eq!(s.pc_season_decisive_moments, 0);
+        assert_eq!(
+            s.pc_career_clutch_index, 0,
+            "career index only folds at season end"
+        );
+
+        let s_clutch = s.pc_season_clutch_index;
+        let s = reduce(
+            s,
+            Intent::ApplySeasonEndLegacy {
+                season_goals: 0,
+                season_assists: 0,
+                season_matches: 3,
+                season_output_sum: 180,
+                won_title: false,
+                player_of_year: false,
+                finish_position: 10,
+                decisive_moments: 0,
+                season_clutch_index: s_clutch,
+                new_sporting_rep: 50,
+                new_club_fan_rep: 50,
+                season_standout_matches: 0,
+                season_transfer_requests: 0,
+                season_caps: 0,
+                season_international_goals: 0,
+                season_world_cups_won: 0,
+                season_continental_championships_won: 0,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_career_clutch_index, 2);
+
+        let s = reduce(s, Intent::StartSeason { fixtures: vec![] }, &mut make_rng());
+        assert_eq!(s.pc_season_clutch_index, 0);
+        assert_eq!(
+            s.pc_career_clutch_index, 2,
+            "career index survives the reset"
+        );
     }
 }
