@@ -124,96 +124,55 @@ pub const NUM_CLUBS: usize = NUM_DIVISIONS * CLUBS_PER_DIV; // 1,200
 /// Promotion/relegation cut size (top-N up, bottom-N down) — Design's recommended N=3.
 pub const PROMO_RELEGATION_N: usize = 3;
 
-// ── Word banks (hand-authored fictional fragments; no real place/club names) ────
+// ── Club naming (offline-authored static banks, `crate::names`) ─────────────────
+//
+// Nations are REAL countries (Tùng 2026-07-23, superseding the fictional-nation
+// call); clubs stay fictional, picked deterministically from each country's own
+// word banks — nation-flavored by construction (England gets English-register
+// names, Brazil Brazilian-register, ...), not a randomly-assigned style.
 
-/// Fictional country-name fragments, combined prefix+suffix — a large hand-authored bank
-/// (per A2.2's recommendation) rather than a syllable-combinator, to avoid repetitive
-/// invented names at 20-nation scale.
-const NATION_PREFIX: [&str; 24] = [
-    "Vestra", "Kordo", "Ambar", "Solen", "Thurin", "Mirova", "Casta", "Nordar", "Velen", "Ostro",
-    "Brenna", "Ithor", "Marveld", "Corvan", "Sundal", "Perano", "Adrasi", "Wintra", "Golveth",
-    "Halmar", "Rosvik", "Tamora", "Delvan", "Estria",
-];
-const NATION_SUFFIX: [&str; 20] = [
-    "via", "land", "stan", "aro", "mark", "gard", "sia", "burg", "nesia", "vale", "dor", "wick",
-    "moor", "heim", "rica", "thia", "ford", "wen", "grad", "ain",
-];
+/// SplitMix64 finalizer — one-shot avalanche hash for direct bank indexing.
+/// Name picks hash the club's seed directly instead of drawing from a sequential
+/// xorshift stream: xorshift's FIRST output is strongly correlated across
+/// sequentially-related seeds, which previously collapsed club-name diversity to
+/// a handful of repeated names per league (the "every club in the division reads
+/// the same 2-3 names" bug).
+fn avalanche(mut x: u64) -> u64 {
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^ (x >> 31)
+}
 
-/// Fictional place-name stems for club naming, English-flavored register (Style A) —
-/// combined with `CLUB_SUFFIX_A` (e.g. "Ashford United").
-const CITY_STEM: [&str; 24] = [
-    "Ashford",
-    "Brackwell",
-    "Solmoor",
-    "Kingsmere",
-    "Redcliffe",
-    "Hallowgate",
-    "Wynstead",
-    "Marlow",
-    "Thornbury",
-    "Oakhaven",
-    "Cresthill",
-    "Fenwick",
-    "Draymoor",
-    "Hartfield",
-    "Ellsworth",
-    "Stonebridge",
-    "Greymarsh",
-    "Ravensdale",
-    "Wintershaw",
-    "Foxleigh",
-    "Braemoor",
-    "Duskvale",
-    "Aldermere",
-    "Wrenford",
-];
-const CLUB_SUFFIX_A: [&str; 8] = [
-    "United",
-    "Athletic",
-    "Rovers",
-    "Town",
-    "City",
-    "Wanderers",
-    "Albion",
-    "Rangers",
-];
+fn pick<'a>(bank: &'a [&'static str], key: u64) -> &'a str {
+    bank[(avalanche(key) % bank.len() as u64) as usize]
+}
 
-/// Single-word invented club identities, South-American-flavored register (Style B) — mirrors
-/// how the old hardcoded data used single-word Brazilian club names (Flamengo, Corinthians).
-const CLUB_WORD_B: [&str; 32] = [
-    "Volcanza",
-    "Marejada",
-    "Estrelar",
-    "Cruzeta",
-    "Fluvente",
-    "Andaria",
-    "Pampero",
-    "Litorena",
-    "Tropicó",
-    "Cordillar",
-    "Solaço",
-    "Barranca",
-    "Vermelhas",
-    "Selvana",
-    "Riacho",
-    "Tucanaço",
-    "Cerraço",
-    "Guaranti",
-    "Aurinegro",
-    "Costeira",
-    "Manguera",
-    "Pantana",
-    "Sertana",
-    "Bravante",
-    "Corrente",
-    "Marisco",
-    "Delfina",
-    "Ipanera",
-    "Tijuqua",
-    "Sambara",
-    "Coralina",
-    "Litorio",
-];
+/// Deterministic club name for `club_id` under `spec`'s naming recipe, unique
+/// within the nation's 60 clubs: affixes and stem are avalanche-picked, retried
+/// with a bumped attempt counter on collision (every nation's bank offers ≥ 72
+/// combinations against 60 draws, so the retry converges well inside the guard).
+fn generate_club_name(
+    world_seed: u64,
+    club_id: usize,
+    spec: &crate::names::NationSpec,
+    taken: &std::collections::BTreeSet<String>,
+) -> String {
+    let key = club_seed(world_seed, club_id);
+    for attempt in 0..64u64 {
+        let wobble = attempt.wrapping_mul(0x9E37_79B9);
+        let prefix = pick(spec.prefixes, key ^ 0xF10A ^ wobble);
+        let stem = pick(spec.stems, key ^ 0xF20B ^ wobble);
+        let suffix = pick(spec.suffixes, key ^ 0xF30C ^ wobble);
+        let name = format!("{prefix}{stem}{suffix}");
+        if !taken.contains(&name) {
+            return name;
+        }
+    }
+    // Unreachable by construction (≥72 combos vs 60 draws); deterministic fallback.
+    format!("{}Athletic XI", spec.stems[club_id % spec.stems.len()])
+}
 
 pub(crate) fn seed_mix(world_seed: u64, salt: u64, idx: u64) -> u64 {
     world_seed
@@ -227,31 +186,6 @@ fn nation_seed(world_seed: u64, n: usize) -> u64 {
 
 fn club_seed(world_seed: u64, c: usize) -> u64 {
     seed_mix(world_seed, 0xB2, c as u64)
-}
-
-/// Style A (English-flavored "Stem + Suffix") vs Style B (South-American-flavored single
-/// invented word) — chosen once per nation from its own seed, giving the world a mix of
-/// naming registers rather than one homogenized bank (preserves the "this reads as a
-/// distinct footballing culture" flavor the old hardcoded England/Brazil split had).
-fn nation_naming_style(world_seed: u64, nation_id: NationId) -> u8 {
-    let mut rng = GoatRng::new(seed_mix(world_seed, 0xC3, nation_id as u64));
-    rng.next_range_u32(0, 1) as u8
-}
-
-fn generate_nation_name(rng: &mut impl RngSource) -> String {
-    let p = NATION_PREFIX[rng.next_range_u32(0, NATION_PREFIX.len() as u32 - 1) as usize];
-    let s = NATION_SUFFIX[rng.next_range_u32(0, NATION_SUFFIX.len() as u32 - 1) as usize];
-    format!("{p}{s}")
-}
-
-fn generate_club_name(rng: &mut impl RngSource, style: u8) -> String {
-    if style == 0 {
-        let stem = CITY_STEM[rng.next_range_u32(0, CITY_STEM.len() as u32 - 1) as usize];
-        let suf = CLUB_SUFFIX_A[rng.next_range_u32(0, CLUB_SUFFIX_A.len() as u32 - 1) as usize];
-        format!("{stem} {suf}")
-    } else {
-        CLUB_WORD_B[rng.next_range_u32(0, CLUB_WORD_B.len() as u32 - 1) as usize].to_string()
-    }
 }
 
 fn league_name(nation_name: &str, tier: DivLevel) -> String {
@@ -279,25 +213,14 @@ impl WorldGenesis {
     pub fn generate(world_seed: u64) -> Self {
         let mut nations = Vec::with_capacity(NUM_NATIONS);
         for n in 0..NUM_NATIONS {
+            let spec = &crate::names::NATIONS[n];
             let mut rng = GoatRng::new(nation_seed(world_seed, n));
-            // Retry-on-collision keeps the 20 nation names distinct (cheap: 24×20 = 480
-            // possible combinations against only 20 draws).
-            let mut name = generate_nation_name(&mut rng);
-            let mut guard = 0;
-            while nations
-                .iter()
-                .any(|existing: &GeneratedNation| existing.name == name)
-                && guard < 32
-            {
-                name = generate_nation_name(&mut rng);
-                guard += 1;
-            }
             let stature = rng.next_range_u32(25, 95) as u8;
             let tactical_identity =
                 TacticalIdentity::generate(seed_mix(world_seed, 0xD4, n as u64));
             nations.push(GeneratedNation {
                 id: n,
-                name,
+                name: spec.name.to_string(),
                 stature,
                 tactical_identity,
             });
@@ -307,7 +230,9 @@ impl WorldGenesis {
         let mut clubs = Vec::with_capacity(NUM_CLUBS);
 
         for nation in &nations {
-            let style = nation_naming_style(world_seed, nation.id);
+            let spec = &crate::names::NATIONS[nation.id];
+            // Club names are unique within the nation (across all 3 tiers).
+            let mut taken = std::collections::BTreeSet::new();
             for (tier_idx, &tier) in DivLevel::ALL.iter().enumerate() {
                 let league_id = leagues.len();
                 let mut league_clubs = Vec::with_capacity(CLUBS_PER_DIV);
@@ -319,7 +244,8 @@ impl WorldGenesis {
                 for rank in 0..CLUBS_PER_DIV {
                     let club_id = clubs.len();
                     let mut rng = GoatRng::new(club_seed(world_seed, club_id));
-                    let name = generate_club_name(&mut rng, style);
+                    let name = generate_club_name(world_seed, club_id, spec, &taken);
+                    taken.insert(name.clone());
                     let rank_decay = (rank as i32 * 2) / 3;
                     let noise = rng.next_range_u32(0, 10) as i32 - 5;
                     let strength = (tier_base - rank_decay + noise).clamp(1, 99) as u8;
@@ -522,6 +448,79 @@ mod tests {
             for &cid in &league.clubs {
                 assert_eq!(w.club_league(cid), league.id);
             }
+        }
+    }
+
+    /// A2.2 (superseded 2026-07-23): nations are real countries from the static
+    /// `names::NATIONS` table, in fixed order — not seed-generated fiction.
+    #[test]
+    fn nations_are_the_real_country_table() {
+        let w = WorldGenesis::generate(42);
+        assert_eq!(w.nations.len(), crate::names::NATIONS.len());
+        for (nation, spec) in w.nations.iter().zip(crate::names::NATIONS.iter()) {
+            assert_eq!(nation.name, spec.name);
+        }
+    }
+
+    /// Club names are unique within each nation's 60 clubs (dedupe retry works),
+    /// and the avalanche pick restores real per-league diversity (regression test
+    /// for the xorshift first-draw correlation bug that collapsed a whole division
+    /// to 2-3 repeated names).
+    #[test]
+    fn club_names_unique_within_nation_and_diverse_within_league() {
+        for seed in [7u64, 42, 1234] {
+            let w = WorldGenesis::generate(seed);
+            for league in &w.leagues {
+                let mut names: Vec<&str> = league
+                    .clubs
+                    .iter()
+                    .map(|&c| w.clubs[c].name.as_str())
+                    .collect();
+                let total = names.len();
+                names.sort_unstable();
+                names.dedup();
+                assert_eq!(
+                    names.len(),
+                    total,
+                    "league {} ({}) has duplicate club names",
+                    league.id,
+                    league.name
+                );
+            }
+        }
+    }
+
+    /// Different countries read in different naming registers (nation-flavored):
+    /// England's clubs carry English suffixes, Brazil's never do.
+    #[test]
+    fn club_naming_is_nation_flavored() {
+        let w = WorldGenesis::generate(42);
+        let england = &w.nations[0];
+        assert_eq!(england.name, "England");
+        let english_suffixes = [
+            " United",
+            " City",
+            " Town",
+            " Rovers",
+            " Athletic",
+            " Wanderers",
+            " Albion",
+        ];
+        for club in w.clubs_for_nation(england.id) {
+            assert!(
+                english_suffixes.iter().any(|s| club.name.ends_with(s)),
+                "English club with non-English-register name: {}",
+                club.name
+            );
+        }
+        let brazil = &w.nations[5];
+        assert_eq!(brazil.name, "Brazil");
+        for club in w.clubs_for_nation(brazil.id) {
+            assert!(
+                !english_suffixes.iter().any(|s| club.name.ends_with(s)),
+                "Brazilian club with English-register name: {}",
+                club.name
+            );
         }
     }
 }
