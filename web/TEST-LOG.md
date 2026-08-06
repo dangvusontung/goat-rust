@@ -187,3 +187,22 @@ PASS  table survives roundtrip
 
 SMOKE OK
 ```
+
+---
+
+## Routine + fast-forward port (added 2026-08-07)
+
+goat-web gains get_attrs / set_routine (max 4 focus attrs + intensity, ports TUI [S]) and advance_weeks(n) (ports TUI [F]: auto-applies the standing routine per week, accumulates events+flashpoints, returns them at the end; defers with a guidance message during pre-season). Snapshot gains routine_text. UI: routine picker (multi-select + intensity) and an 'Advance N weeks' input+button.
+
+### Node smoke (real output excerpts)
+```
+PASS  advance_weeks defers during pre-season
+PASS  get_attrs returns 30 attributes
+PASS  routine set with 4-attr cap + intensity
+  routine: Finishing, Vision, Close Control, Agility [High]
+PASS  advance_weeks ticks 2 weeks
+PASS  fast-forward does not play rounds
+  Advanced 2 week(s). Quiet stretch.
+
+SMOKE OK
+```

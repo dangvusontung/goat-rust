@@ -31,6 +31,7 @@ function renderState(s) {
     `Season ${s.season_number} · Round ${s.season_round}/${s.rounds_per_season} · ${s.week_label}\n` +
     `Season: ${s.season_goals}g ${s.season_assists}a · ${s.season_decisive} decisive · ${s.season_clutch} clutch` +
     (s.trained_this_week ? ' · trained ✓' : '') +
+    `\nRoutine: ${s.routine_text}` +
     (s.pre_season ? `\nPRE-SEASON — week ${s.pre_season_week + 1}/7 (train / rest / friendlies only)` : '') +
     (s.season_over ? '\nSEASON OVER — use Season End / Next Season.' : '');
   // Pre-season swaps the league-match buttons for the friendly/rest pair.
@@ -166,6 +167,27 @@ async function main() {
     } catch (e) {
       log(String(e));
     }
+  };
+  $('ff').onclick = () => {
+    const n = Math.max(1, Number($('ffn').value) || 1);
+    const r = parse(goat.advance_weeks(n));
+    log(r.text);
+    renderState(r.state);
+  };
+  {
+    const sel = $('routine-attrs');
+    for (const a of parse(goat.get_attrs())) {
+      const o = document.createElement('option');
+      o.value = a.id;
+      o.textContent = a.name;
+      sel.appendChild(o);
+    }
+  }
+  $('set-routine').onclick = () => {
+    const ids = [...$('routine-attrs').selectedOptions].map((o) => Number(o.value));
+    const r = parse(goat.set_routine(ids, Number($('routine-intensity').value)));
+    log(r.text);
+    renderState(r.state);
   };
   $('skip').onclick = () => {
     const r = parse(goat.skip_match());

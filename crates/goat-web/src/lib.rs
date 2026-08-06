@@ -171,6 +171,9 @@ struct StateSnapshot {
     pre_season: bool,
     /// Current pre-season week (0..6); meaningless when `pre_season` is false.
     pre_season_week: u32,
+    /// Current standing training routine, display-ready ("Finishing, Vision
+    /// [Medium]" / "No focus [Medium]").
+    routine_text: String,
     table: Vec<TableRowDto>,
 }
 
@@ -358,6 +361,21 @@ fn build_snapshot(s: &WorldState) -> StateSnapshot {
         season_over: s.season_round >= ROUNDS_PER_SEASON as u32,
         pre_season: in_pre_season(s),
         pre_season_week: season_week(s),
+        routine_text: {
+            use goat_core::attrs::ATTR_NAMES;
+            let names: Vec<&str> = s
+                .pc_routine
+                .focus_attrs
+                .iter()
+                .map(|a| ATTR_NAMES[*a as usize])
+                .collect();
+            let focus = if names.is_empty() {
+                "No focus".to_string()
+            } else {
+                names.join(", ")
+            };
+            format!("{} [{}]", focus, s.pc_routine.intensity.name())
+        },
         table,
     }
 }
@@ -942,6 +960,108 @@ pub fn play_friendly_start() -> String {
     dto.setup = format!("[FRIENDLY] {}", dto.setup);
     *ACTIVE_MATCH.lock().expect("match lock poisoned") = Some(session);
     to_json(&dto)
+}
+
+/// All 30 attribute ids + names, for the routine picker's UI.
+#[wasm_bindgen]
+pub fn get_attrs() -> String {
+    use goat_core::attrs::{AttrId, ATTR_NAMES};
+    let attrs: Vec<serde_json::Value> = AttrId::ALL
+        .iter()
+        .map(|a| serde_json::json!({ "id": *a as u8, "name": ATTR_NAMES[*a as usize] }))
+        .collect();
+    serde_json::to_string(&attrs).expect("DTO serialization is infallible")
+}
+
+/// Set the standing training routine (ports the TUI's [S]): up to 4 focus
+/// attributes by AttrId discriminant + intensity (0=Low, 1=Medium, 2=High).
+/// An empty `attr_ids` clears the focus ("No focus"). Persists until changed.
+#[wasm_bindgen]
+pub fn set_routine(attr_ids: Vec<u8>, intensity: u8) -> String {
+    let state = match take_state() {
+        Ok(s) => s,
+        Err(e) => return err_json(e),
+    };
+    let valid: Vec<u8> = attr_ids
+        .into_iter()
+        .filter(|&a| (a as usize) < goat_core::attrs::NUM_ATTRS)
+        .take(4)
+        .collect();
+    let focus_attrs: Vec<goat_core::attrs::AttrId> = valid
+        .iter()
+        .map(|&a| goat_core::attrs::AttrId::ALL[a as usize])
+        .collect();
+    let intensity = match intensity {
+        0 => goat_core::week::Intensity::Low,
+        2 => goat_core::week::Intensity::High,
+        _ => goat_core::week::Intensity::Medium,
+    };
+    let state = reduce(
+        state,
+        Intent::SetRoutine {
+            routine: goat_core::week::Routine {
+                focus_attrs,
+                intensity,
+            },
+        },
+        &mut GoatRng::new(0),
+    );
+    let snap = build_snapshot(&state);
+    let text = format!("Routine set: {}", snap.routine_text);
+    set_state(state);
+    serde_json::json!({ "text": text, "state": snap }).to_string()
+}
+
+/// Fast-forward N weeks (ports the TUI's [F]): each week auto-applies the
+/// standing routine; the loop stops early at the first noteworthy development
+/// event; all events/flashpoints across the skipped weeks are accumulated and
+/// returned at the end. Competition-season only — pre-season weeks are driven
+/// one at a time via train()/rest_week() so the friendly offer isn't skipped.
+#[wasm_bindgen]
+pub fn advance_weeks(n: u32) -> String {
+    let state = match take_state() {
+        Ok(s) => s,
+        Err(e) => return err_json(e),
+    };
+    if in_pre_season(&state) {
+        let snap = build_snapshot(&state);
+        set_state(state);
+        return serde_json::json!({
+            "text": "Pre-season weeks tick one at a time — use Train / Rest / Play Friendly.",
+            "state": snap,
+        })
+        .to_string();
+    }
+    let pc_id = state.pc_player_id.unwrap_or(0);
+    let seed = {
+        let view = state.players.snapshot(pc_id);
+        (view.age_weeks as u64).wrapping_mul(6364136223846793005)
+    };
+    let state = reduce(state, Intent::AdvanceWeeks { n }, &mut GoatRng::new(seed));
+
+    let mut lines = week_events_text(&state);
+    {
+        use goat_calendar::WindowKind;
+        for f in &state.last_week_flashpoints {
+            let (icon, label) = match f.window {
+                WindowKind::TransferSummer => ("⇄", "The summer transfer window is open."),
+                WindowKind::TransferWinter => ("⇄", "The winter transfer window is open."),
+                WindowKind::InternationalBreak => {
+                    ("✈", "International break — call-ups announced.")
+                }
+                WindowKind::OffSeason => ("☼", "The off-season has begun."),
+            };
+            lines.push(format!("{icon}  CALENDAR: {label}"));
+        }
+    }
+    let text = if lines.is_empty() {
+        format!("Advanced {n} week(s). Quiet stretch.")
+    } else {
+        format!("Advanced {n} week(s).\n{}", lines.join("\n"))
+    };
+    let snap = build_snapshot(&state);
+    set_state(state);
+    serde_json::json!({ "text": text, "state": snap }).to_string()
 }
 
 /// Auto-play the current round and apply the result, exactly like the bridge's

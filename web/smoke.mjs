@@ -64,6 +64,24 @@ check('new game opens in pre-season', st.pre_season === true && st.pre_season_we
   const r = parse(goat.rest_week(), 'rest_week');
   check('rest week ticks one pre-season week', r.state.pre_season_week === 1);
 
+  // Fast-forward is a competition-season tool — pre-season weeks tick one at a time.
+  const ff = parse(goat.advance_weeks(2), 'advance_weeks (pre-season)');
+  check(
+    'advance_weeks defers during pre-season',
+    ff.text.includes('Pre-season weeks tick one at a time'),
+  );
+
+  // Routine picker data + set (visible in every snapshot afterwards).
+  const attrs = parse(goat.get_attrs(), 'get_attrs');
+  check('get_attrs returns 30 attributes', attrs.length === 30);
+  const sr = parse(goat.set_routine([2, 9, 12, 14, 0, 1], 2), 'set_routine');
+  check(
+    'routine set with 4-attr cap + intensity',
+    sr.state.routine_text.includes('[High]') &&
+      (sr.state.routine_text.match(/,/g) || []).length === 3,
+  );
+  console.log(`  routine: ${sr.state.routine_text}`);
+
   let t = r;
   while (t.state.pre_season) t = parse(goat.train(), 'train (pre-season)');
   check('pre-season ends after the 7-week lead', t.state.pre_season === false);
@@ -96,6 +114,14 @@ for (const row of st.table.slice(0, 3)) {
   console.log(
     `   ${row.position}. ${row.club}  Pld ${row.played} W${row.won} D${row.drawn} L${row.lost} GF${row.goals_for} GA${row.goals_against} Pts ${row.points}${row.is_player_club ? '  <- PC' : ''}`,
   );
+}
+
+// ── Fast-forward (in-season): 2 weeks auto-trained with the set routine ─────
+{
+  const ff = parse(goat.advance_weeks(2), 'advance_weeks (in-season)');
+  check('advance_weeks ticks 2 weeks', ff.text.startsWith('Advanced 2 week(s)'));
+  check('fast-forward does not play rounds', ff.state.season_round === 1);
+  console.log(`  ${ff.text.split('\n')[0]}`);
 }
 
 // ── Rest of the season: train() + skip_match() per round ────────────────────
