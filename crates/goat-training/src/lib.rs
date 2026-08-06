@@ -23,9 +23,11 @@
 //!   (attributes + energy) internally. Wiring into `WorldState` is a later
 //!   round — the same "logic first, wire later" shape as promotion.rs/A3.3.
 
+pub mod growth;
 pub mod models;
 pub mod tuning;
 
+pub use growth::{compute_growth, recover_energy, spend_energy, trainability};
 pub use models::{
     AttrTarget, DevelopmentInput, EnergyState, Intensity, TrainingDayResult, TrainingEvent,
     TrainingRoutine,
