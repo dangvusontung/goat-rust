@@ -169,8 +169,7 @@ async function main() {
     }
   };
   $('ff').onclick = () => {
-    const n = Math.max(1, Number($('ffn').value) || 1);
-    const r = parse(goat.advance_weeks(n));
+    const r = parse(goat.auto_advance());
     log(r.text);
     renderState(r.state);
   };

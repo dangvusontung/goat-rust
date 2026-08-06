@@ -206,3 +206,18 @@ PASS  fast-forward does not play rounds
 
 SMOKE OK
 ```
+
+---
+
+## Auto-advance refinement (added 2026-08-07)
+
+Fast-forward UX per Tùng: one Auto-advance button — the Rust/wasm side ticks week-by-week (Intent::AdvanceWeeks{1} per iteration, no JS loop) and stops at the first real reason: a week with a PC league fixture (match_due), an eventful week (development event or calendar flashpoint), season_over, or the 60-week hang-guard cap. The N-weeks input is gone from the UI.
+
+### Node smoke (real output excerpts)
+```
+PASS  advance_weeks defers during pre-season
+PASS  auto-advance stops at a due match
+PASS  auto-advance reports the next round
+PASS  auto-advance does not play the round
+SMOKE OK
+```
