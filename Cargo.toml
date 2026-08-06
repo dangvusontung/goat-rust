@@ -12,6 +12,7 @@ members = [
     "crates/goat-tui",
     "crates/goat-bridge",
     "crates/goat-web",
+    "crates/goat-training",
 ]
 resolver = "2"
 
