@@ -11,6 +11,7 @@ members = [
     "crates/goat-traits",
     "crates/goat-tui",
     "crates/goat-bridge",
+    "crates/goat-web",
 ]
 resolver = "2"
 

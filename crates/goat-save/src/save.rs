@@ -680,7 +680,9 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
 
 // ── Serialisation ─────────────────────────────────────────────────────────────
 
-fn to_bytes(d: &SaveData) -> Vec<u8> {
+/// Serialize to the raw byte format (no I/O) — the web/WASM boundary stores
+/// these bytes itself (localStorage/IndexedDB), per the "no fs in core" rule.
+pub fn to_bytes(d: &SaveData) -> Vec<u8> {
     let mut v: Vec<u8> = Vec::new();
     v.extend_from_slice(MAGIC);
     push_u32(&mut v, VERSION);
@@ -813,7 +815,9 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     v
 }
 
-fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
+/// Deserialize from the raw byte format (no I/O) — the web/WASM counterpart of
+/// `to_bytes`, for clients that store save bytes themselves.
+pub fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     if b.len() < 8 {
         return Err(SaveError::Corrupt("too short"));
     }
