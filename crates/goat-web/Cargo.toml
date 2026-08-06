@@ -1,0 +1,21 @@
+[package]
+name = "goat-web"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+goat-core     = { path = "../goat-core" }
+goat-match    = { path = "../goat-match" }
+goat-world    = { path = "../goat-world" }
+goat-meta     = { path = "../goat-meta" }
+goat-calendar = { path = "../goat-calendar" }
+goat-traits   = { path = "../goat-traits" }
+goat-save     = { path = "../goat-save" }
+goat-rng      = { path = "../goat-rng" }
+goat-fixed    = { path = "../goat-fixed" }
+serde         = { workspace = true }
+serde_json    = { workspace = true }
+wasm-bindgen  = "0.2"

@@ -457,6 +457,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "goat-web"
+version = "0.1.0"
+dependencies = [
+ "goat-calendar",
+ "goat-core",
+ "goat-fixed",
+ "goat-match",
+ "goat-meta",
+ "goat-rng",
+ "goat-save",
+ "goat-traits",
+ "goat-world",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "goat-world"
 version = "0.1.0"
 dependencies = [

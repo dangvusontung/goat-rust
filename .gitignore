@@ -1,4 +1,6 @@
 /target/
 **/target/
+web/pkg/
+web/pkg-node/
 .DS_Store
 **/.DS_Store
