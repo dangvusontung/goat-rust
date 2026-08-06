@@ -25,6 +25,7 @@
 
 pub mod growth;
 pub mod models;
+pub mod subsystem;
 pub mod tuning;
 
 pub use growth::{compute_growth, recover_energy, spend_energy, trainability};
@@ -32,3 +33,4 @@ pub use models::{
     AttrTarget, DevelopmentInput, EnergyState, Intensity, TrainingDayResult, TrainingEvent,
     TrainingRoutine,
 };
+pub use subsystem::Training;
