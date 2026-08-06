@@ -7,12 +7,18 @@
 use goat_fixed::Fixed;
 use goat_rng::RngSource;
 
+// Re-exported so intent constructors (renderers, tests) can name the
+// `ApplyRoundResult::fixture_importance` field's type without taking a direct
+// dependency on `goat-calendar` (BL5.2).
+pub use goat_calendar::FixtureImportance;
+
 use crate::attrs::{AttrId, NUM_ATTRS};
 use crate::calendar_loop::{advance_calendar_week, CalendarFlashpoint};
 use crate::generation::{self, CreationChoices};
 use crate::player::{PlayerId, PlayerStore};
 use crate::roles::FamiliarityTier;
 use crate::roles::NUM_ROLES;
+use crate::tactical_identity::TacticalIdentity;
 use crate::tuning::{ENERGY_START, START_AGE_WEEKS};
 use crate::tuning::{FAM_XP_AWKWARD, FAM_XP_COMPETENT, FAM_XP_UNCONVINCING};
 use crate::week::{advance_week, DevelopmentEvent, Routine};
@@ -25,9 +31,10 @@ pub struct WorldState {
     pub pc_player_id: Option<PlayerId>,
     // ── Phase 3 ───────────────────────────────────────────────────────────────
     pub pc_routine: Routine,
-    pub pc_club: &'static str,
-    pub pc_nationality: &'static str,
-    /// Position as u8 (0=Defender, 1=Midfielder, 2=Forward) — saved for load reconstruct.
+    pub pc_club: String,
+    pub pc_nationality: String,
+    /// `PrimaryPosition as u8` (0..7 — one of the 8 specific positions, e.g. 0=ST, 7=CB;
+    /// see `positions::PrimaryPosition`) — saved for load reconstruct.
     pub pc_position: u8,
     pub last_week_events: Vec<DevelopmentEvent>,
     pub last_week_growth: [Fixed; NUM_ATTRS],
@@ -48,31 +55,120 @@ pub struct WorldState {
     pub pc_form: Fixed,
     /// Goals scored by the PC in the current season.
     pub pc_season_goals: u32,
+    /// Assists made by the PC in the current season (BL5.1 goal/assist split).
+    pub pc_season_assists: u32,
     /// Matches played by PC this season.
     pub pc_season_matches: u32,
     /// Cumulative output across PC's matches this season.
     pub pc_season_output: i32,
     /// League table raw data: [W, D, L, GF, GA] × CLUBS_PER_DIV.
-    /// Layout: table_raw[col * 16 + row_in_div] where col ∈ {0..4}.
-    pub table_raw: [u32; 80], // 5 × 16
+    /// Layout: table_raw[col * CLUBS_PER_DIV + row_in_div] where col ∈ {0..4}.
+    pub table_raw: [u32; 100], // 5 × CLUBS_PER_DIV(20)
+    /// Every club's running transfer/wage war-chest, £k (Design round 5, Doc A §Slice 1),
+    /// indexed by `goat_world::world::ClubId`. Genuinely path-dependent (accumulated income
+    /// minus wages across windows, can legitimately go negative) — unlike `WorldGenesis`
+    /// itself, which is a pure function of `world_seed` and never persisted, this cannot be
+    /// regenerated on load and must round-trip through the save. Empty until a caller seeds
+    /// it (genesis) or writes to it (a transfer window tick) — both are a later slice's
+    /// season-tick wiring, not this foundation slice's job.
+    pub club_budgets: Vec<i64>,
+    /// Every club's academy-boost lever, 0..=`goat_world::world::ACADEMY_BOOST_MAX` (Design
+    /// round 5, Doc A §Slice 6), indexed by `goat_world::world::ClubId`. Path-dependent like
+    /// `club_budgets` — accumulated by youth-investment spend and season-end decay, cannot be
+    /// regenerated from `world_seed` on load. Empty until a caller seeds it (genesis) or
+    /// writes to it (an investment pass / season-end decay) — both are a later slice's
+    /// season-tick wiring, not this slice's job.
+    pub academy_boosts: Vec<u8>,
+    /// Every generated manager (Design round 5, Slice 7-8 §7.1), index = `ManagerId` as
+    /// `usize` — same "closed pool" system `goat_world::manager::ManagerPool` defines.
+    /// `goat-core` doesn't depend on `goat-world` (see the crate doc comments in both), so
+    /// this holds the flat, crate-boundary-safe shape of `goat_world::manager::Manager`
+    /// rather than the type itself. Path-dependent (fire/rehire history, rolling form) —
+    /// empty until a caller seeds it (genesis) or writes to it (a season-tick fire/rehire
+    /// pass) — both are a later slice's season-tick wiring, not this slice's job.
+    pub managers: Vec<ManagerState>,
+    /// Per-club current manager, index = `goat_world::world::ClubId`, value = index into
+    /// `managers`. Empty until a later slice seeds it, same as `managers` itself.
+    pub club_manager: Vec<u32>,
+    /// Currently-unemployed manager indices into `managers`, available to hire. Empty until
+    /// a later slice seeds it, same as `managers` itself.
+    pub free_agents: Vec<u32>,
     // ── Phase 6 discipline fields ─────────────────────────────────────────────
     /// Yellow cards in the current season (resets each season). 5 = ban.
     pub pc_yellow_cards_season: u32,
-    /// Matches remaining on suspension (0 = available).
-    pub pc_suspension_weeks: u32,
+    /// Per-competition suspension ledger (Design round 4, Slice 5 §5.1) — replaces a
+    /// single global "matches remaining" scalar so a ban is scoped to the exact
+    /// competition it was earned in (a domestic-cup red card never blocks league
+    /// selection, and vice versa). In practice tiny: the PC is rarely suspended in more
+    /// than one competition at once, but the type supports it correctly.
+    pub pc_suspensions: Vec<goat_calendar::SuspensionLedger>,
     /// Dirty/clean reputation 0–100 (50 = neutral). Higher = stricter officiating.
     pub pc_discipline_rep: i32,
     // ── Phase 7 legacy evidence ───────────────────────────────────────────────
     pub pc_career_goals: u32,
+    /// Career assists (BL5.1). Deliberately NOT fed into Legacy scoring yet —
+    /// assist weighting is a parked design question (future hook).
+    pub pc_career_assists: u32,
     pub pc_career_matches: u32,
     pub pc_career_output_sum: i64,
     pub pc_best_season_avg_output: i32,
     pub pc_seasons_played: u32,
     pub pc_decisive_moments: u32,
+    /// This season's decisive-moment count, live (BL5.2) — folded into
+    /// `pc_decisive_moments` only at ApplySeasonEndLegacy's `decisive_moments`
+    /// param (mirrors pc_season_goals -> pc_career_goals).
+    pub pc_season_decisive_moments: u32,
+    /// Career clutch index (BL5.3): the high-leverage subset of decisive
+    /// moments (equalizers, go-ahead goals, late game-saving stops), weighted
+    /// by the same importance×result formula. Deliberately NOT fed into
+    /// Legacy scoring yet — future hook, same idiom as career assists.
+    pub pc_career_clutch_index: u32,
+    /// This season's clutch index, live — folded into `pc_career_clutch_index`
+    /// only at ApplySeasonEndLegacy's `season_clutch_index` param.
+    pub pc_season_clutch_index: u32,
     pub pc_player_of_year_wins: u32,
     pub pc_league_titles: u32,
     pub pc_clubs_served: u32,
     pub pc_longest_club_tenure: u32,
+    // ── Pantheon raw-signal evidence (Design round 1) ─────────────────────────
+    /// Cumulative count of matches with pc_output >= STANDOUT_OUTPUT_THRESHOLD, career-wide.
+    /// Feeds the Eye-Test Romantics school directly (raw "moments", not a season average).
+    pub pc_career_standout_matches: u32,
+    /// This season's standout-match count, live — folded into pc_career_standout_matches
+    /// only at ApplySeasonEndLegacy (mirrors pc_season_goals -> pc_career_goals).
+    pub pc_season_standout_matches: u32,
+    /// Career-peak OVR (derive::ovr at the player's primary position), checked once per
+    /// season end. Feeds Stats Purists directly — a talent/ability number, structurally
+    /// different from the Output axis (match performance, not attribute ceiling).
+    pub pc_career_best_ovr: i32,
+    /// Cumulative count of AgitateForTransfer escalations, career-wide — unlike
+    /// pc_power_ladder (current rung, resets on contract/transfer), this never resets.
+    /// Feeds Loyalty Traditionalists directly (raw request count, not a clubs_served penalty).
+    pub pc_career_transfer_requests: u32,
+    /// This season's transfer-request count, live — folded into pc_career_transfer_requests
+    /// only at ApplySeasonEndLegacy.
+    pub pc_season_transfer_requests: u32,
+    // ── National-team caps (Design round 2, Doc B §B.4) ───────────────────────
+    /// National-team caps won, career-wide — a minimal legacy-evidence counter for the
+    /// call-up/tactical-fit layer. No school-weighting logic reads this yet.
+    pub pc_career_caps: u32,
+    /// This season's caps, live — folded into pc_career_caps only at ApplySeasonEndLegacy.
+    pub pc_season_caps: u32,
+    /// Goals scored while capped for the national team, career-wide.
+    pub pc_career_international_goals: u32,
+    /// This season's international goals, live — folded at ApplySeasonEndLegacy.
+    pub pc_season_international_goals: u32,
+    // ── Design round 4, Slice 4 §4.5 — national-team tournament wins ──────────
+    /// World Cups won with the PC's nation, career-wide.
+    pub pc_career_world_cups_won: u32,
+    /// This season's World Cup wins, live — folded into pc_career_world_cups_won only at
+    /// ApplySeasonEndLegacy (mirrors pc_season_caps -> pc_career_caps exactly).
+    pub pc_season_world_cups_won: u32,
+    /// Continental championships won with the PC's nation, career-wide.
+    pub pc_career_continental_championships_won: u32,
+    /// This season's continental-championship wins, live — folded at
+    /// ApplySeasonEndLegacy.
+    pub pc_season_continental_championships_won: u32,
     // ── Phase 7 reputation scalars ────────────────────────────────────────────
     pub pc_sporting_rep: i32,
     pub pc_club_fan_rep: i32,
@@ -115,7 +211,14 @@ pub struct WorldState {
     /// Season in which the rivalry was first declared.
     pub pc_rival_declared_season: Option<u32>,
     // ── Phase 10 — lifestyle + retirement ────────────────────────────────────
-    /// 0=Professional, 1=Balanced, 2=Flashy.
+    /// Emergent lifestyle score, signed Fixed in [-1.000, 1.000] (bible §8.5/§8.6).
+    /// Negative = Pro-leaning, positive = Flashy-leaning, 0 = Balanced. Built up weekly
+    /// from training intensity + dev investment, plus a one-off nudge on sponsor signing.
+    /// `pc_lifestyle` below is the cached tier derived from this score each week via
+    /// `lifestyle_tier_from_score` — never set directly.
+    pub pc_lifestyle_score: Fixed,
+    /// Cached tier derived from `pc_lifestyle_score`: 0=Professional, 1=Balanced,
+    /// 2=Flashy. Recomputed at the start of every week tick — read-only elsewhere.
     pub pc_lifestyle: u8,
     /// True once the player has retired.
     pub pc_retired: bool,
@@ -128,8 +231,49 @@ pub struct WorldState {
     /// Live calendar position (epoch days since career start). Advanced 7/week by the
     /// week loop, which drives the CalendarEngine. Persisted in the save (v6+).
     pub pc_epoch_day: u32,
+    /// Real-world year the career started in — read from wall-clock ONCE by the
+    /// outer layer at new-game time (TUI/bridge/web), never inside the core
+    /// (§9 determinism: no `now()` below the renderer). Display-only (season
+    /// year labels, match dates); persisted so a save shows the same dates on
+    /// every load. Pre-v19 saves default to `goat_world`'s BASE_CAREER_YEAR.
+    pub career_base_year: u32,
+    /// PC's nation's current league membership (A3.3): the nation's 3 leagues ×
+    /// 20 club ids, flattened in tier order (top → third), advanced by
+    /// promotion/relegation each season end. Empty = genesis-static membership
+    /// (pre-first-promotion, or a pre-v18 save). Path-dependent — driven by the
+    /// PC league's REAL played results — so persisted; the one piece of league
+    /// structure that cannot be regenerated from `world_seed`.
+    pub pc_nation_membership: Vec<u32>,
     /// Calendar flashpoints (window openings) surfaced by the most recent week tick.
     pub last_week_flashpoints: Vec<CalendarFlashpoint>,
+    /// The PC's current-season orbit fixtures (league this slice; cup/continental/
+    /// national-team once sibling slices ship), fed into `CalendarEngine` by
+    /// `advance_calendar_week` every week tick. Set by `Intent::StartSeason` — the TUI
+    /// bridge builds these from `goat-world`, since `goat-core` stays headless with
+    /// respect to that crate. NOT persisted in the save (like `WorldGenesis`, this is
+    /// "generated but consistent": regenerated from `world_seed` + `season_number` +
+    /// `pc_div_idx`/`pc_club_idx` on load, never serialized).
+    pub pc_season_fixtures: Vec<goat_calendar::Fixture>,
+}
+
+/// Rolling match-points form window length (Design round 5, Slice 7-8 §7.1) — `goat-core`
+/// keeps its own local copy rather than importing `goat_world::manager::MANAGER_FORM_WINDOW`
+/// (no shared "seed/const util" module exists in this codebase; `world.rs`'s `seed_mix` and
+/// `population.rs`'s own local seed helpers already established this "each module keeps its
+/// own copy" precedent).
+pub const MANAGER_FORM_WINDOW: usize = 10;
+
+/// One manager's persisted state (Design round 5, Slice 7-8) — flat fields mirroring
+/// `goat_world::manager::Manager`'s shape; kept here rather than importing that type since
+/// `goat-core` is not depended on by, and does not depend on, `goat-world`.
+#[derive(Debug, Clone)]
+pub struct ManagerState {
+    pub name: String,
+    pub identity_bias: TacticalIdentity,
+    pub recent_points: [u8; MANAGER_FORM_WINDOW],
+    pub recent_idx: u8,
+    pub tenure_start_season: u32,
+    pub matches_played: u16,
 }
 
 /// Batch-ticked career state for one cohort peer (Phase 9).
@@ -138,7 +282,7 @@ pub struct PeerState {
     /// Deterministic seed used for this peer's batch-tick progression.
     pub seed: u64,
     pub name: String,
-    pub nationality: &'static str,
+    pub nationality: String,
     /// Accumulated career goals (batch-ticked each season).
     pub career_goals: u32,
     /// Career matches (batch-ticked).
@@ -155,9 +299,9 @@ impl WorldState {
             players: PlayerStore::new(),
             pc_player_id: None,
             pc_routine: Routine::default(),
-            pc_club: "",
-            pc_nationality: "",
-            pc_position: 2, // Forward default
+            pc_club: String::new(),
+            pc_nationality: String::new(),
+            pc_position: 0, // PrimaryPosition::ST default
             last_week_events: Vec::new(),
             last_week_growth: [Fixed::ZERO; NUM_ATTRS],
             world_seed: 0,
@@ -168,22 +312,45 @@ impl WorldState {
             season_round: 0,
             pc_form: Fixed::from_int(50),
             pc_season_goals: 0,
+            pc_season_assists: 0,
             pc_season_matches: 0,
             pc_season_output: 0,
-            table_raw: [0u32; 80],
+            table_raw: [0u32; 100],
+            club_budgets: Vec::new(),
+            academy_boosts: Vec::new(),
+            managers: Vec::new(),
+            club_manager: Vec::new(),
+            free_agents: Vec::new(),
             pc_yellow_cards_season: 0,
-            pc_suspension_weeks: 0,
+            pc_suspensions: Vec::new(),
             pc_discipline_rep: 50,
             pc_career_goals: 0,
+            pc_career_assists: 0,
             pc_career_matches: 0,
             pc_career_output_sum: 0,
             pc_best_season_avg_output: 0,
             pc_seasons_played: 0,
             pc_decisive_moments: 0,
+            pc_season_decisive_moments: 0,
+            pc_career_clutch_index: 0,
+            pc_season_clutch_index: 0,
             pc_player_of_year_wins: 0,
             pc_league_titles: 0,
             pc_clubs_served: 1,
             pc_longest_club_tenure: 0,
+            pc_career_standout_matches: 0,
+            pc_season_standout_matches: 0,
+            pc_career_best_ovr: 0,
+            pc_career_transfer_requests: 0,
+            pc_season_transfer_requests: 0,
+            pc_career_caps: 0,
+            pc_season_caps: 0,
+            pc_career_international_goals: 0,
+            pc_season_international_goals: 0,
+            pc_career_world_cups_won: 0,
+            pc_season_world_cups_won: 0,
+            pc_career_continental_championships_won: 0,
+            pc_season_continental_championships_won: 0,
             pc_sporting_rep: 50,
             pc_club_fan_rep: 50,
             pc_contract_seasons_left: 2,
@@ -200,13 +367,68 @@ impl WorldState {
             pc_peers: Vec::new(),
             pc_rival_idx: None,
             pc_rival_declared_season: None,
-            pc_lifestyle: 1, // Balanced
+            pc_lifestyle_score: Fixed::ZERO, // Balanced
+            pc_lifestyle: 1,                 // Balanced
             pc_retired: false,
             pc_current_calendar_week: 0,
             pc_week_training_done: false,
             pc_epoch_day: 0,
+            // Placeholder until the outer layer sets the real wall-clock year at
+            // new-game; 2025 matches the pre-v19 constant so old saves keep
+            // their dates exactly.
+            career_base_year: 2025,
+            pc_nation_membership: Vec::new(),
             last_week_flashpoints: Vec::new(),
+            pc_season_fixtures: Vec::new(),
         }
+    }
+
+    /// Matches remaining on the PC's suspension in `competition_id` (0 = available in
+    /// that competition, regardless of any ban held in a different one).
+    pub fn pc_suspension_matches_remaining(
+        &self,
+        competition_id: goat_calendar::CompetitionId,
+    ) -> u32 {
+        self.pc_suspensions
+            .iter()
+            .find(|l| l.competition_id == competition_id)
+            .map(|l| l.matches_remaining)
+            .unwrap_or(0)
+    }
+
+    /// Add `matches` bans to the PC's ledger entry for `competition_id`, merging into an
+    /// existing entry rather than creating a duplicate.
+    fn pc_add_suspension(&mut self, competition_id: goat_calendar::CompetitionId, matches: u32) {
+        if matches == 0 {
+            return;
+        }
+        if let Some(entry) = self
+            .pc_suspensions
+            .iter_mut()
+            .find(|l| l.competition_id == competition_id)
+        {
+            entry.matches_remaining += matches;
+        } else {
+            self.pc_suspensions.push(goat_calendar::SuspensionLedger {
+                player_id: self.pc_player_id.unwrap_or(0),
+                competition_id,
+                matches_remaining: matches,
+            });
+        }
+    }
+
+    /// Serve one match of the PC's ban in `competition_id` (bible AC-06: counts down by
+    /// matches actually played in that exact competition, not by elapsed calendar days or
+    /// rounds of any other competition). A no-op if the PC isn't suspended there.
+    fn pc_serve_suspension_match(&mut self, competition_id: goat_calendar::CompetitionId) {
+        if let Some(entry) = self
+            .pc_suspensions
+            .iter_mut()
+            .find(|l| l.competition_id == competition_id)
+        {
+            entry.matches_remaining = entry.matches_remaining.saturating_sub(1);
+        }
+        self.pc_suspensions.retain(|l| l.matches_remaining > 0);
     }
 }
 
@@ -262,6 +484,9 @@ pub enum Intent {
     /// Called once per season (by the TUI) after the season summary is computed.
     ApplySeasonEndLegacy {
         season_goals: u32,
+        /// PC's assists this season (BL5.1) — folded into `pc_career_assists`
+        /// exactly like `season_goals` folds into `pc_career_goals`.
+        season_assists: u32,
         season_matches: u32,
         /// Sum of all match output scores this season.
         season_output_sum: i32,
@@ -271,8 +496,23 @@ pub enum Intent {
         finish_position: u32,
         /// Decisive moments scored this season (e.g. winning goals in must-win games).
         decisive_moments: u32,
+        /// Clutch index accrued this season (BL5.3) — the high-leverage subset of
+        /// `decisive_moments`, folded into `pc_career_clutch_index` the same way.
+        season_clutch_index: u32,
         new_sporting_rep: i32,
         new_club_fan_rep: i32,
+        /// Standout matches (pc_output >= STANDOUT_OUTPUT_THRESHOLD) played this season.
+        season_standout_matches: u32,
+        /// AgitateForTransfer escalations this season.
+        season_transfer_requests: u32,
+        /// National-team caps won this season (Design round 2, Doc B §B.4).
+        season_caps: u32,
+        /// International goals scored this season.
+        season_international_goals: u32,
+        /// World Cups won with the PC's nation this season (Design round 4, Slice 4 §4.5).
+        season_world_cups_won: u32,
+        /// Continental championships won with the PC's nation this season.
+        season_continental_championships_won: u32,
     },
 
     // ── Phase 8 intents ───────────────────────────────────────────────────────
@@ -290,7 +530,7 @@ pub enum Intent {
         to_div_idx: u8,
         new_wage: i64,
         new_length: u32,
-        new_club_name: &'static str,
+        new_club_name: String,
         facilities_mult: Fixed,
         fee_bonus: i64, // fraction of fee paid to player (signing bonus)
     },
@@ -305,9 +545,31 @@ pub enum Intent {
     /// Declare a rival (crystallised from cohort).
     DeclareRival { peer_idx: usize, season: u32 },
 
+    // ── Design round 2, Doc B — national-team call-ups ────────────────────────
+    /// Record the outcome of one international-break call-up window (rolled by the
+    /// renderer against `tactical_identity::team_fit`; core just records the result —
+    /// non-blocking per the decision's own wording, this never hard-gates anything).
+    /// A no-call-up window still fires this intent with `called_up: false` so the
+    /// season-live counters stay consistent even when nothing happened.
+    NationalTeamCallUp {
+        called_up: bool,
+        started: bool,
+        goals: u32,
+    },
+
+    // ── Design round 4, Slice 4/5 — national-team tournament win ──────────────
+    /// Record that the PC's nation won the tournament (World Cup or continental
+    /// championship) their live qualifying/knockout run just concluded. Live-season
+    /// counterpart to `pc_career_world_cups_won`/`pc_career_continental_
+    /// championships_won` — folded into those career totals via
+    /// `ApplySeasonEndLegacy`'s `season_world_cups_won`/`season_continental_
+    /// championships_won` fields exactly like every other season-live accumulator.
+    ApplyNationalTournamentWin { is_world_cup: bool },
+
     // ── Phase 10 intents ──────────────────────────────────────────────────────
-    /// Set the lifestyle (0=Professional,1=Balanced,2=Flashy). Done once at career start.
-    SetLifestyle { lifestyle: u8 },
+    // Lifestyle is no longer a settable intent (bible §8.5/§8.6) — it is derived
+    // weekly from `pc_lifestyle_score`, nudged by routine intensity, dev-investment
+    // level (in `tick_one_week`) and sponsor tier (in `SignSponsor` below).
     /// Set the development-investment level 0–3 (ceiling-capped growth multiplier).
     SetDevInvestment { level: u8 },
     /// Move savings into the business/investment portfolio (thousands).
@@ -334,7 +596,22 @@ pub enum Intent {
     /// Apply cards received in a match. Updates yellow card count and suspension.
     ///
     /// Called after `ApplyMatchResult`, once per match where a card was shown.
-    ApplyCardResult { yellow_cards: u32, red_card: bool },
+    /// `competition_id` scopes the resulting ban (Design round 4, Slice 5 §5.1) — a
+    /// red card in a domestic-cup tie only suspends the PC from that competition.
+    ApplyCardResult {
+        competition_id: goat_calendar::CompetitionId,
+        yellow_cards: u32,
+        red_card: bool,
+    },
+
+    /// Serve one match of suspension in `competition_id`, for orbit competitions whose
+    /// round resolution isn't otherwise driven through `ApplyRoundResult` (which is
+    /// league-specific — season table, season_round, player-clock bookkeeping). Cup/
+    /// continental/national-team fixtures call this once per match played so their own
+    /// suspensions count down independently of the league's (Design round 4, Slice 5).
+    ApplyOrbitMatchResult {
+        competition_id: goat_calendar::CompetitionId,
+    },
 
     // ── Phase 5 intents ───────────────────────────────────────────────────────
     /// Initialise the world (sets world_seed, pc_club_idx, div_idx, facilities).
@@ -345,18 +622,38 @@ pub enum Intent {
         pc_div_idx: u8,
         facilities_mult: Fixed,
         /// Flat table raw data for the PC's division (initialised to all zeros).
-        initial_table: Box<[u32; 80]>,
+        initial_table: Box<[u32; 100]>,
     },
 
     /// Start a new season. Resets round counter, clears PC season stats.
-    StartSeason,
+    StartSeason {
+        /// The PC's orbit fixtures for the season about to start — built by the TUI
+        /// bridge from `goat-world` (see `pc_season_fixtures`'s doc comment).
+        fixtures: Vec<goat_calendar::Fixture>,
+    },
 
     /// Apply the results of one completed season round.
     ///
     /// The TUI drives fixture simulation (via goat-world) and sends the outcomes here.
     ApplyRoundResult {
+        /// Which competition this round belongs to (Design round 4, Slice 5 §5.1) — the
+        /// suspension-serve step below only decrements THIS competition's ledger entry.
+        competition_id: goat_calendar::CompetitionId,
         /// PC's goals this round (0 if they didn't play or skipped).
         pc_goals: u32,
+        /// PC's assists this round (0 if they didn't play or skipped) — BL5.1.
+        pc_assists: u32,
+        /// PC's decisive-moment candidates this round (BL5.2), counted by the
+        /// renderer from the match's moments via `goat_match::sim::is_decisive`.
+        /// Weighted below by `fixture_importance` and `pc_result`.
+        pc_decisive_count: u32,
+        /// PC's clutch moments this round (BL5.3) — the high-leverage subset of
+        /// the decisive count, via `goat_match::sim::is_clutch`. Weighted by the
+        /// exact same formula below.
+        pc_clutch_count: u32,
+        /// Static importance rung of this round's fixture (BL5.2) — which
+        /// `DECISIVE_IMPORTANCE_X10` coefficient the count is weighted by.
+        fixture_importance: goat_calendar::FixtureImportance,
         /// PC output this round (0 if didn't play).
         pc_output: i32,
         /// Did the PC's team win/draw/lose?  (1/0/-1)
@@ -364,6 +661,16 @@ pub enum Intent {
         /// All match results in the round: (home_div_pos, away_div_pos, home_gf, home_ga).
         /// `div_pos` is the 0-based club index within DIV_CLUBS[pc_div_idx].
         round_results: Vec<(u8, u8, u32, u32)>,
+        /// Break/rest calendar weeks skipped between this round and the next
+        /// (0 within the same or an adjacent week). Computed by the caller from
+        /// goat-world's calendar (`rest_weeks_after_round`); each one elapses as
+        /// a rest week for the PC so the player clock tracks the season calendar.
+        rest_weeks: u32,
+        /// True when this round is the LAST round of its calendar week (computed
+        /// by the caller via `week_ends_after_round`). False means a second
+        /// fixture follows in the SAME week: no time passes and no new training
+        /// session opens until that fixture is played.
+        week_ends: bool,
     },
 }
 
@@ -382,7 +689,8 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             view.injury_weeks = 0;
             let club = choices.club;
             let nationality = choices.nationality;
-            let position = choices.position as u8;
+            // PrimaryPosition as u8 (0..7) — widened from the old 3-way Position (0..2).
+            let position = choices.primary_position as u8;
             let id = state.players.push(view);
             state.pc_player_id = Some(id);
             state.pc_club = club;
@@ -410,7 +718,17 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state
         }
 
-        Intent::AdvanceWeek => tick_one_week(state, rng),
+        Intent::AdvanceWeek => {
+            // One session per calendar week: the flag means "this week's tick has
+            // run" (training or rest). The reducer is the gate, not the UI — a
+            // second train in the same week (e.g. a double-fixture week) is a no-op.
+            if state.pc_week_training_done {
+                return state;
+            }
+            let mut state = tick_one_week(state, rng);
+            state.pc_week_training_done = true;
+            state
+        }
 
         Intent::AdvanceWeeks { n } => {
             // Accumulate calendar flashpoints across the skipped weeks so a window that
@@ -425,6 +743,9 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 }
             }
             state.last_week_flashpoints = all_flashpoints;
+            if n > 0 {
+                state.pc_week_training_done = true;
+            }
             state
         }
 
@@ -479,18 +800,42 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
 
         Intent::ApplySeasonEndLegacy {
             season_goals,
+            season_assists,
             season_matches,
             season_output_sum,
             won_title,
             player_of_year,
             finish_position: _finish_position,
             decisive_moments,
+            season_clutch_index,
             new_sporting_rep,
             new_club_fan_rep,
+            season_standout_matches,
+            season_transfer_requests,
+            season_caps,
+            season_international_goals,
+            season_world_cups_won,
+            season_continental_championships_won,
         } => {
             state.pc_career_goals += season_goals;
+            state.pc_career_assists += season_assists;
             state.pc_career_matches += season_matches;
             state.pc_career_output_sum += season_output_sum as i64;
+            state.pc_career_standout_matches += season_standout_matches;
+            state.pc_career_transfer_requests += season_transfer_requests;
+            state.pc_career_caps += season_caps;
+            state.pc_career_international_goals += season_international_goals;
+            state.pc_career_world_cups_won += season_world_cups_won;
+            state.pc_career_continental_championships_won += season_continental_championships_won;
+            // Career-peak OVR: computed here, not staged — a "peak so far" check is
+            // naturally season-cadenced, no per-match staging needed.
+            if let Some(pc_id) = state.pc_player_id {
+                let view = state.players.snapshot(pc_id);
+                let current_ovr =
+                    crate::derive::ovr(&view.current, state.players.get_primary_position(pc_id))
+                        .to_int();
+                state.pc_career_best_ovr = state.pc_career_best_ovr.max(current_ovr.clamp(0, 100));
+            }
             if won_title {
                 state.pc_league_titles += 1;
             }
@@ -498,6 +843,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 state.pc_player_of_year_wins += 1;
             }
             state.pc_decisive_moments += decisive_moments;
+            state.pc_career_clutch_index += season_clutch_index;
             state.pc_seasons_played += 1;
             // Update best season avg output.
             let season_avg = if season_matches > 0 {
@@ -530,6 +876,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
 
         Intent::AgitateForTransfer => {
             state.pc_power_ladder = (state.pc_power_ladder + 1).min(3);
+            state.pc_season_transfer_requests += 1;
             // Each rung burns Character rep (tightens officiating).
             state.pc_discipline_rep = (state.pc_discipline_rep + 8).min(100);
             state
@@ -606,7 +953,10 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
         }
 
         Intent::SignSponsor { tier } => {
-            use crate::tuning::{OVERCOMMERCIAL_REP_PENALTY, SPONSOR_TIER_THRESHOLDS};
+            use crate::tuning::{
+                LIFESTYLE_NUDGE_PER_SPONSOR_TIER, LIFESTYLE_SCORE_MAX, LIFESTYLE_SCORE_MIN,
+                OVERCOMMERCIAL_REP_PENALTY, SPONSOR_TIER_THRESHOLDS,
+            };
             let tier = tier.min(3);
             if tier == 0 {
                 state.pc_sponsor_tier = 0;
@@ -620,6 +970,11 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 if state.pc_sporting_rep < needed {
                     state.pc_sporting_rep -= OVERCOMMERCIAL_REP_PENALTY;
                 }
+                // One-off lifestyle nudge (bible §8.5): more commercial exposure leans
+                // Flashy, proportional to tier.
+                state.pc_lifestyle_score = (state.pc_lifestyle_score
+                    + LIFESTYLE_NUDGE_PER_SPONSOR_TIER * Fixed::from_int(tier as i32))
+                .clamp(LIFESTYLE_SCORE_MIN, LIFESTYLE_SCORE_MAX);
             }
             state
         }
@@ -691,33 +1046,57 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state
         }
 
-        // ── Phase 10 handlers ────────────────────────────────────────────────────
-        Intent::SetLifestyle { lifestyle } => {
-            state.pc_lifestyle = lifestyle.min(2);
+        Intent::NationalTeamCallUp {
+            called_up,
+            started,
+            goals,
+        } => {
+            if called_up {
+                state.pc_season_caps += 1;
+                if started {
+                    state.pc_season_international_goals += goals;
+                }
+            }
             state
         }
 
+        Intent::ApplyNationalTournamentWin { is_world_cup } => {
+            if is_world_cup {
+                state.pc_season_world_cups_won += 1;
+            } else {
+                state.pc_season_continental_championships_won += 1;
+            }
+            state
+        }
+
+        // ── Phase 10 handlers ────────────────────────────────────────────────────
         Intent::Retire => {
             state.pc_retired = true;
             state
         }
 
         Intent::ApplyCardResult {
+            competition_id,
             yellow_cards,
             red_card,
         } => {
             state.pc_yellow_cards_season += yellow_cards;
             // 5 yellow cards in a season = 1-match ban; red = 1–3 matches.
             if red_card {
-                state.pc_suspension_weeks += 2; // base 2-match ban for red
+                state.pc_add_suspension(competition_id, 2); // base 2-match ban for red
                 state.pc_discipline_rep = (state.pc_discipline_rep + 15).min(100);
             }
             if yellow_cards > 0 && state.pc_yellow_cards_season >= 5 {
-                state.pc_suspension_weeks += 1;
+                state.pc_add_suspension(competition_id, 1);
                 state.pc_yellow_cards_season = 0; // reset after serving ban
                 state.pc_discipline_rep = (state.pc_discipline_rep + 5).min(100);
             }
             // Clean match recovery: handled separately per week/round (not here).
+            state
+        }
+
+        Intent::ApplyOrbitMatchResult { competition_id } => {
+            state.pc_serve_suspension_match(competition_id);
             state
         }
 
@@ -736,31 +1115,123 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state
         }
 
-        Intent::StartSeason => {
+        Intent::StartSeason { fixtures } => {
+            state.pc_season_fixtures = fixtures;
             state.season_number += 1;
             state.season_round = 0;
             state.pc_season_goals = 0;
+            state.pc_season_assists = 0;
             state.pc_season_matches = 0;
             state.pc_season_output = 0;
+            state.pc_season_standout_matches = 0;
+            state.pc_season_decisive_moments = 0;
+            state.pc_season_clutch_index = 0;
+            state.pc_season_transfer_requests = 0;
+            state.pc_season_caps = 0;
+            state.pc_season_international_goals = 0;
+            state.pc_season_world_cups_won = 0;
+            state.pc_season_continental_championships_won = 0;
             state.pc_yellow_cards_season = 0; // reset yellow cards each season
                                               // Preserve table from last season? No — start fresh each season.
-            state.table_raw = [0u32; 80];
+            state.table_raw = [0u32; 100];
+
+            // ── Off-season back-fill: every season-year is exactly 52 weeks ──
+            // In-season play ticks ~41 weeks (one per round + skipped breaks);
+            // the remainder elapses here as rest weeks, so at the start of
+            // season N the invariant holds: age == START_AGE + (N−1)·52.
+            if let Some(pc_id) = state.pc_player_id {
+                let target = START_AGE_WEEKS + (state.season_number - 1) * 52;
+                // These backfilled weeks are the tail of the season that JUST ended
+                // (calendar-year summer, roughly day ~266-364), not the new one
+                // `season_number` was already bumped to above — a tournament
+                // season's `OffSeason` window (Design round 4, Slice 4/5; day
+                // 300-329, mid-June-mid-July) sits in exactly this range, so the
+                // calendar tick below must use the OLD season number for window
+                // cadence, or `WindowKind::OffSeason` would check the wrong
+                // (always-non-tournament, since WC/CC seasons never sit next to
+                // each other) season and never fire.
+                let just_ended_season = state.season_number - 1;
+                let new_season = state.season_number;
+                state.season_number = just_ended_season;
+                // Accumulate flashpoints across every backfilled week (mirrors
+                // `Intent::AdvanceWeeks`) — a single overwrite would lose an
+                // earlier window (e.g. `OffSeason` at day 300) to a later one
+                // (`TransferSummer` at day 330) in the same backfill.
+                let mut all_flashpoints = Vec::new();
+                while state.players.get_age_weeks(pc_id) < target {
+                    state = tick_one_rest_week(state);
+                    all_flashpoints.append(&mut state.last_week_flashpoints);
+                }
+                state.last_week_flashpoints = all_flashpoints;
+                state.season_number = new_season;
+                state.pc_week_training_done = false;
+            }
             state
         }
 
         Intent::ApplyRoundResult {
+            competition_id,
             pc_goals,
+            pc_assists,
+            pc_decisive_count,
+            pc_clutch_count,
+            fixture_importance,
             pc_output,
             pc_result,
             round_results,
+            rest_weeks,
+            week_ends,
         } => {
-            const N: usize = 16; // CLUBS_PER_DIV
+            // ── Suspension serves one match per round resolved (bible AC-06: a
+            // ban counts down by matches actually played, not by elapsed days) —
+            // scoped to THIS competition only (Design round 4, Slice 5 §5.1) ──
+            state.pc_serve_suspension_match(competition_id);
+
+            // ── Time passes: the season calendar drives the player clock ─────
+            // Exactly one tick per calendar week: the match week elapses even if
+            // the player never trained in it, and any skipped break weeks before
+            // the next round elapse as rest. Between two fixtures of the SAME
+            // week no time passes — the flag stays set so the week can neither
+            // tick again nor open a second training session.
+            if state.pc_player_id.is_some() {
+                if !state.pc_week_training_done {
+                    state = tick_one_rest_week(state);
+                }
+                if week_ends {
+                    for _ in 0..rest_weeks {
+                        state = tick_one_rest_week(state);
+                    }
+                    state.pc_week_training_done = false;
+                } else {
+                    state.pc_week_training_done = true;
+                }
+            }
+            const N: usize = 20; // CLUBS_PER_DIV (goat-core stays headless — can't import
+                                 // goat_world::CLUBS_PER_DIV — kept in sync by hand)
 
             // Update PC season stats.
             state.pc_season_goals += pc_goals;
+            state.pc_season_assists += pc_assists;
             state.pc_season_output += pc_output;
+            // BL5.2 decisive moments / BL5.3 clutch index: each raw count is
+            // weighted by the fixture's (tension-adjusted) importance rung and
+            // the match result, then rounded half-up into the whole-moment
+            // accumulator — one shared formula for both counters:
+            //   contribution = (count × importance_x10 × result_x10 + 50) / 100
+            let result_x10 = match pc_result {
+                1 => crate::tuning::DECISIVE_RESULT_WIN_X10,
+                0 => crate::tuning::DECISIVE_RESULT_DRAW_X10,
+                _ => crate::tuning::DECISIVE_RESULT_LOSS_X10,
+            };
+            let importance_x10 = decisive_effective_importance_x10(&state, fixture_importance);
+            let contribution = |count: u32| (count * importance_x10 * result_x10 + 50) / 100;
+            state.pc_season_decisive_moments += contribution(pc_decisive_count);
+            state.pc_season_clutch_index += contribution(pc_clutch_count);
             if pc_output > 0 {
                 state.pc_season_matches += 1;
+            }
+            if pc_output >= crate::tuning::STANDOUT_OUTPUT_THRESHOLD {
+                state.pc_season_standout_matches += 1;
             }
 
             // Form EMA: form = 0.85 × form + 0.15 × output
@@ -771,7 +1242,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
 
             // Update table raw data.
             // Layout: table_raw[col * N + row] where col ∈ {W=0, D=1, L=2, GF=3, GA=4}
-            let apply_result = |raw: &mut [u32; 80],
+            let apply_result = |raw: &mut [u32; 100],
                                 home_pos: usize,
                                 away_pos: usize,
                                 home_gf: u32,
@@ -822,11 +1293,93 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
     }
 }
 
+/// BL5.2 v2 (league-table tension): the fixture's ×10 importance coefficient,
+/// adjusted for live table stakes late in the season. Only League-family rungs
+/// are tension-adjusted (cup/continental rungs carry their own stakes already),
+/// and only in the final `DECISIVE_TENSION_LAST_ROUNDS` rounds; the check runs
+/// on the table BEFORE this round's results land (the stakes going into the
+/// match). "Alive" is mathematical: the gap can still be closed with the rounds
+/// remaining (max one-sided swing = 3 × rounds left).
+/// - Title race or drop battle still alive → `max(base, DECISIVE_TENSION_X10)`.
+/// - Nothing left on the line (a `League` match only — a Derby keeps its
+///   intrinsic rivalry stakes) → the `DeadRubber` coefficient.
+fn decisive_effective_importance_x10(state: &WorldState, importance: FixtureImportance) -> u32 {
+    use crate::tuning::*;
+    let base = DECISIVE_IMPORTANCE_X10[importance as usize];
+    if !matches!(
+        importance,
+        FixtureImportance::League | FixtureImportance::Derby
+    ) {
+        return base;
+    }
+    if state.season_round + DECISIVE_TENSION_LAST_ROUNDS < DECISIVE_ROUNDS_PER_SEASON {
+        return base;
+    }
+    const N: usize = 20; // CLUBS_PER_DIV — same hand-sync as the table update above
+    let pts = |row: usize| state.table_raw[row] * 3 + state.table_raw[N + row];
+    let mut sorted: Vec<u32> = (0..N).map(&pts).collect();
+    sorted.sort_unstable_by(|a, b| b.cmp(a)); // points only — deterministic, no club identity
+    let pc_pts = pts(state.pc_club_idx as usize % N);
+    let leader_pts = sorted[0];
+    // Points of the last safe club (index N-SPOTS-1): the drop-line reference.
+    let safety_pts = sorted[N - DECISIVE_RELEGATION_SPOTS - 1];
+    // Rounds left AFTER this one; the handler runs before season_round increments.
+    let rounds_left = DECISIVE_ROUNDS_PER_SEASON.saturating_sub(state.season_round + 1);
+    let max_swing = rounds_left * 3;
+    let title_alive = leader_pts - pc_pts <= max_swing;
+    let drop_alive = pc_pts.abs_diff(safety_pts) <= max_swing;
+    if title_alive || drop_alive {
+        base.max(DECISIVE_TENSION_X10)
+    } else if importance == FixtureImportance::League {
+        DECISIVE_IMPORTANCE_X10[FixtureImportance::DeadRubber as usize]
+    } else {
+        base
+    }
+}
+
+/// One REST week: time passes without a training session (untrained match
+/// weeks, break weeks, off-season). Age/injury/energy/decay run via
+/// `week::advance_rest_week`; the live calendar engine still ticks 7 days so
+/// flashpoint windows stay date-aligned. Deterministic — no RNG.
+///
+/// Guarded by the season age cap (START_AGE + season·52) so pathological
+/// fast-forwarding can never compound with rest back-fill past a season-year.
+fn tick_one_rest_week(mut state: WorldState) -> WorldState {
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return state,
+    };
+    let cap = START_AGE_WEEKS + state.season_number * 52;
+    if state.players.get_age_weeks(pc_id) >= cap {
+        return state;
+    }
+
+    crate::week::advance_rest_week(&mut state.players, pc_id, state.pc_lifestyle);
+
+    let (new_epoch, flashpoints) = advance_calendar_week(
+        state.pc_epoch_day,
+        state.world_seed,
+        state.season_number,
+        &state.pc_season_fixtures,
+    );
+    state.pc_epoch_day = new_epoch;
+    state.last_week_flashpoints = flashpoints;
+    state
+}
+
 fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState {
     let pc_id = match state.pc_player_id {
         Some(id) => id,
         None => return state,
     };
+
+    // ── Lifestyle: emergent weekly build-up (bible §8.5/§8.6) ────────────────
+    // Nudge the score from this week's other choices, then derive the cached tier —
+    // BEFORE anything below reads `state.pc_lifestyle` (injury/decline/growth all key
+    // off it). Medium intensity + dev level 0 nudge nothing, so the no-choice path
+    // stays at score 0 / tier Balanced, byte-identical to pre-existing goldens.
+    state = apply_lifestyle_weekly_nudges(state);
+    state.pc_lifestyle = lifestyle_tier_from_score(state.pc_lifestyle_score);
 
     // Snapshot current attrs to compute growth delta for TUI display.
     let before: [Fixed; NUM_ATTRS] = core::array::from_fn(|a| state.players.get_current(pc_id, a));
@@ -872,11 +1425,52 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
     // Advance the CalendarEngine 7 days on its OWN RNG stream (seeded from
     // world_seed) — independent of the growth RNG above, so attribute goldens are
     // untouched. Surfaces window-opening flashpoints for the renderer.
-    let (new_epoch, flashpoints) = advance_calendar_week(state.pc_epoch_day, state.world_seed);
+    let (new_epoch, flashpoints) = advance_calendar_week(
+        state.pc_epoch_day,
+        state.world_seed,
+        state.season_number,
+        &state.pc_season_fixtures,
+    );
     state.pc_epoch_day = new_epoch;
     state.last_week_flashpoints = flashpoints;
 
     state
+}
+
+/// Apply this week's lifestyle-score nudges (bible §8.5): training intensity and
+/// dev-investment level are habits the player repeats every week, so they build up the
+/// emergent lifestyle readout gradually rather than being picked directly.
+fn apply_lifestyle_weekly_nudges(mut state: WorldState) -> WorldState {
+    use crate::tuning::{
+        LIFESTYLE_NUDGE_INTENSITY_HIGH, LIFESTYLE_NUDGE_INTENSITY_LOW,
+        LIFESTYLE_NUDGE_PER_DEV_LEVEL, LIFESTYLE_SCORE_MAX, LIFESTYLE_SCORE_MIN,
+    };
+    use crate::week::Intensity;
+
+    let intensity_nudge = match state.pc_routine.intensity {
+        Intensity::High => LIFESTYLE_NUDGE_INTENSITY_HIGH,
+        Intensity::Low => LIFESTYLE_NUDGE_INTENSITY_LOW,
+        Intensity::Medium => Fixed::ZERO,
+    };
+    let dev_nudge =
+        LIFESTYLE_NUDGE_PER_DEV_LEVEL * Fixed::from_int(state.pc_dev_invest_level as i32);
+
+    state.pc_lifestyle_score = (state.pc_lifestyle_score + intensity_nudge + dev_nudge)
+        .clamp(LIFESTYLE_SCORE_MIN, LIFESTYLE_SCORE_MAX);
+    state
+}
+
+/// Derive the cached lifestyle tier (0=Professional,1=Balanced,2=Flashy) from the
+/// signed lifestyle score (bible §8.6). Thresholds are symmetric around 0.
+pub fn lifestyle_tier_from_score(score: Fixed) -> u8 {
+    use crate::tuning::LIFESTYLE_TIER_THRESHOLD;
+    if score < Fixed::ZERO - LIFESTYLE_TIER_THRESHOLD {
+        0 // Professional
+    } else if score > LIFESTYLE_TIER_THRESHOLD {
+        2 // Flashy
+    } else {
+        1 // Balanced
+    }
 }
 
 /// Whether the player should retire now (bible §8.6): nobody plays past the hard age,
@@ -917,7 +1511,7 @@ mod tests {
         };
         let id = state.players.push(view);
         state.pc_player_id = Some(id);
-        state.pc_club = "Riverside Town";
+        state.pc_club = "Riverside Town".to_string();
         id
     }
 
@@ -1024,6 +1618,32 @@ mod tests {
     }
 
     #[test]
+    fn advance_week_raw_growth_nonzero_but_display_truncates_to_zero() {
+        // Locks in the fix for the "+0 training display" bug (playtest Slice 1):
+        // real growth happens every trained week, but base growth is sub-1.0/week,
+        // so `Fixed::to_int()` truncates it to 0 — a display bug, not a growth bug.
+        // The TUI must format the raw `Fixed` value, never `to_int()`, for this
+        // per-attribute weekly delta.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 30, 99);
+        let routine = Routine {
+            focus_attrs: vec![AttrId::Finishing],
+            intensity: Intensity::Medium,
+        };
+        let s = reduce(s, Intent::SetRoutine { routine }, &mut make_rng());
+        let s = reduce(s, Intent::AdvanceWeek, &mut make_rng());
+        let growth = s.last_week_growth[AttrId::Finishing as usize];
+        assert!(growth > Fixed::ZERO, "expected real growth, got {growth:?}");
+        assert_eq!(
+            growth.to_int(),
+            0,
+            "this test's whole point is a sub-1.0 weekly growth that to_int() truncates to 0 \
+             — if this fails, the growth tuning changed and the test needs a different attr/seed, \
+             not a change to the display fix"
+        );
+    }
+
+    #[test]
     fn advance_weeks_stops_on_event() {
         // Use a seed/state likely to produce an injury within 100 weeks.
         let mut s = WorldState::new();
@@ -1040,5 +1660,363 @@ mod tests {
         let energy = s.players.get_energy(0);
         assert!(energy >= Fixed::ZERO);
         assert!(energy <= Fixed::from_int(100));
+    }
+
+    /// Design round 4, Slice 5 follow-up: the live national-team dispatcher fires this
+    /// intent when the PC's nation wins the tournament their qualifying/knockout run
+    /// just concluded — this is the one new season-live accumulator this slice adds
+    /// (`season_world_cups_won`/`season_continental_championships_won`'s fold into the
+    /// career totals at `ApplySeasonEndLegacy` was already covered by
+    /// `season_end_legacy_folds_national_tournament_wins` in
+    /// `tests/golden_phases_8_10.rs`; this test covers the accumulator itself).
+    #[test]
+    fn national_tournament_win_increments_the_right_season_counter_only() {
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        let s = reduce(
+            s,
+            Intent::ApplyNationalTournamentWin { is_world_cup: true },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_season_world_cups_won, 1);
+        assert_eq!(s.pc_season_continental_championships_won, 0);
+
+        let s = reduce(
+            s,
+            Intent::ApplyNationalTournamentWin {
+                is_world_cup: false,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(
+            s.pc_season_world_cups_won, 1,
+            "a continental-championship win must not also bump the World Cup counter"
+        );
+        assert_eq!(s.pc_season_continental_championships_won, 1);
+    }
+
+    /// BL5.1 goal/assist split: assists accrue per round into the live season counter,
+    /// fold into the career counter at `ApplySeasonEndLegacy`, and reset at
+    /// `StartSeason` — mirroring `pc_season_goals`/`pc_career_goals` exactly.
+    #[test]
+    fn assists_accrue_fold_and_reset_like_goals() {
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        let s = reduce(
+            s,
+            Intent::ApplyRoundResult {
+                competition_id: crate::calendar_loop::LEAGUE_COMPETITION_ID,
+                pc_goals: 2,
+                pc_assists: 1,
+                pc_decisive_count: 0,
+                pc_clutch_count: 0,
+                fixture_importance: goat_calendar::FixtureImportance::League,
+                pc_output: 70,
+                pc_result: 1,
+                round_results: Vec::new(),
+                rest_weeks: 0,
+                week_ends: true,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_season_goals, 2);
+        assert_eq!(s.pc_season_assists, 1);
+        assert_eq!(
+            s.pc_career_assists, 0,
+            "the career counter only folds at season end"
+        );
+
+        let s_goals = s.pc_season_goals;
+        let s_assists = s.pc_season_assists;
+        let s_matches = s.pc_season_matches;
+        let s_output = s.pc_season_output;
+        let s = reduce(
+            s,
+            Intent::ApplySeasonEndLegacy {
+                season_goals: s_goals,
+                season_assists: s_assists,
+                season_matches: s_matches,
+                season_output_sum: s_output,
+                won_title: false,
+                player_of_year: false,
+                finish_position: 10,
+                decisive_moments: 0,
+                season_clutch_index: 0,
+                new_sporting_rep: 50,
+                new_club_fan_rep: 50,
+                season_standout_matches: 0,
+                season_transfer_requests: 0,
+                season_caps: 0,
+                season_international_goals: 0,
+                season_world_cups_won: 0,
+                season_continental_championships_won: 0,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_career_goals, 2);
+        assert_eq!(s.pc_career_assists, 1);
+
+        let s = reduce(s, Intent::StartSeason { fixtures: vec![] }, &mut make_rng());
+        assert_eq!(s.pc_season_goals, 0);
+        assert_eq!(
+            s.pc_season_assists, 0,
+            "season counter resets at StartSeason"
+        );
+        assert_eq!(s.pc_career_assists, 1, "career counter survives the reset");
+    }
+
+    /// BL5.2: the per-round decisive-candidate count is weighted by fixture
+    /// importance and result (rounded half-up), accrues into the live season
+    /// counter, folds into the career counter at season end, and resets at
+    /// StartSeason — the same shape as goals/assists.
+    #[test]
+    fn decisive_moments_are_weighted_accrued_folded_and_reset() {
+        let round = |pc_decisive_count, fixture_importance, pc_result| -> Intent {
+            Intent::ApplyRoundResult {
+                competition_id: crate::calendar_loop::LEAGUE_COMPETITION_ID,
+                pc_goals: 0,
+                pc_assists: 0,
+                pc_decisive_count,
+                pc_clutch_count: 0,
+                fixture_importance,
+                pc_output: 60,
+                pc_result,
+                round_results: Vec::new(),
+                rest_weeks: 0,
+                week_ends: true,
+            }
+        };
+        use goat_calendar::FixtureImportance as FI;
+
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+
+        // Win, League (×10 ×10): (2×10×10 + 50)/100 = 2.
+        let s = reduce(s, round(2, FI::League, 1), &mut make_rng());
+        assert_eq!(s.pc_season_decisive_moments, 2);
+        // Draw, League (×10 ×5): (2×10×5 + 50)/100 = 1 — documents the half-up
+        // rounding: 1.0 exactly, no upward drift.
+        let s = reduce(s, round(2, FI::League, 0), &mut make_rng());
+        assert_eq!(s.pc_season_decisive_moments, 3);
+        // A single drawn League moment: (1×10×5 + 50)/100 = 1 — 0.5 rounds UP.
+        let s = reduce(s, round(1, FI::League, 0), &mut make_rng());
+        assert_eq!(s.pc_season_decisive_moments, 4);
+        // Loss zeroes the contribution entirely, even at final-level importance.
+        let s = reduce(s, round(3, FI::DomesticCupFinal, -1), &mut make_rng());
+        assert_eq!(s.pc_season_decisive_moments, 4);
+        assert_eq!(
+            s.pc_decisive_moments, 0,
+            "career counter only folds at season end"
+        );
+
+        let s_decisive = s.pc_season_decisive_moments;
+        let s = reduce(
+            s,
+            Intent::ApplySeasonEndLegacy {
+                season_goals: 0,
+                season_assists: 0,
+                season_matches: 4,
+                season_output_sum: 240,
+                won_title: false,
+                player_of_year: false,
+                finish_position: 10,
+                decisive_moments: s_decisive,
+                season_clutch_index: 0,
+                new_sporting_rep: 50,
+                new_club_fan_rep: 50,
+                season_standout_matches: 0,
+                season_transfer_requests: 0,
+                season_caps: 0,
+                season_international_goals: 0,
+                season_world_cups_won: 0,
+                season_continental_championships_won: 0,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_decisive_moments, 4);
+
+        let s = reduce(s, Intent::StartSeason { fixtures: vec![] }, &mut make_rng());
+        assert_eq!(s.pc_season_decisive_moments, 0);
+        assert_eq!(
+            s.pc_decisive_moments, 4,
+            "career counter survives the reset"
+        );
+    }
+
+    /// BL5.2 v2 (table tension): late in the season a League match with the title
+    /// race or drop battle mathematically alive is weighted UP (×15), one with
+    /// nothing on the line is weighted DOWN to DeadRubber (×5), and early-season
+    /// matches are never touched. The check reads the table BEFORE the round's
+    /// results land.
+    #[test]
+    fn decisive_weighting_tracks_late_season_table_tension() {
+        use goat_calendar::FixtureImportance as FI;
+        const N: usize = 20;
+
+        // Write a points total into table_raw for one club row (W×3 + D).
+        fn set_pts(raw: &mut [u32; 100], row: usize, pts: u32) {
+            raw[row] = pts / 3;
+            raw[N + row] = pts % 3;
+        }
+        // Baseline table: everyone on 20 except club 1 (the leader) on 70; the
+        // PC (club 0) starts on `pc_pts`.
+        fn table_with(pc_pts: u32) -> [u32; 100] {
+            let mut raw = [0u32; 100];
+            for row in 0..N {
+                set_pts(&mut raw, row, 20);
+            }
+            set_pts(&mut raw, 1, 70);
+            set_pts(&mut raw, 0, pc_pts);
+            raw
+        }
+        fn play_round(s: WorldState, importance: FI, pc_result: i8) -> WorldState {
+            reduce(
+                s,
+                Intent::ApplyRoundResult {
+                    competition_id: crate::calendar_loop::LEAGUE_COMPETITION_ID,
+                    pc_goals: 0,
+                    pc_assists: 0,
+                    pc_decisive_count: 2,
+                    pc_clutch_count: 0,
+                    fixture_importance: importance,
+                    pc_output: 60,
+                    pc_result,
+                    round_results: Vec::new(),
+                    rest_weeks: 0,
+                    week_ends: true,
+                },
+                &mut make_rng(),
+            )
+        }
+
+        // Late season (round 33 of 38 → 4 rounds left, max swing 12).
+        // PC on 60, leader on 70: gap 10 ≤ 12 → title race ALIVE → ×15:
+        // contribution = (2×15×10 + 50)/100 = 3.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.season_round = 33;
+        s.table_raw = table_with(60);
+        let s = play_round(s, FI::League, 1);
+        assert_eq!(
+            s.pc_season_decisive_moments, 3,
+            "live title race weights up"
+        );
+
+        // Same round, PC on 40: 30 off the top (dead) and 20 clear of the drop
+        // line (dead) → DeadRubber ×5: contribution = (2×5×10 + 50)/100 = 1.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.season_round = 33;
+        s.table_raw = table_with(40);
+        let s = play_round(s, FI::League, 1);
+        assert_eq!(s.pc_season_decisive_moments, 1, "dead rubber weights down");
+
+        // Same round, PC on 25: 5 off the last-safe line (20) → drop battle
+        // ALIVE → ×15: contribution = 3.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.season_round = 33;
+        s.table_raw = table_with(25);
+        let s = play_round(s, FI::League, 1);
+        assert_eq!(
+            s.pc_season_decisive_moments, 3,
+            "live drop battle weights up"
+        );
+
+        // Identical table as the title-race case but EARLY (round 10): no tension
+        // window → static League ×10: contribution = (2×10×10 + 50)/100 = 2.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.season_round = 10;
+        s.table_raw = table_with(60);
+        let s = play_round(s, FI::League, 1);
+        assert_eq!(
+            s.pc_season_decisive_moments, 2,
+            "early season ignores the table"
+        );
+
+        // A dead-rubber Derby is NOT downgraded (intrinsic rivalry stakes), but a
+        // live one is still upgraded: dead → ×12 → (2×12×10 + 50)/100 = 2.
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.season_round = 33;
+        s.table_raw = table_with(40);
+        let s = play_round(s, FI::Derby, 1);
+        assert_eq!(s.pc_season_decisive_moments, 2, "dead derby keeps its rung");
+    }
+
+    /// BL5.3: the clutch counter uses the exact same importance×result weighting
+    /// as the decisive counter (one shared formula), accrues live, folds at
+    /// season end, and resets at StartSeason.
+    #[test]
+    fn clutch_index_shares_weighting_and_folds_like_decisive() {
+        use goat_calendar::FixtureImportance as FI;
+        let round = |pc_clutch_count, pc_result| -> Intent {
+            Intent::ApplyRoundResult {
+                competition_id: crate::calendar_loop::LEAGUE_COMPETITION_ID,
+                pc_goals: 0,
+                pc_assists: 0,
+                pc_decisive_count: 0,
+                pc_clutch_count,
+                fixture_importance: FI::League,
+                pc_output: 60,
+                pc_result,
+                round_results: Vec::new(),
+                rest_weeks: 0,
+                week_ends: true,
+            }
+        };
+
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+
+        // Win, League (×10 ×10): (1×10×10 + 50)/100 = 1.
+        let s = reduce(s, round(1, 1), &mut make_rng());
+        assert_eq!(s.pc_season_clutch_index, 1);
+        // Draw, League (×10 ×5): (1×10×5 + 50)/100 = 1 — 0.5 rounds half-up.
+        let s = reduce(s, round(1, 0), &mut make_rng());
+        assert_eq!(s.pc_season_clutch_index, 2);
+        // Loss zeroes the contribution regardless of count.
+        let s = reduce(s, round(5, -1), &mut make_rng());
+        assert_eq!(s.pc_season_clutch_index, 2);
+        // Decisive counter untouched by clutch-only input (and vice versa).
+        assert_eq!(s.pc_season_decisive_moments, 0);
+        assert_eq!(
+            s.pc_career_clutch_index, 0,
+            "career index only folds at season end"
+        );
+
+        let s_clutch = s.pc_season_clutch_index;
+        let s = reduce(
+            s,
+            Intent::ApplySeasonEndLegacy {
+                season_goals: 0,
+                season_assists: 0,
+                season_matches: 3,
+                season_output_sum: 180,
+                won_title: false,
+                player_of_year: false,
+                finish_position: 10,
+                decisive_moments: 0,
+                season_clutch_index: s_clutch,
+                new_sporting_rep: 50,
+                new_club_fan_rep: 50,
+                season_standout_matches: 0,
+                season_transfer_requests: 0,
+                season_caps: 0,
+                season_international_goals: 0,
+                season_world_cups_won: 0,
+                season_continental_championships_won: 0,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_career_clutch_index, 2);
+
+        let s = reduce(s, Intent::StartSeason { fixtures: vec![] }, &mut make_rng());
+        assert_eq!(s.pc_season_clutch_index, 0);
+        assert_eq!(
+            s.pc_career_clutch_index, 2,
+            "career index survives the reset"
+        );
     }
 }

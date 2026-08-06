@@ -5,7 +5,8 @@
 //! and retirement actually reached. This is the whole-game spine test.
 
 use goat_core::attrs::NUM_ATTRS;
-use goat_core::generation::{CreationChoices, Position};
+use goat_core::generation::CreationChoices;
+use goat_core::positions::PrimaryPosition;
 use goat_core::state::{reduce, should_retire, Intent, WorldState};
 use goat_core::week::{Intensity, Routine};
 use goat_rng::GoatRng;
@@ -14,9 +15,9 @@ use goat_rng::GoatRng;
 fn full_career_to_retirement_holds_invariants() {
     let choices = CreationChoices {
         name: "Lifer".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
-        club: "Riverside Town",
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     let mut s = WorldState::new();
     s = reduce(
@@ -30,13 +31,12 @@ fn full_career_to_retirement_holds_invariants() {
     };
     s = reduce(s, Intent::SetRoutine { routine }, &mut GoatRng::new(0));
 
-    // A full off-pitch career: wage, dev investment, a sponsor, a flashy lifestyle.
+    // A full off-pitch career: wage, dev investment, a sponsor. Lifestyle is no longer
+    // picked directly (bible §8.5/§8.6) — it emerges from the High-intensity routine set
+    // above (which nudges toward Professional every week) plus dev investment and the
+    // sponsor signed below (which nudges toward Flashy once). Either way, the invariants
+    // below must hold regardless of which tier the career lands on.
     s.pc_wage_annual = 3_000;
-    s = reduce(
-        s,
-        Intent::SetLifestyle { lifestyle: 2 },
-        &mut GoatRng::new(0),
-    );
     s = reduce(
         s,
         Intent::SetDevInvestment { level: 2 },
@@ -55,6 +55,7 @@ fn full_career_to_retirement_holds_invariants() {
 
     while !should_retire(&s) && weeks < 2_500 {
         s = reduce(s, Intent::AdvanceWeek, &mut rng);
+        s.pc_week_training_done = false; // week boundary — harness has no round loop
         weeks += 1;
 
         // Talent ceiling + energy bounds every single week.

@@ -7,6 +7,7 @@
 use crate::attrs::NUM_ATTRS;
 use crate::positions::PrimaryPosition;
 use crate::roles::{FamiliarityTier, NUM_ROLES};
+use crate::tuning::DURABILITY_X10_NEUTRAL;
 use goat_fixed::Fixed;
 
 /// Opaque player identity — an index into `PlayerStore` columns.
@@ -36,6 +37,10 @@ pub struct PlayerStore {
     pub energy: Vec<Fixed>,
     /// Weeks of injury remaining; 0 = healthy (`[player_id]`).
     pub injury_weeks: Vec<u32>,
+    /// Innate injury-proneness/durability trait (×10 fixed-point; BL7, Design round 9),
+    /// rolled once at creation. Higher = tougher (lower injury risk). Never surfaced in
+    /// any UI/save display — observable only through injury frequency over a career.
+    pub durability_x10: Vec<u8>,
     /// Accumulated XP toward the next familiarity-tier upgrade,
     /// indexed `[role_idx][player_id]`. Resets to 0 on each upgrade.
     pub familiarity_xp: [Vec<Fixed>; NUM_ROLES],
@@ -53,6 +58,7 @@ impl PlayerStore {
             age_weeks: Vec::new(),
             energy: Vec::new(),
             injury_weeks: Vec::new(),
+            durability_x10: Vec::new(),
             familiarity_xp: core::array::from_fn(|_| Vec::new()),
         }
     }
@@ -82,6 +88,7 @@ impl PlayerStore {
         self.age_weeks.push(view.age_weeks);
         self.energy.push(view.energy);
         self.injury_weeks.push(view.injury_weeks);
+        self.durability_x10.push(view.durability_x10);
         id
     }
 
@@ -150,6 +157,11 @@ impl PlayerStore {
         self.injury_weeks[player] = weeks;
     }
 
+    /// Innate durability trait (×10 fixed-point; BL7). Never surfaced raw in any UI.
+    pub fn get_durability_x10(&self, player: PlayerId) -> u8 {
+        self.durability_x10[player]
+    }
+
     /// Produce an owned ergonomic snapshot of a single player.
     pub fn snapshot(&self, player: PlayerId) -> PlayerView {
         let mut current = [Fixed::ZERO; NUM_ATTRS];
@@ -178,6 +190,7 @@ impl PlayerStore {
             age_weeks: self.age_weeks[player],
             energy: self.energy[player],
             injury_weeks: self.injury_weeks[player],
+            durability_x10: self.durability_x10[player],
         }
     }
 
@@ -215,6 +228,9 @@ pub struct PlayerView {
     pub age_weeks: u32,
     pub energy: Fixed,
     pub injury_weeks: u32,
+    /// Innate durability trait (×10 fixed-point; BL7, Design round 9). Rolled once at
+    /// creation in `generate_player`; never surfaced raw in any UI.
+    pub durability_x10: u8,
 }
 
 impl PlayerView {
@@ -239,6 +255,56 @@ impl Default for PlayerView {
             age_weeks: 16 * 52, // 832
             energy: Fixed::raw(90_000),
             injury_weeks: 0,
+            durability_x10: DURABILITY_X10_NEUTRAL as u8,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::Path;
+
+    /// Grep-level check (TDD anchor `durability_never_serialized_or_displayed_raw`):
+    /// `durability_x10` is a hidden, innate trait (BL7, Design round 9) — no UI/DTO
+    /// crate may reference it. It's expected to appear only inside `goat-core` itself
+    /// (this column, its accessor, the roll site in `generation.rs`, and the formula in
+    /// `week.rs`). `goat-tui` (screens), `goat-save` (persisted/display DTOs), and
+    /// `goat-bridge` (Flutter-facing API DTOs) must never mention it.
+    #[test]
+    fn durability_never_serialized_or_displayed_raw() {
+        let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let workspace_root = manifest_dir
+            .parent()
+            .and_then(Path::parent)
+            .expect("goat-core lives at <workspace>/crates/goat-core");
+
+        for crate_name in ["goat-tui", "goat-save", "goat-bridge"] {
+            let src_dir = workspace_root.join("crates").join(crate_name).join("src");
+            let mut offenders = Vec::new();
+            visit_rust_files(&src_dir, &mut offenders);
+            assert!(
+                offenders.is_empty(),
+                "durability_x10 must never be surfaced in {crate_name}, found in: {offenders:?}"
+            );
+        }
+    }
+
+    fn visit_rust_files(dir: &Path, offenders: &mut Vec<String>) {
+        let Ok(entries) = fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                visit_rust_files(&path, offenders);
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                if let Ok(contents) = fs::read_to_string(&path) {
+                    if contents.contains("durability_x10") || contents.contains("durability") {
+                        offenders.push(path.display().to_string());
+                    }
+                }
+            }
         }
     }
 }

@@ -6,12 +6,14 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use goat_core::{
     attrs::{AttrId, ATTR_NAMES, NUM_ATTRS},
+    calendar_loop::LEAGUE_COMPETITION_ID,
     derive::{derive_attrs, ovr, role_rating},
-    generation::{CreationChoices, Position},
+    generation::CreationChoices,
+    positions::PrimaryPosition,
     roles::{RoleId, NUM_ROLES},
     state::{reduce, Intent, PeerState, WorldState},
     week::{Intensity, Routine},
@@ -29,16 +31,54 @@ use goat_meta::{
 use goat_rng::{GoatRng, RngSource};
 use goat_traits::PlayerTraits;
 use goat_world::{
-    format_match_date, format_week_header, is_break_week, round_to_week, week_to_rounds, Table,
-    BASE_CAREER_YEAR, CLUBS, CLUBS_PER_DIV, DIV_CLUBS, DIV_NAMES, DIV_NATIONS, ROUNDS_PER_SEASON,
-    SEASON_CALENDAR_WEEKS,
+    format_match_date, format_week_header, is_break_week,
+    promotion::{apply_season_end_for_nation, effective_league_clubs, sim_league_season},
+    round_to_week, week_to_rounds,
+    world::WorldGenesis,
+    Table, ROUNDS_PER_SEASON, SEASON_CALENDAR_WEEKS,
 };
+
+/// Current membership of `league_id` in the live pipeline (A3.3): the persisted
+/// promotion-advanced membership for the PC's nation's leagues, genesis-static
+/// otherwise. The bridge's shared `Arc<WorldGenesis>` is never mutated — drift
+/// lives only in `WorldState::pc_nation_membership`.
+fn live_league_clubs(world: &WorldGenesis, state: &WorldState, league_id: usize) -> Vec<usize> {
+    let pc_nation = world.leagues[state.pc_div_idx as usize].nation;
+    effective_league_clubs(world, pc_nation, &state.pc_nation_membership, league_id)
+}
 
 // ── Global singleton ──────────────────────────────────────────────────────────
 
 static GAME: Mutex<Option<WorldState>> = Mutex::new(None);
 static ACTIVE_MATCH: Mutex<Option<ActiveMatchSession>> = Mutex::new(None);
 static BEAT_LIB: Mutex<Option<BeatLibrary>> = Mutex::new(None);
+/// Cache of the last generated `WorldGenesis`, keyed by `world_seed`. Building the
+/// ~1,200-club world is not free, and every session-scoped function below is keyed off
+/// a single `world_seed` (the one on the active `WorldState`), so a one-entry cache
+/// avoids regenerating it on every call while staying correct if the seed ever changes
+/// (e.g. loading a different save) — no `WorldGenesis` is ever persisted, it is always
+/// rebuilt from the seed, same "seed is the universe" pattern the crate uses elsewhere.
+static WORLD_CACHE: Mutex<Option<(u64, Arc<WorldGenesis>)>> = Mutex::new(None);
+
+/// Fixed seed used only for the pre-game club/nation/league picker (`list_clubs`), which
+/// has no `WorldState` (and therefore no real `world_seed`) to key off yet — `new_game`'s
+/// own `seed` argument is what actually seeds the played world. Flutter should treat the
+/// picker's club identities as flavor for club/nation/league *shape* (names, tiers,
+/// strengths) rather than as guaranteed-stable ids across into the real game world.
+const PICKER_WORLD_SEED: u64 = 0;
+
+/// Get (building + caching if needed) the `WorldGenesis` for `world_seed`.
+fn get_world(world_seed: u64) -> Arc<WorldGenesis> {
+    let mut lock = WORLD_CACHE.lock().expect("world cache lock poisoned");
+    if let Some((seed, world)) = lock.as_ref() {
+        if *seed == world_seed {
+            return Arc::clone(world);
+        }
+    }
+    let world = Arc::new(WorldGenesis::generate(world_seed));
+    *lock = Some((world_seed, Arc::clone(&world)));
+    world
+}
 
 /// Bundled beats.json compiled into the binary as a fallback.
 const BUNDLED_BEATS_JSON: &str = include_str!("../../../beats.json");
@@ -95,12 +135,13 @@ struct ActiveMatchSession {
     div_idx: usize,
     season: u32,
     world_seed: u64,
-    opp_name: &'static str,
+    opp_name: String,
 }
 
 // ── Data Transfer Objects ─────────────────────────────────────────────────────
 
 /// Flat snapshot of game state returned to Dart after every mutation.
+#[derive(Debug, Clone, PartialEq)]
 pub struct GoatGameState {
     pub player_name: String,
     pub age_years: u32,
@@ -108,7 +149,8 @@ pub struct GoatGameState {
     pub energy: i32, // 0–100
     pub ovr: i32,    // 0–100
     pub injury_weeks: u32,
-    pub position: u8, // 0=Defender 1=Mid 2=Forward
+    /// PrimaryPosition discriminant: 0=ST 1=W 2=WM 3=CAM 4=CM 5=DM 6=FB 7=CB.
+    pub position: u8,
     pub club_name: String,
     pub div_name: String,
     pub nationality: String,
@@ -211,6 +253,7 @@ pub struct TableRowDto {
     pub is_player_club: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct MatchResultDto {
     pub player_output: i32,
     pub goals_for: u32,
@@ -269,9 +312,12 @@ pub struct TransferOfferDto {
     pub strength: u8,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct WeekFixtureDto {
     /// 0-indexed round index.
     pub round: u32,
+    /// 0-indexed calendar week this round falls in (see goat_world::calendar).
+    pub calendar_week: u32,
     pub opponent: String,
     pub opp_strength: u8,
     pub is_home: bool,
@@ -330,6 +376,22 @@ pub struct BeatOutcomeDto {
 
 // ── Builder helpers ───────────────────────────────────────────────────────────
 
+/// Family-representative match role for a specific position (0..7 PrimaryPosition
+/// discriminant). Deploying the player in their exact role (Winger vs Poacher …)
+/// is the TASK-CORE-creation-role-choice follow-up; until then the match engine
+/// uses one anchor role per broad family, matching pre-revision behaviour.
+fn match_role_for_position(pc_position: u8) -> RoleId {
+    use goat_core::roles::PositionFamily;
+    match PrimaryPosition::from_u8(pc_position)
+        .unwrap_or(PrimaryPosition::ST)
+        .family()
+    {
+        PositionFamily::Defender => RoleId::CentreBack,
+        PositionFamily::Midfielder => RoleId::CentralMid,
+        PositionFamily::Forward => RoleId::CompleteForward,
+    }
+}
+
 fn build_game_state(s: &WorldState) -> GoatGameState {
     let pc_id = match s.pc_player_id {
         Some(id) => id,
@@ -351,7 +413,7 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
                 form: s.pc_form.to_int(),
                 season_goals: s.pc_season_goals,
                 season_matches: s.pc_season_matches,
-                is_suspended: s.pc_suspension_weeks > 0,
+                is_suspended: s.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0,
                 contract_seasons_left: s.pc_contract_seasons_left,
                 wage_annual: s.pc_wage_annual,
                 savings: s.pc_savings,
@@ -399,12 +461,13 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
         .map(|p| p.name.clone())
         .unwrap_or_default();
 
+    let world = get_world(s.world_seed);
     let div_name = if s.season_number > 0 {
-        DIV_NAMES
+        world
+            .leagues
             .get(s.pc_div_idx as usize)
-            .copied()
-            .unwrap_or("")
-            .to_string()
+            .map(|l| l.name.clone())
+            .unwrap_or_default()
     } else {
         String::new()
     };
@@ -434,7 +497,7 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
     } else {
         0
     };
-    let season_year = BASE_CAREER_YEAR + s.season_number.saturating_sub(1);
+    let season_year = s.career_base_year + s.season_number.saturating_sub(1);
     let cal_week_label = if s.season_number > 0 {
         format_week_header(season_year, cal_week)
     } else {
@@ -448,11 +511,13 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
     if s.season_number > 0 {
         let div_idx = s.pc_div_idx as usize;
         let pc_club_id = s.pc_club_idx as usize;
+        let div_clubs = &live_league_clubs(&world, s, div_idx);
         for (slot, round_idx) in week_rounds.clone().enumerate() {
             let fixture = goat_world::fixture_for_round(
                 s.world_seed,
                 s.season_number,
                 div_idx,
+                div_clubs,
                 pc_club_id,
                 round_idx,
             );
@@ -461,8 +526,9 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
                 let opp_id = if is_home { f.away } else { f.home };
                 week_fixtures.push(WeekFixtureDto {
                     round: round_idx as u32,
-                    opponent: CLUBS[opp_id].name.to_string(),
-                    opp_strength: CLUBS[opp_id].strength,
+                    calendar_week: cal_week as u32,
+                    opponent: world.clubs[opp_id].name.to_string(),
+                    opp_strength: world.clubs[opp_id].strength,
                     is_home,
                     played: (round_idx as u32) < s.season_round,
                     date: format_match_date(season_year, cal_week, slot),
@@ -488,7 +554,7 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
         form: s.pc_form.to_int(),
         season_goals: s.pc_season_goals,
         season_matches: s.pc_season_matches,
-        is_suspended: s.pc_suspension_weeks > 0,
+        is_suspended: s.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0,
         contract_seasons_left: s.pc_contract_seasons_left,
         wage_annual: s.pc_wage_annual,
         savings: s.pc_savings,
@@ -573,15 +639,16 @@ pub fn load_beat_library(json: String) -> bool {
 
 /// List all clubs across all divisions for the new-game picker.
 pub fn list_clubs() -> Vec<ClubDto> {
+    let world = get_world(PICKER_WORLD_SEED);
     let mut result = Vec::new();
-    for (div_idx, &div_club_ids) in DIV_CLUBS.iter().enumerate() {
-        for &club_id in &div_club_ids {
-            let club = &CLUBS[club_id];
+    for (div_idx, league) in world.leagues.iter().enumerate() {
+        for &club_id in &league.clubs {
+            let club = &world.clubs[club_id];
             result.push(ClubDto {
                 club_id: club_id as u32,
                 name: club.name.to_string(),
                 strength: club.strength,
-                div_name: DIV_NAMES[div_idx].to_string(),
+                div_name: league.name.clone(),
                 div_idx: div_idx as u32,
             });
         }
@@ -590,31 +657,40 @@ pub fn list_clubs() -> Vec<ClubDto> {
 }
 
 /// Start a new game. Returns the initial game state snapshot.
+///
+/// `position` accepts the full 0..7 `PrimaryPosition` range (widened from the old 0..2
+/// broad-family range — bible §4 revision, TASK-CORE-creation-role-choice): 0=ST, 1=W,
+/// 2=WM, 3=CAM, 4=CM, 5=DM, 6=FB, 7=CB. Out-of-range values default to ST.
+///
+/// `lifestyle` is accepted only for FFI binary compatibility with the existing
+/// `frb_generated.rs` signature — it is now ignored. Lifestyle is derived (bible
+/// §8.5/§8.6) from training intensity, dev investment and sponsor choices over the
+/// career; read it back via the `lifestyle` field on `GoatGameState`.
 pub fn new_game(
     player_name: String,
-    position: u8, // 0=Def 1=Mid 2=Fwd
+    position: u8,
     club_id: u32,
     seed: u64,
-    lifestyle: u8, // 0=Professional 1=Balanced 2=Flashy
+    _lifestyle: u8,
 ) -> GoatGameState {
     let club_id = club_id as usize;
-    let club = &CLUBS[club_id];
+    // The actual played world is generated from `seed` (the real game seed), not
+    // `PICKER_WORLD_SEED` — `club_id` is treated as a stable index into whichever world
+    // is generated (see `PICKER_WORLD_SEED`'s doc comment above).
+    let world = get_world(seed);
+    let club = &world.clubs[club_id];
 
     // Find which division this club belongs to.
-    let div_idx = goat_world::world::club_division(club_id);
-    let nationality = DIV_NATIONS[div_idx].name();
+    let div_idx = world.club_league(club_id);
+    let nationality = world.nation_name(club.nation).to_string();
 
-    let pos = match position {
-        0 => Position::Defender,
-        1 => Position::Midfielder,
-        _ => Position::Forward,
-    };
+    let primary_position = PrimaryPosition::from_u8(position).unwrap_or(PrimaryPosition::ST);
 
     let choices = CreationChoices {
         name: player_name,
-        position: pos,
-        nationality,
-        club: club.name,
+        primary_position,
+        nationality: nationality.clone(),
+        club: club.name.clone(),
     };
 
     let mut state = WorldState::new();
@@ -630,24 +706,43 @@ pub fn new_game(
             pc_club_idx: club_id as u16,
             pc_div_idx: div_idx as u8,
             facilities_mult: club.facilities_mult(),
-            initial_table: Box::new([0u32; 80]),
+            initial_table: Box::new([0u32; 100]),
         },
-        &mut GoatRng::new(0),
-    );
-    state = reduce(
-        state,
-        Intent::SetLifestyle { lifestyle },
         &mut GoatRng::new(0),
     );
 
     // Seed peer cohort.
-    let peers = build_peers(seed, nationality);
+    let peers = build_peers(seed, &nationality);
     state = reduce(state, Intent::InitPeers { peers }, &mut GoatRng::new(0));
-    state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+    state = reduce(
+        state,
+        Intent::StartSeason { fixtures: vec![] },
+        &mut GoatRng::new(0),
+    );
+    // Career epoch: read wall-clock HERE (the bridge is the outer layer for the
+    // Flutter client) exactly once at new-game — never inside the core (§9).
+    // Persisted in the save (v19+). Not a new FFI param: the existing signature
+    // stays frb-compatible.
+    state.career_base_year = current_year();
 
     let snapshot = build_game_state(&state);
     set_state(state);
     snapshot
+}
+
+/// Current real-world year from wall-clock — bridge-layer only (§9 bans
+/// wall-clock inside the core). Exact civil-from-days conversion (Howard
+/// Hinnant's algorithm), integer-only, no chrono. Mirrors goat-tui's helper.
+fn current_year() -> u32 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    (yoe + era * 400) as u32
 }
 
 fn build_peers(world_seed: u64, nationality: &str) -> Vec<PeerState> {
@@ -676,17 +771,12 @@ fn build_peers(world_seed: u64, nationality: &str) -> Vec<PeerState> {
     } else {
         &eng_names
     };
-    let nat: &'static str = if nationality == "Brazil" {
-        "Brazil"
-    } else {
-        "England"
-    };
     let mut rng = GoatRng::new(world_seed ^ 0x00C0_CAFE_BEEF_u64);
     (0..8)
         .map(|i| PeerState {
             seed: rng.next_u64(),
             name: names[i].to_string(),
-            nationality: nat,
+            nationality: nationality.to_string(),
             career_goals: 0,
             career_matches: 0,
             avg_output: 0,
@@ -701,21 +791,66 @@ pub fn advance_week() -> GoatGameState {
     let pc_id = state.pc_player_id.unwrap_or(0);
     let view = state.players.snapshot(pc_id);
     let seed = (view.age_weeks as u64).wrapping_mul(6364136223846793005);
-    let mut state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(seed));
-    state.pc_week_training_done = true;
+    let state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(seed));
     let snap = build_game_state(&state);
     set_state(state);
     snap
 }
 
+/// True if the club's current calendar week has a scheduled fixture that hasn't
+/// been played yet. `AdvanceWeeks` never touches `season_round` (only playing a
+/// match does), so this can only be true at call time — it can't newly become
+/// true partway through the skipped weeks.
+fn current_week_has_pending_match(state: &WorldState) -> bool {
+    if state.season_number == 0 || state.season_round >= ROUNDS_PER_SEASON as u32 {
+        return false;
+    }
+    let cal_week = round_to_week(state.season_round.min(ROUNDS_PER_SEASON as u32 - 1) as usize);
+    if is_break_week(cal_week) {
+        return false;
+    }
+    let week_rounds = week_to_rounds(cal_week);
+    let played = state.season_round.saturating_sub(week_rounds.start as u32) as usize;
+    played < week_rounds.len()
+}
+
 /// Advance up to `n` weeks, stopping at notable events.
+///
+/// Caps the actual number of weeks ticked to at most 1 while this week's
+/// fixture(s) are unplayed (0 if this week's training is already done too) —
+/// otherwise the player's age/development clock (ticked here) would drift
+/// arbitrarily far ahead of the match calendar (only advanced by actually
+/// playing), leaving fixtures stuck unplayed indefinitely with no way back.
+/// A single extra tick is still allowed so this doesn't regress the ordinary
+/// "train, then play this week's match" flow — only unbounded multi-week
+/// skips past an unresolved fixture are blocked.
 pub fn advance_weeks(n: u32) -> GoatGameState {
     let state = take_state();
+    let pending = current_week_has_pending_match(&state);
+    let effective_n = if pending {
+        if state.pc_week_training_done {
+            0
+        } else {
+            n.min(1)
+        }
+    } else {
+        n
+    };
+    let capped = effective_n < n;
+
     let pc_id = state.pc_player_id.unwrap_or(0);
     let view = state.players.snapshot(pc_id);
     let seed = (view.age_weeks as u64).wrapping_mul(6364136223846793005);
-    let state = reduce(state, Intent::AdvanceWeeks { n }, &mut GoatRng::new(seed));
-    let snap = build_game_state(&state);
+    let state = reduce(
+        state,
+        Intent::AdvanceWeeks { n: effective_n },
+        &mut GoatRng::new(seed),
+    );
+    let mut snap = build_game_state(&state);
+    if capped {
+        snap.last_events
+            .push("Play this week's match(es) to keep fast-forwarding.".to_string());
+    }
     set_state(state);
     snap
 }
@@ -771,120 +906,173 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
     let div_idx = state.pc_div_idx as usize;
     let pc_club_id = state.pc_club_idx as usize;
     let world_seed = state.world_seed;
+    let world = get_world(world_seed);
+    let div_clubs = live_league_clubs(&world, &state, div_idx);
 
     let match_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
     let mut match_rng = GoatRng::new(match_seed);
 
+    // A suspended player's club still plays the fixture, but the PC doesn't
+    // personally take part (bible AC-06: the ban is served by the round being
+    // played, not by the PC's own participation).
+    let is_suspended = state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0;
+
     // Sim PC match.
-    let pc_fixture = goat_world::fixture_for_round(world_seed, season, div_idx, pc_club_id, round);
-    let (pc_goals, pc_output, pc_result, match_dto) = if let Some(f) = pc_fixture {
-        let is_home = f.home == pc_club_id;
-        let opp_id = if is_home { f.away } else { f.home };
-        let opp = &CLUBS[opp_id];
-        let own_str = CLUBS[pc_club_id].strength;
+    let pc_fixture =
+        goat_world::fixture_for_round(world_seed, season, div_idx, &div_clubs, pc_club_id, round);
+    let (pc_goals, pc_assists, pc_decisive, pc_clutch, pc_output, pc_result, match_dto) =
+        if let Some(f) = pc_fixture {
+            let is_home = f.home == pc_club_id;
+            let opp_id = if is_home { f.away } else { f.home };
+            let opp = &world.clubs[opp_id];
+            let own_str = world.clubs[pc_club_id].strength;
 
-        let pc_id = state.pc_player_id.unwrap_or(0);
-        let view = state.players.snapshot(pc_id);
+            if is_suspended {
+                let (gf, ga) = goat_world::sim_team_match(own_str, opp.strength, &mut match_rng);
+                (
+                    0,
+                    0,
+                    0,
+                    0,
+                    0,
+                    0i8,
+                    MatchResultDto {
+                        player_output: 0,
+                        goals_for: gf,
+                        goals_against: ga,
+                        rating_label: "SUSPENDED".to_string(),
+                        moments: Vec::new(),
+                        yellow_cards: 0,
+                        red_card: false,
+                    },
+                )
+            } else {
+                let pc_id = state.pc_player_id.unwrap_or(0);
+                let view = state.players.snapshot(pc_id);
 
-        let ref_personality = {
-            let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
-            RefPersonality::from_rng(&mut rp_rng)
-        };
-
-        let setup = MatchSetup {
-            player_role: match state.pc_position {
-                0 => goat_core::roles::RoleId::CentreBack,
-                1 => goat_core::roles::RoleId::CentralMid,
-                _ => goat_core::roles::RoleId::CompleteForward,
-            },
-            player_attrs: view.current,
-            player_familiarity: view.familiarity,
-            own_strength: own_str,
-            opp_strength: opp.strength,
-            opp_name: opp.name,
-            form: state.pc_form,
-            player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
-                .to_int()
-                .clamp(1, 99) as u8,
-            ref_personality,
-            dirty_rep: state.pc_discipline_rep,
-            player_traits: PlayerTraits::default(),
-        };
-
-        let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
-
-        let stars = "★".repeat((result.player_output / 20 + 1).clamp(1, 5) as usize)
-            + &"☆".repeat(5 - (result.player_output / 20 + 1).clamp(1, 5) as usize);
-        let moments: Vec<String> = result
-            .moments
-            .iter()
-            .filter(|m| m.goal_event.is_some() || m.success)
-            .take(5)
-            .map(|m| {
-                let icon = match m.goal_event {
-                    Some(goat_match::beats::ScoreEvent::GoalFor) => "⚽",
-                    Some(goat_match::beats::ScoreEvent::GoalAgainst) => "❌",
-                    None => {
-                        if m.success {
-                            "✓"
-                        } else {
-                            "✗"
-                        }
-                    }
+                let ref_personality = {
+                    let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+                    RefPersonality::from_rng(&mut rp_rng)
                 };
-                format!("{icon} {}'  {}", m.minute, m.outcome_text)
-            })
-            .collect();
 
-        let pc_goals = result
-            .moments
-            .iter()
-            .filter(|m| matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::GoalFor)))
-            .count() as u32;
-        let pc_result: i8 = if result.goals_for > result.goals_against {
-            1
-        } else if result.goals_for < result.goals_against {
-            -1
+                let setup = MatchSetup {
+                    player_role: match_role_for_position(state.pc_position),
+                    player_attrs: view.current,
+                    player_familiarity: view.familiarity,
+                    own_strength: own_str,
+                    opp_strength: opp.strength,
+                    opp_name: opp.name.clone(),
+                    form: state.pc_form,
+                    player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+                        .to_int()
+                        .clamp(1, 99) as u8,
+                    ref_personality,
+                    dirty_rep: state.pc_discipline_rep,
+                    player_traits: PlayerTraits::default(),
+                };
+
+                let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
+
+                let stars = "★".repeat((result.player_output / 20 + 1).clamp(1, 5) as usize)
+                    + &"☆".repeat(5 - (result.player_output / 20 + 1).clamp(1, 5) as usize);
+                let moments: Vec<String> = result
+                    .moments
+                    .iter()
+                    .filter(|m| m.goal_event.is_some() || m.success)
+                    .take(5)
+                    .map(|m| {
+                        let icon = match m.goal_event {
+                            Some(goat_match::beats::ScoreEvent::GoalFor) => "⚽",
+                            Some(goat_match::beats::ScoreEvent::AssistFor) => "🅰",
+                            Some(goat_match::beats::ScoreEvent::GoalAgainst) => "❌",
+                            None => {
+                                if m.success {
+                                    "✓"
+                                } else {
+                                    "✗"
+                                }
+                            }
+                        };
+                        format!("{icon} {}'  {}", m.minute, m.outcome_text)
+                    })
+                    .collect();
+
+                let pc_goals = result
+                    .moments
+                    .iter()
+                    .filter(|m| {
+                        matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::GoalFor))
+                    })
+                    .count() as u32;
+                let pc_assists = result
+                    .moments
+                    .iter()
+                    .filter(|m| {
+                        matches!(m.goal_event, Some(goat_match::beats::ScoreEvent::AssistFor))
+                    })
+                    .count() as u32;
+                let pc_decisive = result
+                    .moments
+                    .iter()
+                    .filter(|m| goat_match::sim::is_decisive(m))
+                    .count() as u32;
+                let pc_clutch = result
+                    .moments
+                    .iter()
+                    .filter(|m| goat_match::sim::is_clutch(m))
+                    .count() as u32;
+                let pc_result: i8 = if result.goals_for > result.goals_against {
+                    1
+                } else if result.goals_for < result.goals_against {
+                    -1
+                } else {
+                    0
+                };
+
+                (
+                    pc_goals,
+                    pc_assists,
+                    pc_decisive,
+                    pc_clutch,
+                    result.player_output,
+                    pc_result,
+                    MatchResultDto {
+                        player_output: result.player_output,
+                        goals_for: result.goals_for,
+                        goals_against: result.goals_against,
+                        rating_label: stars,
+                        moments,
+                        yellow_cards: result.yellow_cards as u32,
+                        red_card: result.red_card,
+                    },
+                )
+            }
         } else {
-            0
+            (
+                0,
+                0,
+                0,
+                0,
+                0,
+                0i8,
+                MatchResultDto {
+                    player_output: 0,
+                    goals_for: 0,
+                    goals_against: 0,
+                    rating_label: String::new(),
+                    moments: Vec::new(),
+                    yellow_cards: 0,
+                    red_card: false,
+                },
+            )
         };
-
-        (
-            pc_goals,
-            result.player_output,
-            pc_result,
-            MatchResultDto {
-                player_output: result.player_output,
-                goals_for: result.goals_for,
-                goals_against: result.goals_against,
-                rating_label: stars,
-                moments,
-                yellow_cards: result.yellow_cards as u32,
-                red_card: result.red_card,
-            },
-        )
-    } else {
-        (
-            0,
-            0,
-            0i8,
-            MatchResultDto {
-                player_output: 0,
-                goals_for: 0,
-                goals_against: 0,
-                rating_label: String::new(),
-                moments: Vec::new(),
-                yellow_cards: 0,
-                red_card: false,
-            },
-        )
-    };
 
     // Sim all round fixtures.
-    let all_fixtures = goat_world::round_fixtures(world_seed, season, div_idx, round);
+    let all_fixtures = goat_world::round_fixtures(world_seed, season, div_idx, &div_clubs, round);
     let sim_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
     let mut sim_rng = GoatRng::new(sim_seed);
-    let pc_fixture = goat_world::fixture_for_round(world_seed, season, div_idx, pc_club_id, round);
+    let pc_fixture =
+        goat_world::fixture_for_round(world_seed, season, div_idx, &div_clubs, pc_club_id, round);
 
     let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
     for f in &all_fixtures {
@@ -900,16 +1088,14 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
                 (0, 0)
             }
         } else {
-            goat_world::sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng)
+            goat_world::sim_team_match(
+                world.clubs[f.home].strength,
+                world.clubs[f.away].strength,
+                &mut sim_rng,
+            )
         };
-        let h_pos = DIV_CLUBS[div_idx]
-            .iter()
-            .position(|&c| c == f.home)
-            .unwrap_or(0) as u8;
-        let a_pos = DIV_CLUBS[div_idx]
-            .iter()
-            .position(|&c| c == f.away)
-            .unwrap_or(0) as u8;
+        let h_pos = div_clubs.iter().position(|&c| c == f.home).unwrap_or(0) as u8;
+        let a_pos = div_clubs.iter().position(|&c| c == f.away).unwrap_or(0) as u8;
         round_results.push((h_pos, a_pos, gf, ga));
     }
 
@@ -927,6 +1113,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
         state = reduce(
             state,
             Intent::ApplyCardResult {
+                competition_id: LEAGUE_COMPETITION_ID,
                 yellow_cards: match_dto.yellow_cards,
                 red_card: match_dto.red_card,
             },
@@ -936,24 +1123,76 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
     state = reduce(
         state,
         Intent::ApplyRoundResult {
+            competition_id: LEAGUE_COMPETITION_ID,
             pc_goals,
+            pc_assists,
+            pc_decisive_count: pc_decisive,
+            pc_clutch_count: pc_clutch,
+            fixture_importance: goat_core::state::FixtureImportance::League,
             pc_output,
             pc_result,
             round_results,
+            rest_weeks: goat_world::rest_weeks_after_round(round),
+            week_ends: goat_world::week_ends_after_round(round),
         },
         &mut GoatRng::new(0),
     );
 
-    // Reset training flag when we've crossed into a new calendar week.
+    // Training flag is reset by the ApplyRoundResult reducer (the player can
+    // train before each round). Update the stored calendar week if it changed.
     let new_cal_week = round_to_week((state.season_round as usize).min(ROUNDS_PER_SEASON - 1));
     if new_cal_week != old_cal_week {
-        state.pc_week_training_done = false;
         state.pc_current_calendar_week = new_cal_week as u32;
     }
 
     let snap = build_game_state(&state);
     set_state(state);
     (snap, match_dto)
+}
+
+/// Get every fixture for the player's club across the full season, not just
+/// the current calendar week. Fixture generation is deterministic and pure
+/// (see `goat_world::fixtures` — "never stored, always recomputed"), so the
+/// entire season's schedule already exists the moment a season starts; this
+/// just exposes it instead of recomputing only the current week's slice.
+pub fn get_full_season_fixtures() -> Vec<WeekFixtureDto> {
+    with_state(|s| {
+        if s.season_number == 0 {
+            return Vec::new();
+        }
+        let div_idx = s.pc_div_idx as usize;
+        let pc_club_id = s.pc_club_idx as usize;
+        let season_year = s.career_base_year + s.season_number.saturating_sub(1);
+        let world = get_world(s.world_seed);
+        let div_clubs = &live_league_clubs(&world, s, div_idx);
+
+        goat_world::fixtures_for_club(
+            s.world_seed,
+            s.season_number,
+            div_idx,
+            div_clubs,
+            pc_club_id,
+        )
+        .into_iter()
+        .map(|f| {
+            let cal_week = round_to_week(f.round);
+            let slot = week_to_rounds(cal_week)
+                .position(|r| r == f.round)
+                .unwrap_or(0);
+            let is_home = f.home == pc_club_id;
+            let opp_id = if is_home { f.away } else { f.home };
+            WeekFixtureDto {
+                round: f.round as u32,
+                calendar_week: cal_week as u32,
+                opponent: world.clubs[opp_id].name.to_string(),
+                opp_strength: world.clubs[opp_id].strength,
+                is_home,
+                played: (f.round as u32) < s.season_round,
+                date: format_match_date(season_year, cal_week, slot),
+            }
+        })
+        .collect()
+    })
 }
 
 /// Get the current league table.
@@ -963,15 +1202,16 @@ pub fn get_table() -> Vec<TableRowDto> {
             return Vec::new();
         }
         let div_idx = s.pc_div_idx as usize;
-        let div_clubs = DIV_CLUBS[div_idx];
-        let table = Table::from_raw(&s.table_raw, &div_clubs);
+        let world = get_world(s.world_seed);
+        let div_clubs = &live_league_clubs(&world, s, div_idx);
+        let table = Table::from_raw(&s.table_raw, div_clubs);
         let sorted = table.sorted();
         sorted
             .iter()
             .enumerate()
             .map(|(rank, e)| TableRowDto {
                 position: rank as u32 + 1,
-                club_name: CLUBS[e.club_id].name.to_string(),
+                club_name: world.clubs[e.club_id].name.to_string(),
                 played: e.played(),
                 won: e.w,
                 drawn: e.d,
@@ -1103,9 +1343,16 @@ pub fn get_legacy() -> LegacyDto {
             league_titles: s.pc_league_titles,
             clubs_served: s.pc_clubs_served,
             longest_club_tenure: s.pc_longest_club_tenure,
+            career_standout_matches: s.pc_career_standout_matches,
+            career_best_ovr: s.pc_career_best_ovr,
+            career_transfer_requests: s.pc_career_transfer_requests,
+            career_caps: s.pc_career_caps,
+            career_international_goals: s.pc_career_international_goals,
+            career_world_cups_won: s.pc_career_world_cups_won,
+            career_continental_championships_won: s.pc_career_continental_championships_won,
         };
         let axes = compute_axes(&ev);
-        let rankings = all_rankings(&axes);
+        let rankings = all_rankings(&ev, &axes);
         let rep = compute_reputation(s.pc_sporting_rep, s.pc_discipline_rep, s.pc_club_fan_rep);
 
         LegacyDto {
@@ -1178,12 +1425,18 @@ pub fn get_season_awards() -> Vec<AwardDto> {
 pub fn apply_season_end() -> GoatGameState {
     let state = take_state();
     let season_goals = state.pc_season_goals;
+    let season_assists = state.pc_season_assists;
+    let season_decisive = state.pc_season_decisive_moments;
+    let season_clutch = state.pc_season_clutch_index;
     let season_matches = state.pc_season_matches;
     let season_output = state.pc_season_output;
+    let season_standout_matches = state.pc_season_standout_matches;
+    let season_transfer_requests = state.pc_season_transfer_requests;
 
     let div_idx = state.pc_div_idx as usize;
-    let div_clubs = DIV_CLUBS[div_idx];
-    let table = Table::from_raw(&state.table_raw, &div_clubs);
+    let world = get_world(state.world_seed);
+    let div_clubs = &live_league_clubs(&world, &state, div_idx);
+    let table = Table::from_raw(&state.table_raw, div_clubs);
     let finish_pos = table.position_of(state.pc_club_idx as usize) as u32;
     let won_title = finish_pos == 1;
 
@@ -1252,14 +1505,27 @@ pub fn apply_season_end() -> GoatGameState {
         state,
         Intent::ApplySeasonEndLegacy {
             season_goals,
+            season_assists,
             season_matches,
             season_output_sum: season_output,
             won_title,
             player_of_year,
             finish_position: finish_pos,
-            decisive_moments: 0,
+            decisive_moments: season_decisive,
+            season_clutch_index: season_clutch,
             new_sporting_rep: new_sporting,
             new_club_fan_rep: new_club_fan,
+            season_standout_matches,
+            season_transfer_requests,
+            // National-team call-ups (Design round 2, Doc B §B.3) aren't wired into the
+            // bridge layer yet — no international-break call-up flow exists on the
+            // Flutter side, so nothing accrues caps this season.
+            season_caps: 0,
+            season_international_goals: 0,
+            // National-team tournaments (Design round 4, Slice 4) aren't dispatched from
+            // the bridge layer yet either (same deferred-to-Slice-5 gap).
+            season_world_cups_won: 0,
+            season_continental_championships_won: 0,
         },
         &mut GoatRng::new(0),
     );
@@ -1271,8 +1537,78 @@ pub fn apply_season_end() -> GoatGameState {
 
 /// Start the next season.
 pub fn start_next_season() -> GoatGameState {
-    let state = take_state();
-    let state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+    let mut state = take_state();
+
+    // A3.3: promotion/relegation for the PC's nation at the season boundary —
+    // the PC's league from the REAL played table (table_raw), the two sibling
+    // leagues batch-simmed from static strengths. The bridge's shared Arc world
+    // is never mutated: drift lives only in the persisted pc_nation_membership,
+    // read back via `live_league_clubs` at every league-clubs read site (the
+    // same rule the TUI applies to its session-owned world). Surfacing the
+    // event list to the Flutter client is a DTO follow-up — the client can
+    // already observe the new league composition directly.
+    {
+        let world = get_world(state.world_seed);
+        let pc_league_id = state.pc_div_idx as usize;
+        let nation = world.leagues[pc_league_id].nation;
+        let mut nation_leagues: Vec<usize> = world
+            .leagues
+            .iter()
+            .filter(|l| l.nation == nation)
+            .map(|l| l.id)
+            .collect();
+        nation_leagues.sort_by_key(|&id| world.leagues[id].tier as usize);
+
+        let mut membership: Vec<Vec<usize>> = world
+            .leagues
+            .iter()
+            .map(|l| live_league_clubs(&world, &state, l.id))
+            .collect();
+        let mut tables: Vec<Table> = world
+            .leagues
+            .iter()
+            .map(|l| Table::new(&membership[l.id]))
+            .collect();
+        for &id in &nation_leagues {
+            tables[id] = if id == pc_league_id {
+                Table::from_raw(&state.table_raw, &membership[id])
+            } else {
+                sim_league_season(
+                    &world,
+                    id,
+                    &membership[id],
+                    state.world_seed,
+                    state.season_number,
+                )
+            };
+        }
+        let _events = apply_season_end_for_nation(
+            &world,
+            &mut membership,
+            nation,
+            state.season_number,
+            &tables,
+        );
+
+        state.pc_nation_membership = nation_leagues
+            .iter()
+            .flat_map(|&id| membership[id].iter().map(|&c| c as u32))
+            .collect();
+        // The PC's club may have moved tiers — re-resolve its league.
+        let pc_club = state.pc_club_idx as usize;
+        if let Some(&new_league) = nation_leagues
+            .iter()
+            .find(|&&id| membership[id].contains(&pc_club))
+        {
+            state.pc_div_idx = new_league as u8;
+        }
+    }
+
+    let state = reduce(
+        state,
+        Intent::StartSeason { fixtures: vec![] },
+        &mut GoatRng::new(0),
+    );
     let snap = build_game_state(&state);
     set_state(state);
     snap
@@ -1281,9 +1617,11 @@ pub fn start_next_season() -> GoatGameState {
 /// Accept a transfer offer identified by club_id.
 pub fn accept_transfer(club_id: u32, wage: i64, length: u32) -> GoatGameState {
     let club_id = club_id as usize;
-    let club = &CLUBS[club_id];
-    let div_idx = goat_world::world::club_division(club_id);
-    let fee_bonus = (CLUBS[with_state(|s| s.pc_club_idx) as usize].strength as i64) * 3;
+    let world_seed = with_state(|s| s.world_seed);
+    let world = get_world(world_seed);
+    let club = &world.clubs[club_id];
+    let div_idx = world.club_league(club_id);
+    let fee_bonus = (world.clubs[with_state(|s| s.pc_club_idx) as usize].strength as i64) * 3;
     let state = take_state();
     let state = reduce(
         state,
@@ -1292,7 +1630,7 @@ pub fn accept_transfer(club_id: u32, wage: i64, length: u32) -> GoatGameState {
             to_div_idx: div_idx as u8,
             new_wage: wage,
             new_length: length,
-            new_club_name: club.name,
+            new_club_name: club.name.clone(),
             facilities_mult: club.facilities_mult(),
             fee_bonus,
         },
@@ -1326,27 +1664,31 @@ pub fn get_transfer_offers() -> Vec<TransferOfferDto> {
             return Vec::new();
         }
 
+        let world = get_world(s.world_seed);
         let mut rng = GoatRng::new(s.world_seed ^ ((s.season_number as u64) << 32) ^ 0xA11BEEF);
         let n = rng.next_range_u64(0, 2) as usize;
+        let num_leagues = world.leagues.len() as u64;
         let mut offers = Vec::new();
         for _ in 0..n {
-            let target_div = ((s.pc_div_idx as u64 + 1 + rng.next_range_u64(0, 2)) % 4) as usize;
-            let club_pos = rng.next_range_u64(0, (CLUBS_PER_DIV - 1) as u64) as usize;
-            let club_id = DIV_CLUBS[target_div][club_pos];
+            let target_div = ((s.pc_div_idx as u64 + 1 + rng.next_range_u64(0, num_leagues - 2))
+                % num_leagues) as usize;
+            let league_clubs = &live_league_clubs(&world, s, target_div);
+            let club_pos = rng.next_range_u64(0, league_clubs.len() as u64 - 1) as usize;
+            let club_id = league_clubs[club_pos];
             if club_id == s.pc_club_idx as usize {
                 continue;
             }
             let wage = s.pc_wage_annual
-                + (CLUBS[club_id].strength as i64 * 2)
+                + (world.clubs[club_id].strength as i64 * 2)
                 + rng.next_range_u64(0, 50) as i64;
             let length = 2 + rng.next_range_u64(0, 2) as u32;
             offers.push(TransferOfferDto {
                 club_id: club_id as u32,
-                club_name: CLUBS[club_id].name.to_string(),
-                div_name: DIV_NAMES[target_div].to_string(),
+                club_name: world.clubs[club_id].name.to_string(),
+                div_name: world.leagues[target_div].name.clone(),
                 wage,
                 length,
-                strength: CLUBS[club_id].strength,
+                strength: world.clubs[club_id].strength,
             });
         }
         offers
@@ -1398,7 +1740,8 @@ pub fn save_game(path: String) -> bool {
 pub fn load_game(path: String) -> Option<GoatGameState> {
     match goat_save::save::load_from_file(&path) {
         Ok(data) => {
-            let state = goat_save::save::to_world_state(&data);
+            let world = get_world(data.world_seed);
+            let state = goat_save::save::to_world_state(&data, &world);
             let snap = build_game_state(&state);
             set_state(state);
             Some(snap)
@@ -1414,10 +1757,16 @@ pub fn get_state() -> Option<GoatGameState> {
 }
 
 /// Start an interactive match for the current season round.
-/// Returns `None` if there is no fixture this round.
+/// Returns `None` if there is no fixture this round, or if the PC is
+/// suspended — a suspended player doesn't personally take part (bible
+/// AC-06); callers should fall back to `play_round`, which auto-sims the
+/// club's match without the PC and serves one match of the ban.
 pub fn start_interactive_match() -> Option<ActiveBeatDto> {
     let session = with_state(|s| -> Option<ActiveMatchSession> {
-        if s.season_number == 0 || s.season_round >= ROUNDS_PER_SEASON as u32 {
+        if s.season_number == 0
+            || s.season_round >= ROUNDS_PER_SEASON as u32
+            || s.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0
+        {
             return None;
         }
         let round = s.season_round as usize;
@@ -1425,17 +1774,20 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
         let pc_club_id = s.pc_club_idx as usize;
         let world_seed = s.world_seed;
         let season = s.season_number;
+        let world = get_world(world_seed);
+        let div_clubs = &live_league_clubs(&world, s, div_idx);
 
-        let pc_fixture =
-            goat_world::fixture_for_round(world_seed, season, div_idx, pc_club_id, round)?;
+        let pc_fixture = goat_world::fixture_for_round(
+            world_seed, season, div_idx, div_clubs, pc_club_id, round,
+        )?;
         let is_home = pc_fixture.home == pc_club_id;
         let opp_id = if is_home {
             pc_fixture.away
         } else {
             pc_fixture.home
         };
-        let opp = &CLUBS[opp_id];
-        let own_str = CLUBS[pc_club_id].strength;
+        let opp = &world.clubs[opp_id];
+        let own_str = world.clubs[pc_club_id].strength;
 
         let pc_id = s.pc_player_id?;
         let view = s.players.snapshot(pc_id);
@@ -1448,16 +1800,12 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
         };
 
         let setup = MatchSetup {
-            player_role: match s.pc_position {
-                0 => goat_core::roles::RoleId::CentreBack,
-                1 => goat_core::roles::RoleId::CentralMid,
-                _ => goat_core::roles::RoleId::CompleteForward,
-            },
+            player_role: match_role_for_position(s.pc_position),
             player_attrs: view.current,
             player_familiarity: view.familiarity,
             own_strength: own_str,
             opp_strength: opp.strength,
-            opp_name: opp.name,
+            opp_name: opp.name.clone(),
             form: s.pc_form,
             player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
                 .to_int()
@@ -1476,14 +1824,14 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
             div_idx,
             season,
             world_seed,
-            opp_name: opp.name,
+            opp_name: opp.name.clone(),
         })
     })?;
 
     // GAME lock dropped. Now store in ACTIVE_MATCH and return first beat.
     let beat = session.state.current_beat()?;
-    let opp = session.opp_name;
-    let dto = beat_to_dto(beat, &session.state, opp);
+    let opp = session.opp_name.clone();
+    let dto = beat_to_dto(beat, &session.state, &opp);
     *ACTIVE_MATCH.lock().unwrap() = Some(session);
     Some(dto)
 }
@@ -1516,7 +1864,7 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
     let output_delta = session.state.player_output - prev_output;
     let success = last.success;
     let outcome_text = last.outcome_text.to_string();
-    let opp_name = session.opp_name;
+    let opp_name = session.opp_name.clone();
 
     if session.state.is_complete {
         let pc_goals = session
@@ -1524,6 +1872,24 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
             .moments
             .iter()
             .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+            .count() as u32;
+        let pc_assists = session
+            .state
+            .moments
+            .iter()
+            .filter(|m| matches!(m.goal_event, Some(ScoreEvent::AssistFor)))
+            .count() as u32;
+        let pc_decisive = session
+            .state
+            .moments
+            .iter()
+            .filter(|m| goat_match::sim::is_decisive(m))
+            .count() as u32;
+        let pc_clutch = session
+            .state
+            .moments
+            .iter()
+            .filter(|m| goat_match::sim::is_clutch(m))
             .count() as u32;
         let pc_output = session.state.player_output;
         let goals_for = session.state.goals_for;
@@ -1549,6 +1915,7 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
             .map(|m| {
                 let icon = match m.goal_event {
                     Some(ScoreEvent::GoalFor) => "⚽",
+                    Some(ScoreEvent::AssistFor) => "🅰",
                     Some(ScoreEvent::GoalAgainst) => "❌",
                     None => {
                         if m.success {
@@ -1576,16 +1943,19 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
         let div_idx = session.div_idx;
         let season = session.season;
         let world_seed = session.world_seed;
-
+        let world = get_world(world_seed);
         // Apply results to world state.
         let gs = {
             let state = take_state();
+            let div_clubs = live_league_clubs(&world, &state, div_idx);
             let old_cal_week = round_to_week(round.min(ROUNDS_PER_SEASON - 1));
-            let all_fixtures = goat_world::round_fixtures(world_seed, season, div_idx, round);
+            let all_fixtures =
+                goat_world::round_fixtures(world_seed, season, div_idx, &div_clubs, round);
             let sim_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
             let mut sim_rng = GoatRng::new(sim_seed);
-            let pc_fixture =
-                goat_world::fixture_for_round(world_seed, season, div_idx, pc_club_id, round);
+            let pc_fixture = goat_world::fixture_for_round(
+                world_seed, season, div_idx, &div_clubs, pc_club_id, round,
+            );
 
             let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
             for f in &all_fixtures {
@@ -1602,19 +1972,13 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
                     }
                 } else {
                     goat_world::sim_team_match(
-                        CLUBS[f.home].strength,
-                        CLUBS[f.away].strength,
+                        world.clubs[f.home].strength,
+                        world.clubs[f.away].strength,
                         &mut sim_rng,
                     )
                 };
-                let h_pos = DIV_CLUBS[div_idx]
-                    .iter()
-                    .position(|&c| c == f.home)
-                    .unwrap_or(0) as u8;
-                let a_pos = DIV_CLUBS[div_idx]
-                    .iter()
-                    .position(|&c| c == f.away)
-                    .unwrap_or(0) as u8;
+                let h_pos = div_clubs.iter().position(|&c| c == f.home).unwrap_or(0) as u8;
+                let a_pos = div_clubs.iter().position(|&c| c == f.away).unwrap_or(0) as u8;
                 round_results.push((h_pos, a_pos, gf, ga));
             }
 
@@ -1632,6 +1996,7 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
                 state = reduce(
                     state,
                     Intent::ApplyCardResult {
+                        competition_id: LEAGUE_COMPETITION_ID,
                         yellow_cards: yc as u32,
                         red_card: rc,
                     },
@@ -1641,18 +2006,25 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: LEAGUE_COMPETITION_ID,
                     pc_goals,
+                    pc_assists,
+                    pc_decisive_count: pc_decisive,
+                    pc_clutch_count: pc_clutch,
+                    fixture_importance: goat_core::state::FixtureImportance::League,
                     pc_output,
                     pc_result,
                     round_results,
+                    rest_weeks: goat_world::rest_weeks_after_round(round),
+                    week_ends: goat_world::week_ends_after_round(round),
                 },
                 &mut GoatRng::new(0),
             );
 
+            // Training flag is reset by the ApplyRoundResult reducer.
             let new_cal_week =
                 round_to_week((state.season_round as usize).min(ROUNDS_PER_SEASON - 1));
             if new_cal_week != old_cal_week {
-                state.pc_week_training_done = false;
                 state.pc_current_calendar_week = new_cal_week as u32;
             }
 
@@ -1684,7 +2056,7 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
         let next_beat = session
             .state
             .current_beat()
-            .map(|b| beat_to_dto(b, &session.state, opp_name));
+            .map(|b| beat_to_dto(b, &session.state, &opp_name));
         *ACTIVE_MATCH.lock().unwrap() = Some(session);
 
         Some(BeatOutcomeDto {

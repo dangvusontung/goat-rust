@@ -11,11 +11,17 @@ use goat_core::{
         AttrId, ATTR_NAMES, DEFENDING_ATTRS, DRIBBLING_ATTRS, PACE_ATTRS, PASSING_ATTRS,
         PHYSICAL_ATTRS, SHOOTING_ATTRS,
     },
+    calendar_loop::{
+        CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID, CONTINENTAL_TIER1_COMPETITION_ID,
+        CONTINENTAL_TIER2_COMPETITION_ID, CONTINENTAL_TIER3_COMPETITION_ID,
+        DOMESTIC_CUP_COMPETITION_ID, LEAGUE_COMPETITION_ID, WORLD_CUP_COMPETITION_ID,
+    },
     derive::{derive_attrs, ovr, role_rating},
-    generation::{generate_player, CreationChoices, Position},
+    generation::{generate_player, CreationChoices},
     player::PlayerView,
+    positions::PrimaryPosition,
     roles::RoleId,
-    state::{reduce, Intent, WorldState},
+    state::{reduce, should_retire, Intent, WorldState},
     week::{DevelopmentEvent, Intensity, Routine},
 };
 use goat_fixed::Fixed;
@@ -23,8 +29,8 @@ use goat_match::{
     beats::ScoreEvent,
     discipline::RefPersonality,
     sim::{
-        advance_beat, auto_play_match, start_match, ActiveMatchState, BeatLibrary, MatchResult,
-        MatchSetup,
+        advance_beat, auto_play_match, is_clutch, is_decisive, start_match, ActiveMatchState,
+        BeatLibrary, MatchResult, MatchSetup,
     },
 };
 use goat_meta::{
@@ -33,14 +39,44 @@ use goat_meta::{
     AXIS_NAMES, PUNDITS, SCHOOLS,
 };
 use goat_rng::{GoatRng, RngSource};
-use goat_save::save::{from_world_state, load_from_file, save_to_file, to_world_state};
+use goat_save::save::{
+    from_world_state, list_slots, load_from_file, save_to_file, slot_path, to_world_state,
+    SaveSlotSummary,
+};
 use goat_traits::PlayerTraits;
 use goat_world::{
-    fixture_for_round, format_week_header, round_fixtures, round_to_week, sim_team_match, Table,
-    BASE_CAREER_YEAR, CLUBS, CLUBS_PER_DIV, DIV_CLUBS, DIV_NAMES, DIV_NATIONS, ROUNDS_PER_SEASON,
+    continental::ContinentalTier,
+    domestic_cup::break_tie,
+    fixture_for_round, format_week_header,
+    national_tournament::national_team_strength,
+    population::Population,
+    promotion::{
+        apply_season_end_for_nation, overlay_nation_membership, sim_league_season,
+        PromoRelegationEvent, TransitionType,
+    },
+    round_fixtures, round_to_week, sim_team_match,
+    world::{NationId, WorldGenesis},
+    Table, CLUBS_PER_DIV, NUM_NATIONS, PRE_SEASON_WEEKS, ROUNDS_PER_SEASON, TIERS_PER_NATION,
 };
 
-const SAVE_PATH: &str = "goat.sav";
+#[path = "orbit_fixtures.rs"]
+mod orbit_fixtures;
+use orbit_fixtures::build_season_orbit_fixtures;
+
+#[path = "cup_dispatch.rs"]
+mod cup_dispatch;
+use cup_dispatch::cup_fixture_due;
+
+#[path = "continental_dispatch.rs"]
+mod continental_dispatch;
+use continental_dispatch::{qualified_tier, ContinentalPhase, ContinentalRun};
+
+#[path = "national_dispatch.rs"]
+mod national_dispatch;
+use national_dispatch::{QualifyingCampaign, TournamentKind, TournamentPhase, TournamentRun};
+
+const SAVE_DIR: &str = "saves";
+const NUM_SLOTS: u8 = 9;
 const BEATS_JSON: &str = include_str!("../../../beats.json");
 
 fn main() {
@@ -48,6 +84,8 @@ fn main() {
     let stdout = io::stdout();
     let mut out = io::BufWriter::new(stdout.lock());
     let mut lines = stdin.lock().lines();
+
+    std::fs::create_dir_all(SAVE_DIR).ok();
 
     // Try to load beats.json from disk (allows updates without recompile);
     // fall back to the compiled-in copy.
@@ -74,20 +112,57 @@ fn main() {
             Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                 "Q" | "QUIT" => break,
                 "N" | "NEW" => run_new_game(&mut lines, &mut out, &beat_lib),
-                "L" | "LOAD" => match load_from_file(SAVE_PATH) {
-                    Ok(data) => {
-                        writeln!(out, "  Save loaded.").unwrap();
-                        let state = to_world_state(&data);
-                        run_game_loop(
-                            &mut lines,
-                            &mut out,
-                            state,
-                            &beat_lib,
-                            PlayerTraits::default(),
-                        );
+                "L" | "LOAD" => {
+                    let slots = list_slots(SAVE_DIR, NUM_SLOTS);
+                    render_slot_picker(&mut out, &slots);
+                    match prompt_slot_choice(&mut lines, &mut out) {
+                        Some(slot) => {
+                            if !slots[(slot - 1) as usize].occupied {
+                                writeln!(out, "  Slot {slot} is empty.").unwrap();
+                            } else {
+                                match load_from_file(slot_path(SAVE_DIR, slot)) {
+                                    Ok(data) => {
+                                        writeln!(out, "  Save loaded.").unwrap();
+                                        let mut world = WorldGenesis::generate(data.world_seed);
+                                        let mut state = to_world_state(&data, &world);
+                                        // A3.3: restore the promotion-advanced
+                                        // membership — the save's pc_nation_membership
+                                        // overlays genesis-static league composition
+                                        // (empty for pre-v18 saves = static already).
+                                        let loaded_nation =
+                                            world.leagues[state.pc_div_idx as usize].nation;
+                                        overlay_nation_membership(
+                                            &mut world,
+                                            loaded_nation,
+                                            &state.pc_nation_membership,
+                                        );
+                                        // pc_season_fixtures is "generated but
+                                        // consistent" (like WorldGenesis itself) — not
+                                        // persisted in the save, rebuilt here from the
+                                        // loaded world_seed/season/club/division.
+                                        state.pc_season_fixtures = build_season_orbit_fixtures(
+                                            state.world_seed,
+                                            state.season_number,
+                                            state.pc_div_idx as usize,
+                                            &world.leagues[state.pc_div_idx as usize].clubs,
+                                            state.pc_club_idx as usize,
+                                        );
+                                        run_game_loop(
+                                            &mut lines,
+                                            &mut out,
+                                            state,
+                                            &beat_lib,
+                                            PlayerTraits::default(),
+                                            world,
+                                        );
+                                    }
+                                    Err(e) => writeln!(out, "  Load failed: {e}").unwrap(),
+                                }
+                            }
+                        }
+                        None => writeln!(out, "  Load cancelled.").unwrap(),
                     }
-                    Err(e) => writeln!(out, "  Load failed: {e}").unwrap(),
-                },
+                }
                 _ => writeln!(out, "  Unknown command.").unwrap(),
             },
             _ => break,
@@ -105,7 +180,7 @@ fn run_new_game(
 ) {
     writeln!(out, "\n--- CREATE YOUR PLAYER ---").unwrap();
     let name = {
-        let s = prompt(lines, out, "Player name");
+        let s = prompt_or_exit(lines, out, "Player name");
         if s.trim().is_empty() {
             "Unnamed Legend".to_string()
         } else {
@@ -113,69 +188,34 @@ fn run_new_game(
         }
     };
 
-    writeln!(
-        out,
-        "\nPick a position:\n  1. Defender\n  2. Midfielder\n  3. Forward"
-    )
-    .unwrap();
-    let position = loop {
-        match prompt(lines, out, "Choice [1-3]").trim() {
-            "1" => break Position::Defender,
-            "2" => break Position::Midfielder,
-            "3" => break Position::Forward,
-            _ => writeln!(out, "  Please enter 1, 2 or 3.").unwrap(),
-        }
-    };
-
-    // Pick nation
-    writeln!(out, "\nPick a nation:\n  1. England\n  2. Brazil").unwrap();
-    let nation_idx: usize = loop {
-        match prompt(lines, out, "Choice [1-2]").trim() {
-            "1" => break 0, // England = DIV_ENG_TOP / DIV_ENG_SEC
-            "2" => break 2, // Brazil = DIV_BRA_TOP / DIV_BRA_SEC
-            _ => writeln!(out, "  Please enter 1 or 2.").unwrap(),
-        }
-    };
-
-    // Pick division (two per nation)
-    let div_a = nation_idx;
-    let div_b = nation_idx + 1;
-    writeln!(
-        out,
-        "\nPick a division:\n  1. {} (top)\n  2. {} (second)",
-        DIV_NAMES[div_a], DIV_NAMES[div_b]
-    )
-    .unwrap();
-    let div_idx: usize = loop {
-        match prompt(lines, out, "Choice [1-2]").trim() {
-            "1" => break div_a,
-            "2" => break div_b,
-            _ => writeln!(out, "  Please enter 1 or 2.").unwrap(),
-        }
-    };
-
-    // Pick club from that division
-    writeln!(out, "\nPick a club:").unwrap();
-    let div_club_ids = DIV_CLUBS[div_idx];
-    for (i, &cid) in div_club_ids.iter().enumerate() {
-        let club = &CLUBS[cid];
-        let stars = "*".repeat(((club.strength as usize).div_ceil(20)).clamp(1, 5));
-        writeln!(out, "  {:2}. {:<22} {}", i + 1, club.name, stars).unwrap();
+    writeln!(out, "\nPick a position:").unwrap();
+    for (i, p) in PrimaryPosition::ALL.iter().enumerate() {
+        writeln!(out, "  {}. {}", i + 1, p.name()).unwrap();
     }
-    let club_pos: usize = loop {
-        let s = prompt(lines, out, &format!("Choice [1-{}]", CLUBS_PER_DIV));
+    let primary_position = loop {
+        let s = prompt_or_exit(
+            lines,
+            out,
+            &format!("Choice [1-{}]", PrimaryPosition::ALL.len()),
+        );
         if let Ok(n) = s.trim().parse::<usize>() {
-            if (1..=CLUBS_PER_DIV).contains(&n) {
-                break n - 1;
+            if (1..=PrimaryPosition::ALL.len()).contains(&n) {
+                break PrimaryPosition::ALL[n - 1];
             }
         }
-        writeln!(out, "  Invalid choice.").unwrap();
+        writeln!(
+            out,
+            "  Please enter a number between 1 and {}.",
+            PrimaryPosition::ALL.len()
+        )
+        .unwrap();
     };
-    let club_id = div_club_ids[club_pos];
-    let club = &CLUBS[club_id];
 
+    // The seed must be picked before nation/club selection: club/nation identity is
+    // generated from `world_seed` (Design round 2, Doc A), so the world has to exist
+    // before the player can browse it.
     let seed = loop {
-        let s = prompt(lines, out, "Seed (Enter = random)");
+        let s = prompt_or_exit(lines, out, "Seed (Enter = random)");
         if s.trim().is_empty() {
             use std::time::{SystemTime, UNIX_EPOCH};
             break SystemTime::now()
@@ -189,18 +229,80 @@ fn run_new_game(
         writeln!(out, "  Enter a number or press Enter.").unwrap();
     };
 
-    let nationality = DIV_NATIONS[div_idx].name();
+    let world = WorldGenesis::generate(seed);
+
+    // Pick nation
+    writeln!(out, "\nPick a nation:").unwrap();
+    for (i, n) in world.nations.iter().enumerate() {
+        writeln!(out, "  {:2}. {:<16} (stature {})", i + 1, n.name, n.stature).unwrap();
+    }
+    let nation_idx: usize = loop {
+        let s = prompt_or_exit(lines, out, &format!("Choice [1-{NUM_NATIONS}]"));
+        if let Ok(n) = s.trim().parse::<usize>() {
+            if (1..=NUM_NATIONS).contains(&n) {
+                break n - 1;
+            }
+        }
+        writeln!(out, "  Please enter a number between 1 and {NUM_NATIONS}.").unwrap();
+    };
+
+    // Pick tier (every nation has TIERS_PER_NATION tiers this round — uniform pyramids).
+    writeln!(out, "\nPick a division:").unwrap();
+    for tier_idx in 0..TIERS_PER_NATION {
+        let league_id = nation_idx * TIERS_PER_NATION + tier_idx;
+        writeln!(out, "  {}. {}", tier_idx + 1, world.leagues[league_id].name).unwrap();
+    }
+    let div_idx: usize = loop {
+        let s = prompt_or_exit(lines, out, &format!("Choice [1-{TIERS_PER_NATION}]"));
+        if let Ok(n) = s.trim().parse::<usize>() {
+            if (1..=TIERS_PER_NATION).contains(&n) {
+                break nation_idx * TIERS_PER_NATION + (n - 1);
+            }
+        }
+        writeln!(
+            out,
+            "  Please enter a number between 1 and {TIERS_PER_NATION}."
+        )
+        .unwrap();
+    };
+
+    // Pick club from that division
+    writeln!(out, "\nPick a club:").unwrap();
+    let div_club_ids = world.leagues[div_idx].clubs.clone();
+    for (i, &cid) in div_club_ids.iter().enumerate() {
+        let club = &world.clubs[cid];
+        let stars = "*".repeat(((club.strength as usize).div_ceil(20)).clamp(1, 5));
+        writeln!(out, "  {:2}. {:<22} {}", i + 1, club.name, stars).unwrap();
+    }
+    let club_pos: usize = loop {
+        let s = prompt_or_exit(lines, out, &format!("Choice [1-{}]", CLUBS_PER_DIV));
+        if let Ok(n) = s.trim().parse::<usize>() {
+            if (1..=CLUBS_PER_DIV).contains(&n) {
+                break n - 1;
+            }
+        }
+        writeln!(out, "  Invalid choice.").unwrap();
+    };
+    let club_id = div_club_ids[club_pos];
+
+    let nationality = world.nation_name(world.clubs[club_id].nation).to_string();
+    let club_name = world.clubs[club_id].name.clone();
     let choices = CreationChoices {
         name,
-        position,
-        nationality,
-        club: club.name,
+        primary_position,
+        nationality: nationality.clone(),
+        club: club_name,
     };
 
     let mut effective_seed = seed;
     loop {
+        // Re-roll regenerates the *player* from a new identity seed but keeps the
+        // already-chosen world/nation/club (the world itself only ever regenerates
+        // from `world_seed`, which the player picked above and does not re-roll).
         let player = generate_player(effective_seed, &choices);
-        render_player_sheet(out, &player, &choices, effective_seed);
+        // Lifestyle is not yet determined at creation time (every career starts
+        // Balanced) — pass the default tier for the preview sheet.
+        render_player_sheet(out, &player, &choices, effective_seed, 1);
         writeln!(out, "\n  [S] Start game   [R] Re-roll   [Q] Back").unwrap();
         write!(out, "  > ").unwrap();
         out.flush().unwrap();
@@ -208,25 +310,9 @@ fn run_new_game(
         match lines.next() {
             Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                 "S" | "START" => {
-                    // Pick lifestyle (Phase 10).
-                    writeln!(out, "\n--- LIFESTYLE ---").unwrap();
-                    writeln!(
-                        out,
-                        "  1. Professional — slower decline, better long-term development"
-                    )
-                    .unwrap();
-                    writeln!(out, "  2. Balanced      — the default path").unwrap();
-                    writeln!(
-                        out,
-                        "  3. Flashy        — peak burns brighter but fades faster"
-                    )
-                    .unwrap();
-                    let lifestyle: u8 = match prompt(lines, out, "Choice [1-3]").trim() {
-                        "1" => 0,
-                        "3" => 2,
-                        _ => 1,
-                    };
-
+                    // Lifestyle is no longer picked here (bible §8.6) — it emerges over
+                    // the career from training intensity, dev investment and sponsor
+                    // choices. Every career starts Balanced (score 0).
                     let mut state = WorldState::new();
                     state = reduce(
                         state,
@@ -239,22 +325,22 @@ fn run_new_game(
                     state = reduce(
                         state,
                         Intent::InitWorld {
-                            world_seed: effective_seed,
+                            // The *world's* seed — must stay `seed` (what `world` was
+                            // generated from above), not `effective_seed` (which a re-roll
+                            // may have changed): the world was already displayed/chosen
+                            // from `seed`, so persisting anything else would regenerate a
+                            // different world on next load.
+                            world_seed: seed,
                             pc_club_idx: club_id as u16,
                             pc_div_idx: div_idx as u8,
-                            facilities_mult: club.facilities_mult(),
-                            initial_table: Box::new([0u32; 80]),
+                            facilities_mult: world.clubs[club_id].facilities_mult(),
+                            initial_table: Box::new([0u32; 100]),
                         },
-                        &mut GoatRng::new(0),
-                    );
-                    state = reduce(
-                        state,
-                        Intent::SetLifestyle { lifestyle },
                         &mut GoatRng::new(0),
                     );
 
                     // Seed peer cohort (Phase 9).
-                    let peers = build_peer_cohort(effective_seed, DIV_NATIONS[div_idx].name());
+                    let peers = build_peer_cohort(effective_seed, &nationality);
                     state = reduce(state, Intent::InitPeers { peers }, &mut GoatRng::new(0));
 
                     // Roll hidden trait ceilings from creation seed (§A.3 aptitude).
@@ -264,22 +350,228 @@ fn run_new_game(
                         &mut GoatRng::new(effective_seed ^ 0x7261_6974_0000_0001),
                     );
 
-                    state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
-                    run_game_loop(lines, out, state, beat_lib, pc_traits);
+                    let fixtures = build_season_orbit_fixtures(
+                        seed,
+                        1,
+                        div_idx,
+                        &world.leagues[div_idx].clubs,
+                        club_id,
+                    );
+                    state = reduce(
+                        state,
+                        Intent::StartSeason { fixtures },
+                        &mut GoatRng::new(0),
+                    );
+                    // Career epoch: the real-world year, read from wall-clock HERE
+                    // (renderer layer) exactly once at new-game — never inside the
+                    // core (§9 determinism). Persisted in the save (v19+).
+                    state.career_base_year = current_year();
+                    run_game_loop(lines, out, state, beat_lib, pc_traits, world);
                     return;
                 }
                 "R" | "REROLL" | "RE-ROLL" => {
                     let mut rng = GoatRng::new(effective_seed);
                     effective_seed = rng.next_u64();
                 }
-                _ => return,
+                "Q" | "QUIT" => return,
+                // Only an explicit Q/QUIT discards the in-progress character — a
+                // blank Enter or any other stray input reprompts instead of
+                // silently dropping back to the title screen.
+                _ => writeln!(out, "  Please choose S, R, or Q.").unwrap(),
             },
             _ => return,
         }
     }
 }
 
+/// The current grid week of the season, derived from the PC's age: the
+/// `StartSeason` back-fill pins age to START_AGE + (N−1)·52 at every season
+/// start, and every in-season week ticks exactly one age-week, so the
+/// difference IS the current grid week — pre-season weeks included.
+fn season_week(state: &WorldState) -> u32 {
+    match state.pc_player_id {
+        Some(id) => {
+            let start = goat_core::tuning::START_AGE_WEEKS + (state.season_number - 1) * 52;
+            state.players.get_age_weeks(id).saturating_sub(start)
+        }
+        None => 0,
+    }
+}
+
+/// True during the 7-week pre-season lead (before the first league round's week).
+fn in_pre_season(state: &WorldState) -> bool {
+    state.season_number > 0
+        && state.season_round == 0
+        && season_week(state) < PRE_SEASON_WEEKS as u32
+}
+
+/// A pre-season friendly: an ad-hoc beat match against a deterministic
+/// same-nation opponent (the same-table-slot club of a sibling tier, rotating
+/// by week). NOT a calendar fixture — no `Fixture` entity, nothing scheduled —
+/// and by design it never touches the league table, season stats, or
+/// discipline: only development flows through `ApplyMatchResult`
+/// (familiarity XP + energy cost), exactly like a played league match.
+fn run_friendly(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+    mut state: WorldState,
+    play_interactive: bool,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    world: &WorldGenesis,
+) -> WorldState {
+    let pc_id = state.pc_player_id.unwrap();
+    let pc_club_id = state.pc_club_idx as usize;
+    let week = season_week(&state);
+
+    let pc_league_id = state.pc_div_idx as usize;
+    let nation = world.leagues[pc_league_id].nation;
+    let mut tiers: Vec<usize> = world
+        .leagues
+        .iter()
+        .filter(|l| l.nation == nation)
+        .map(|l| l.id)
+        .collect();
+    tiers.sort_by_key(|&id| world.leagues[id].tier as usize);
+    let pos = tiers.iter().position(|&id| id == pc_league_id).unwrap_or(0);
+    let sibling_tiers: Vec<usize> = (0..tiers.len()).filter(|&i| i != pos).collect();
+    let opp_league = tiers[sibling_tiers[week as usize % sibling_tiers.len()]];
+    let slot = world.club_league_pos(pc_club_id);
+    let opp_id = world.leagues[opp_league].clubs[slot % CLUBS_PER_DIV];
+    let opp = &world.clubs[opp_id];
+
+    writeln!(
+        out,
+        "\n--- FRIENDLY (pre-season) · {} vs {} ---",
+        state.pc_club, opp.name
+    )
+    .unwrap();
+
+    let view = state.players.snapshot(pc_id);
+    let match_seed =
+        state.world_seed ^ ((state.season_number as u64) << 32) ^ (week as u64) ^ 0xF21E_5A17;
+    let mut match_rng = GoatRng::new(match_seed);
+    let ref_personality = {
+        let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+        RefPersonality::from_rng(&mut rp_rng)
+    };
+    let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
+        player_role: best_role_for_position(state.pc_position),
+        player_attrs: view.current,
+        player_familiarity: view.familiarity,
+        own_strength: world.clubs[pc_club_id].strength,
+        opp_strength: opp.strength,
+        opp_name: opp.name.clone(),
+        form: state.pc_form,
+        player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+            .to_int()
+            .clamp(1, 99) as u8,
+        ref_personality,
+        dirty_rep: state.pc_discipline_rep,
+        player_traits: pc_traits,
+    };
+
+    let result = if play_interactive {
+        let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
+        while !ms.is_complete {
+            render_beat(out, &ms);
+            if ms.final_result.is_some() {
+                break;
+            }
+            let choice_idx = read_choice(
+                lines,
+                out,
+                ms.current_beat().map(|b| b.choices.len()).unwrap_or(1),
+            );
+            ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
+        }
+        ms.final_result.unwrap_or_else(|| {
+            auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
+        })
+    } else {
+        auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
+    };
+
+    render_match_result(out, &result, &opp.name);
+    if result.red_card || result.yellow_cards > 0 {
+        writeln!(
+            out,
+            "  (cards in a friendly don't count toward suspensions)"
+        )
+        .unwrap();
+    }
+
+    // Development only: familiarity XP + energy cost. No ApplyRoundResult (no
+    // table/stats), no ApplyCardResult (no suspensions from a friendly).
+    state = reduce(
+        state,
+        Intent::ApplyMatchResult {
+            familiarity_xp: result.familiarity_xp,
+            energy_cost: Fixed::from_int(25),
+            injury_weeks: None,
+        },
+        &mut GoatRng::new(0),
+    );
+    state
+}
+
 // ── Main game loop ────────────────────────────────────────────────────────────
+
+/// A3.3: resolve promotion/relegation for the PC's nation at a season boundary.
+/// The PC's league uses the REAL played table (`state.table_raw`); the nation's
+/// two sibling leagues are batch-simmed from static club strengths. Mutates the
+/// session `world`'s league membership, persists the flattened membership into
+/// `state.pc_nation_membership`, and updates `state.pc_div_idx` if the PC's club
+/// moved tiers. Returns the events (for display).
+fn resolve_pc_nation_promotion(
+    world: &mut WorldGenesis,
+    state: &mut WorldState,
+    season: u32,
+) -> Vec<PromoRelegationEvent> {
+    let pc_league_id = state.pc_div_idx as usize;
+    let nation = world.leagues[pc_league_id].nation;
+    let mut nation_leagues: Vec<usize> = world
+        .leagues
+        .iter()
+        .filter(|l| l.nation == nation)
+        .map(|l| l.id)
+        .collect();
+    nation_leagues.sort_by_key(|&id| world.leagues[id].tier as usize);
+
+    // Tables for the nation's leagues: real for the PC's, batch-simmed for the
+    // two siblings. Other entries are placeholders — apply_season_end_for_nation
+    // never reads outside the nation.
+    let mut tables: Vec<Table> = world.leagues.iter().map(|l| Table::new(&l.clubs)).collect();
+    for &id in &nation_leagues {
+        tables[id] = if id == pc_league_id {
+            Table::from_raw(&state.table_raw, &world.leagues[id].clubs)
+        } else {
+            sim_league_season(
+                world,
+                id,
+                &world.leagues[id].clubs,
+                state.world_seed,
+                season,
+            )
+        };
+    }
+
+    let mut membership = world.static_league_clubs();
+    let events = apply_season_end_for_nation(world, &mut membership, nation, season, &tables);
+
+    // Write back: overlay the nation's leagues in the session world, persist the
+    // flattened membership, and re-resolve the PC's own league assignment.
+    for &id in &nation_leagues {
+        world.leagues[id].clubs = membership[id].clone();
+    }
+    state.pc_nation_membership = nation_leagues
+        .iter()
+        .flat_map(|&id| membership[id].iter().map(|&c| c as u32))
+        .collect();
+    state.pc_div_idx = world.club_league(state.pc_club_idx as usize) as u8;
+
+    events
+}
 
 fn run_game_loop(
     lines: &mut impl Iterator<Item = io::Result<String>>,
@@ -287,7 +579,36 @@ fn run_game_loop(
     mut state: WorldState,
     beat_lib: &BeatLibrary,
     pc_traits: PlayerTraits,
+    mut world: WorldGenesis,
 ) {
+    // Season number for which the season-end pipeline (wage collection, awards,
+    // legacy accrual, peer batch-tick, transfer window, contract renewal, retirement
+    // suggestion) has already run. The end-of-season gate below re-enters every loop
+    // iteration while `season_round` stays at the cap (e.g. after a `G` Legacy view,
+    // which must be a read-only side trip) — this guard keeps the pipeline itself to
+    // exactly one run per season boundary while still letting the post-pipeline menu
+    // (and read-only views from it) redisplay freely.
+    let mut season_end_done_for: Option<u32> = None;
+    // Session-local: whether the PC's club is still alive in this season's domestic
+    // cup run (Design round 4, Slice 5's playable-gate dispatcher — see
+    // `cup_dispatch.rs`'s doc comment for why this is deliberately not persisted in
+    // `WorldState`/the save format).
+    let mut pc_cup_alive = true;
+    // Session-local: the PC's continental campaign, if their club qualified for one
+    // this season (Design round 4, Slice 5 follow-up — see `continental_dispatch.rs`'s
+    // doc comment for why this mirrors `cup_dispatch.rs`'s not-persisted rationale).
+    // `None` until qualification is checked at the first season boundary (season 1 has
+    // no prior season to qualify from), and again whenever the current run finishes.
+    let mut pc_continental: Option<ContinentalRun> = None;
+    // Session-local: the PC's national-team tournament cycle for the current season,
+    // if it's a World Cup / continental-championship year (Design round 4, Slice 5
+    // follow-up — see `national_dispatch.rs`'s doc comment). Both fields are reset to
+    // `None` at every `StartSeason` boundary; `qualifying` is populated at that
+    // season's own `InternationalBreak` flashpoint, `tournament` only if `qualifying`
+    // concludes with the PC's nation in the top 2 of its group.
+    let mut pc_qualifying: Option<QualifyingCampaign> = None;
+    let mut pc_tournament: Option<TournamentRun> = None;
+
     loop {
         let pc_id = match state.pc_player_id {
             Some(id) => id,
@@ -301,69 +622,86 @@ fn run_game_loop(
             return;
         }
 
+        // Phase 10: hard retirement enforcement. `should_retire` already encodes the
+        // full rule (bible §8.6) — nobody plays past RETIRE_AGE_HARD, full stop,
+        // regardless of form. This is unconditional (no [C] to continue), unlike the
+        // softer low-form suggestion further below, which still lets the player choose.
+        if should_retire(&state) {
+            state = reduce(state, Intent::Retire, &mut GoatRng::new(0));
+            continue;
+        }
+
         // End-of-season gate
         if state.season_number > 0 && state.season_round >= ROUNDS_PER_SEASON as u32 {
-            let view = state.players.snapshot(pc_id);
-            render_season_review(out, &state, &view);
+            // Run the season-end pipeline itself at most once per season boundary —
+            // re-entering this branch (e.g. via a `G` Legacy read from the menu below)
+            // must not re-collect wages, re-roll transfer/contract offers, or
+            // double-credit career legacy stats.
+            if season_end_done_for != Some(state.season_number) {
+                let view = state.players.snapshot(pc_id);
+                render_season_review(out, &state, &view, &world);
 
-            // Collect annual wage.
-            state = reduce(state, Intent::CollectWage, &mut GoatRng::new(0));
+                // Collect annual wage.
+                state = reduce(state, Intent::CollectWage, &mut GoatRng::new(0));
 
-            // Awards night + pundit reactions + legacy update.
-            state = run_awards_and_pundits(out, state, &view);
+                // Awards night + pundit reactions + legacy update.
+                state = run_awards_and_pundits(out, state, &view, &world);
 
-            // Phase 9: batch-tick peers and check rival crystallisation.
-            let season = state.season_number;
-            state = reduce(
-                state,
-                Intent::BatchTickPeers { season },
-                &mut GoatRng::new(0),
-            );
-            if season >= 5 && state.pc_rival_idx.is_none() {
-                if let Some(rival_idx) = find_rival_candidate(&state) {
-                    writeln!(out, "\n  *** RIVALRY CRYSTALLISES ***").unwrap();
-                    writeln!(
-                        out,
-                        "  The media has finally named your generation's great debate: {} vs {}.",
-                        view.name, state.pc_peers[rival_idx].name
-                    )
-                    .unwrap();
-                    state = reduce(
-                        state,
-                        Intent::DeclareRival {
-                            peer_idx: rival_idx,
-                            season,
-                        },
-                        &mut GoatRng::new(0),
-                    );
-                }
-            }
-
-            // Phase 8: transfer window and contract renewal.
-            state = run_transfer_window(lines, out, state, &view);
-            if state.pc_contract_seasons_left == 0 {
-                state = run_contract_negotiation(lines, out, state);
-            }
-
-            // Phase 10: auto-retirement suggestion.
-            let view2 = state.players.snapshot(pc_id);
-            let age_years = view2.age_weeks / 52;
-            if age_years >= 35 && state.pc_form.to_int() < 40 {
-                writeln!(
-                    out,
-                    "\n  At {age_years} years old with form {}, the end may be near.",
-                    state.pc_form.to_int()
-                )
-                .unwrap();
-                writeln!(out, "  [R] Retire now   [C] Continue playing").unwrap();
-                write!(out, "  > ").unwrap();
-                out.flush().unwrap();
-                if let Some(Ok(l)) = lines.next() {
-                    if l.trim().eq_ignore_ascii_case("R") {
-                        state = reduce(state, Intent::Retire, &mut GoatRng::new(0));
-                        continue;
+                // Phase 9: batch-tick peers and check rival crystallisation.
+                let season = state.season_number;
+                state = reduce(
+                    state,
+                    Intent::BatchTickPeers { season },
+                    &mut GoatRng::new(0),
+                );
+                if season >= 5 && state.pc_rival_idx.is_none() {
+                    if let Some(rival_idx) = find_rival_candidate(&state) {
+                        writeln!(out, "\n  *** RIVALRY CRYSTALLISES ***").unwrap();
+                        writeln!(
+                            out,
+                            "  The media has finally named your generation's great debate: {} vs {}.",
+                            view.name, state.pc_peers[rival_idx].name
+                        )
+                        .unwrap();
+                        state = reduce(
+                            state,
+                            Intent::DeclareRival {
+                                peer_idx: rival_idx,
+                                season,
+                            },
+                            &mut GoatRng::new(0),
+                        );
                     }
                 }
+
+                // Phase 8: transfer window and contract renewal.
+                state = run_transfer_window(lines, out, state, &view, &world);
+                if state.pc_contract_seasons_left == 0 {
+                    state = run_contract_negotiation(lines, out, state);
+                }
+
+                // Phase 10: auto-retirement suggestion.
+                let view2 = state.players.snapshot(pc_id);
+                let age_years = view2.age_weeks / 52;
+                if age_years >= 35 && state.pc_form.to_int() < 40 {
+                    writeln!(
+                        out,
+                        "\n  At {age_years} years old with form {}, the end may be near.",
+                        state.pc_form.to_int()
+                    )
+                    .unwrap();
+                    writeln!(out, "  [R] Retire now   [C] Continue playing").unwrap();
+                    write!(out, "  > ").unwrap();
+                    out.flush().unwrap();
+                    if let Some(Ok(l)) = lines.next() {
+                        if l.trim().eq_ignore_ascii_case("R") {
+                            state = reduce(state, Intent::Retire, &mut GoatRng::new(0));
+                            continue;
+                        }
+                    }
+                }
+
+                season_end_done_for = Some(state.season_number);
             }
 
             writeln!(
@@ -376,7 +714,109 @@ fn run_game_loop(
             match lines.next() {
                 Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                     "Y" => {
-                        state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+                        pc_cup_alive = true; // fresh domestic-cup run each season
+                        let next_div_idx = state.pc_div_idx as usize;
+                        let next_club_id = state.pc_club_idx as usize;
+
+                        // Continental qualification (Design round 4, Slice 5
+                        // follow-up): reuses the season that just ended's real final
+                        // table (still live in `state.table_raw` — `StartSeason`
+                        // below resets it) against the real per-nation taper table.
+                        let league = &world.leagues[next_div_idx];
+                        let final_table = Table::from_raw(&state.table_raw, &league.clubs);
+                        pc_continental = qualified_tier(
+                            &world,
+                            league.nation,
+                            league.tier,
+                            &final_table,
+                            next_club_id,
+                        )
+                        .map(|tier| {
+                            writeln!(
+                                out,
+                                "\n  *** Continental qualification! {} will play in {:?} this season. ***",
+                                state.pc_club, tier
+                            )
+                            .unwrap();
+                            ContinentalRun::start(
+                                &world,
+                                state.world_seed,
+                                state.season_number + 1,
+                                next_club_id,
+                                tier,
+                            )
+                        });
+
+                        // A3.3: promotion/relegation for the PC's nation — resolved
+                        // at the [Y] boundary, NOT in the gated pipeline block: a
+                        // save made at the post-pipeline menu reloads into the gated
+                        // block re-running (pre-existing behavior), which would
+                        // double-apply membership changes. At [Y] the computation is
+                        // idempotent by construction — it reads the concluded
+                        // season's table_raw + deterministic batch sims, and the
+                        // resulting membership is persisted.
+                        let concluded_season = state.season_number;
+                        let promo_events =
+                            resolve_pc_nation_promotion(&mut world, &mut state, concluded_season);
+                        if !promo_events.is_empty() {
+                            writeln!(out, "\n  --- PROMOTION & RELEGATION ---").unwrap();
+                            for e in &promo_events {
+                                let verb = match e.transition {
+                                    TransitionType::DirectPromotion => "promoted to",
+                                    TransitionType::DirectRelegation => "relegated to",
+                                };
+                                let marker = if e.club == next_club_id {
+                                    "   *** YOUR CLUB ***"
+                                } else {
+                                    ""
+                                };
+                                writeln!(
+                                    out,
+                                    "  {} {} {}{}",
+                                    world.clubs[e.club].name,
+                                    verb,
+                                    world.leagues[e.to_league].name,
+                                    marker
+                                )
+                                .unwrap();
+                            }
+                        }
+
+                        // Fixtures for the NEW season come from the post-promotion
+                        // membership and the PC's (possibly new) league.
+                        let new_div_idx = state.pc_div_idx as usize;
+                        let fixtures = build_season_orbit_fixtures(
+                            state.world_seed,
+                            state.season_number + 1,
+                            new_div_idx,
+                            &world.leagues[new_div_idx].clubs,
+                            next_club_id,
+                        );
+                        state = reduce(
+                            state,
+                            Intent::StartSeason { fixtures },
+                            &mut GoatRng::new(0),
+                        );
+
+                        // `StartSeason`'s off-season back-fill (goat-core) just
+                        // elapsed the calendar through the season that JUST ENDED's
+                        // remaining weeks — including its `OffSeason` window if it
+                        // was a tournament season — accumulating any flashpoints
+                        // into `state.last_week_flashpoints`. Dispatch those (the
+                        // PC's tournament-proper run, if their nation qualified)
+                        // using the STILL-current `pc_qualifying`/`pc_tournament`
+                        // from that season, before resetting them for the new one.
+                        state = dispatch_national_flashpoints(
+                            out,
+                            state,
+                            &world,
+                            beat_lib,
+                            pc_traits,
+                            &mut pc_qualifying,
+                            &mut pc_tournament,
+                        );
+                        pc_qualifying = None; // fresh national-team cycle each season
+                        pc_tournament = None;
                         continue;
                     }
                     "G" => {
@@ -385,7 +825,7 @@ fn run_game_loop(
                         continue;
                     }
                     "Z" => {
-                        run_save(out, &state);
+                        run_save(lines, out, &state);
                         return;
                     }
                     _ => return,
@@ -399,9 +839,19 @@ fn run_game_loop(
 
         let has_season = state.season_number > 0;
         if has_season {
+            if in_pre_season(&state) {
+                writeln!(
+                    out,
+                    "  (Pre-season week {}/{} — training and friendlies only; the league starts in week {})",
+                    season_week(&state) + 1,
+                    PRE_SEASON_WEEKS,
+                    PRE_SEASON_WEEKS + 1,
+                )
+                .unwrap();
+            }
             writeln!(
                 out,
-                "\n  [W] Train  [F] Fast-fwd  [S] Routine  [P] Play match  [K] Skip match"
+                "\n  [C] Continue  [W] Train  [F] Fast-fwd  [S] Routine  [P] Play match  [K] Skip match"
             )
             .unwrap();
             writeln!(
@@ -424,14 +874,191 @@ fn run_game_loop(
         match lines.next() {
             Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
                 "Q" | "QUIT" => return,
+                "C" => {
+                    // Manage-by-exception default (tasks/TASK-AUTO-ADVANCE-TRAINING.md):
+                    // one key trains the current week via the exact [W] path, then stops
+                    // at the next decision — a due match, a noteworthy event, or a
+                    // flashpoint. Break weeks never surface here: ApplyRoundResult
+                    // already elapses them as rest weeks, so the menu week always has a
+                    // match due; the only auto-step is this week's training.
+                    if in_pre_season(&state) {
+                        // Pre-season week (Jul-1 anchor, 7-week lead): a real,
+                        // ticked week — train (or not) and optionally play a
+                        // friendly. `AdvanceWeeks` deliberately, not `AdvanceWeek`:
+                        // each pre-season week is a fresh week, and the per-week
+                        // training flag only resets on round boundaries.
+                        state = reduce(
+                            state,
+                            Intent::AdvanceWeeks { n: 1 },
+                            &mut GoatRng::new(week_rng_seed),
+                        );
+                        display_events(out, &state.last_week_events);
+                        display_flashpoints(out, &state.last_week_flashpoints);
+                        state = dispatch_national_flashpoints(
+                            out,
+                            state,
+                            &world,
+                            beat_lib,
+                            pc_traits,
+                            &mut pc_qualifying,
+                            &mut pc_tournament,
+                        );
+                        if !state.last_week_events.is_empty() {
+                            continue;
+                        }
+                        if in_pre_season(&state) {
+                            writeln!(
+                                out,
+                                "  Pre-season week {}/{} done — [P] Play friendly  (anything else: back to menu)",
+                                season_week(&state),
+                                PRE_SEASON_WEEKS
+                            )
+                            .unwrap();
+                            write!(out, "  > ").unwrap();
+                            out.flush().unwrap();
+                            if let Some(Ok(l)) = lines.next() {
+                                if l.trim().eq_ignore_ascii_case("P") {
+                                    state = run_friendly(
+                                        lines, out, state, true, beat_lib, pc_traits, &world,
+                                    );
+                                }
+                            }
+                        } else {
+                            // Crossing into the first competition week: it opens
+                            // fresh, so round 1's week is still trainable.
+                            state.pc_week_training_done = false;
+                            writeln!(
+                                out,
+                                "  Pre-season complete — the league campaign opens this week."
+                            )
+                            .unwrap();
+                        }
+                        continue;
+                    }
+                    if !state.pc_week_training_done {
+                        state =
+                            reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(week_rng_seed));
+                        display_events(out, &state.last_week_events);
+                        display_flashpoints(out, &state.last_week_flashpoints);
+                        state = dispatch_national_flashpoints(
+                            out,
+                            state,
+                            &world,
+                            beat_lib,
+                            pc_traits,
+                            &mut pc_qualifying,
+                            &mut pc_tournament,
+                        );
+                        if !state.last_week_events.is_empty() {
+                            // A noteworthy event (injury, breakthrough, ...) is a stop
+                            // of its own — the due match is offered on the next [C].
+                            continue;
+                        }
+                    }
+                    if !has_season {
+                        continue;
+                    }
+                    // Offer the due match — same Play/Skip as the manual [P]/[K] keys.
+                    writeln!(
+                        out,
+                        "  Round {}/{} due this week — [P] Play  [K] Skip  (anything else: back to menu)",
+                        state.season_round + 1,
+                        ROUNDS_PER_SEASON
+                    )
+                    .unwrap();
+                    write!(out, "  > ").unwrap();
+                    out.flush().unwrap();
+                    match lines.next() {
+                        Some(Ok(l)) => match l.trim().to_ascii_uppercase().as_str() {
+                            "P" => {
+                                state = run_next_round(
+                                    lines,
+                                    out,
+                                    state,
+                                    true,
+                                    beat_lib,
+                                    pc_traits,
+                                    &world,
+                                    &mut pc_cup_alive,
+                                    &mut pc_continental,
+                                    &mut pc_qualifying,
+                                    &mut pc_tournament,
+                                )
+                            }
+                            "K" => {
+                                state = run_next_round(
+                                    lines,
+                                    out,
+                                    state,
+                                    false,
+                                    beat_lib,
+                                    pc_traits,
+                                    &world,
+                                    &mut pc_cup_alive,
+                                    &mut pc_continental,
+                                    &mut pc_qualifying,
+                                    &mut pc_tournament,
+                                )
+                            }
+                            _ => {} // defer — back to the menu, match offered again next [C]
+                        },
+                        _ => return,
+                    }
+                }
                 "W" => {
+                    if in_pre_season(&state) {
+                        // Pre-season week: one fresh training week each press
+                        // (AdvanceWeeks — see the [C] branch for why not AdvanceWeek).
+                        state = reduce(
+                            state,
+                            Intent::AdvanceWeeks { n: 1 },
+                            &mut GoatRng::new(week_rng_seed),
+                        );
+                        display_events(out, &state.last_week_events);
+                        display_flashpoints(out, &state.last_week_flashpoints);
+                        state = dispatch_national_flashpoints(
+                            out,
+                            state,
+                            &world,
+                            beat_lib,
+                            pc_traits,
+                            &mut pc_qualifying,
+                            &mut pc_tournament,
+                        );
+                        if !in_pre_season(&state) {
+                            // The first competition week opens fresh.
+                            state.pc_week_training_done = false;
+                        }
+                        continue;
+                    }
+                    // The reducer no-ops a second `W` in the same fixture round
+                    // (`pc_week_training_done` gate) — snapshot the flag first so we
+                    // can tell the player instead of silently redrawing the same state.
+                    let already_trained = state.pc_week_training_done;
                     state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(week_rng_seed));
-                    display_events(out, &state.last_week_events);
-                    display_flashpoints(out, &state.last_week_flashpoints);
+                    if already_trained {
+                        writeln!(
+                            out,
+                            "  You've already trained this week — Play or Skip this round's match to continue."
+                        )
+                        .unwrap();
+                    } else {
+                        display_events(out, &state.last_week_events);
+                        display_flashpoints(out, &state.last_week_flashpoints);
+                        state = dispatch_national_flashpoints(
+                            out,
+                            state,
+                            &world,
+                            beat_lib,
+                            pc_traits,
+                            &mut pc_qualifying,
+                            &mut pc_tournament,
+                        );
+                    }
                 }
                 "F" => {
                     let n = loop {
-                        let s = prompt(lines, out, "Advance how many weeks?");
+                        let s = prompt_or_exit(lines, out, "Advance how many weeks?");
                         if let Ok(n) = s.trim().parse::<u32>() {
                             break n;
                         }
@@ -444,37 +1071,79 @@ fn run_game_loop(
                     );
                     display_events(out, &state.last_week_events);
                     display_flashpoints(out, &state.last_week_flashpoints);
+                    state = dispatch_national_flashpoints(
+                        out,
+                        state,
+                        &world,
+                        beat_lib,
+                        pc_traits,
+                        &mut pc_qualifying,
+                        &mut pc_tournament,
+                    );
                 }
                 "S" => state = run_set_routine(lines, out, state),
+                "P" if has_season && in_pre_season(&state) => {
+                    state = run_friendly(lines, out, state, true, beat_lib, pc_traits, &world)
+                }
+                "K" if has_season && in_pre_season(&state) => {
+                    // Skipping a friendly just declines it — friendlies are
+                    // optional, and no league fixture exists to skip yet.
+                    writeln!(
+                        out,
+                        "  No league fixture yet — pre-season friendlies are optional ([P] plays one)."
+                    )
+                    .unwrap();
+                }
                 "P" if has_season => {
-                    state = run_next_round(lines, out, state, true, beat_lib, pc_traits)
+                    state = run_next_round(
+                        lines,
+                        out,
+                        state,
+                        true,
+                        beat_lib,
+                        pc_traits,
+                        &world,
+                        &mut pc_cup_alive,
+                        &mut pc_continental,
+                        &mut pc_qualifying,
+                        &mut pc_tournament,
+                    )
                 }
                 "K" if has_season => {
-                    state = run_next_round(lines, out, state, false, beat_lib, pc_traits)
+                    state = run_next_round(
+                        lines,
+                        out,
+                        state,
+                        false,
+                        beat_lib,
+                        pc_traits,
+                        &world,
+                        &mut pc_cup_alive,
+                        &mut pc_continental,
+                        &mut pc_qualifying,
+                        &mut pc_tournament,
+                    )
                 }
-                "T" if has_season => render_table(out, &state),
-                "U" => render_world_screen(out, &state),
+                "T" if has_season => render_table(out, &state, &world),
+                "U" => render_world_screen(out, &state, &world),
                 "G" if has_season => {
                     let ev = build_legacy_evidence(&state);
                     render_legacy_screen(out, &ev, &state);
                 }
                 "Z" => {
-                    run_save(out, &state);
+                    run_save(lines, out, &state);
                 }
                 "V" => {
                     let choices = CreationChoices {
                         name: view.name.clone(),
-                        position: match state.pc_position {
-                            1 => Position::Midfielder,
-                            2 => Position::Forward,
-                            _ => Position::Defender,
-                        },
-                        nationality: state.pc_nationality,
-                        club: state.pc_club,
+                        primary_position: PrimaryPosition::from_u8(state.pc_position)
+                            .unwrap_or(PrimaryPosition::ST),
+                        nationality: state.pc_nationality.clone(),
+                        club: state.pc_club.clone(),
                     };
-                    render_player_sheet(out, &view, &choices, 0);
+                    render_player_sheet(out, &view, &choices, 0, state.pc_lifestyle);
                 }
-                _ => {}
+                _ => writeln!(out, "  Unrecognized command.").unwrap(),
             },
             _ => return,
         }
@@ -483,6 +1152,7 @@ fn run_game_loop(
 
 // ── Season round ─────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn run_next_round(
     lines: &mut impl Iterator<Item = io::Result<String>>,
     out: &mut impl Write,
@@ -490,6 +1160,11 @@ fn run_next_round(
     play_interactive: bool,
     beat_lib: &BeatLibrary,
     pc_traits: PlayerTraits,
+    world: &WorldGenesis,
+    pc_cup_alive: &mut bool,
+    pc_continental: &mut Option<ContinentalRun>,
+    pc_qualifying: &mut Option<QualifyingCampaign>,
+    pc_tournament: &mut Option<TournamentRun>,
 ) -> WorldState {
     let pc_id = match state.pc_player_id {
         Some(id) => id,
@@ -505,8 +1180,9 @@ fn run_next_round(
     let div_idx = state.pc_div_idx as usize;
     let pc_club_id = state.pc_club_idx as usize;
     let world_seed = state.world_seed;
+    let div_clubs = world.leagues[div_idx].clubs.clone();
 
-    let week_label = format_week_header(BASE_CAREER_YEAR + season - 1, round_to_week(round));
+    let week_label = format_week_header(state.career_base_year + season - 1, round_to_week(round));
     writeln!(
         out,
         "\n--- ROUND {} / {} · {} ---",
@@ -516,156 +1192,218 @@ fn run_next_round(
     )
     .unwrap();
 
-    // Suspension check: serve ban, auto-skip.
-    if state.pc_suspension_weeks > 0 {
-        state.pc_suspension_weeks -= 1;
+    // Suspension check: serve ban, auto-skip. `reduce(ApplyRoundResult)` below
+    // is the one that actually decrements the ban (bible AC-06) — this branch
+    // only skips the PC's personal match participation.
+    if state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0 {
         writeln!(
             out,
             "  You are SUSPENDED. {} match(es) remaining after this.",
-            state.pc_suspension_weeks
+            state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) - 1
         )
         .unwrap();
         // Still need to sim other matches and advance the round.
-        let all_fixtures = round_fixtures(world_seed, season, div_idx, round);
+        let all_fixtures = round_fixtures(world_seed, season, div_idx, &div_clubs, round);
         let sim_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
         let mut sim_rng = GoatRng::new(sim_seed);
         let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
         for f in &all_fixtures {
-            let (gf, ga) =
-                sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng);
-            let h_pos = club_div_pos_in(div_idx, f.home) as u8;
-            let a_pos = club_div_pos_in(div_idx, f.away) as u8;
+            let (gf, ga) = sim_team_match(
+                world.clubs[f.home].strength,
+                world.clubs[f.away].strength,
+                &mut sim_rng,
+            );
+            let h_pos = club_div_pos_in(&div_clubs, f.home) as u8;
+            let a_pos = club_div_pos_in(&div_clubs, f.away) as u8;
             round_results.push((h_pos, a_pos, gf, ga));
         }
-        return reduce(
+        state = reduce(
             state,
             Intent::ApplyRoundResult {
+                competition_id: LEAGUE_COMPETITION_ID,
                 pc_goals: 0,
+                pc_assists: 0,
+                pc_decisive_count: 0,
+                pc_clutch_count: 0,
+                fixture_importance: goat_calendar::FixtureImportance::League,
                 pc_output: 0,
                 pc_result: 0,
                 round_results,
+                rest_weeks: goat_world::rest_weeks_after_round(round),
+                week_ends: goat_world::week_ends_after_round(round),
             },
             &mut GoatRng::new(0),
+        );
+        state = maybe_play_cup_fixture(
+            out,
+            state,
+            world,
+            beat_lib,
+            pc_traits,
+            round,
+            season,
+            div_idx,
+            pc_club_id,
+            world_seed,
+            pc_cup_alive,
+        );
+        state = maybe_play_continental_fixture(
+            out,
+            state,
+            world,
+            beat_lib,
+            pc_traits,
+            round,
+            season,
+            pc_club_id,
+            world_seed,
+            pc_continental,
+        );
+        return dispatch_national_flashpoints(
+            out,
+            state,
+            world,
+            beat_lib,
+            pc_traits,
+            pc_qualifying,
+            pc_tournament,
         );
     }
 
     // Find PC's fixture this round.
-    let pc_fixture = fixture_for_round(world_seed, season, div_idx, pc_club_id, round);
+    let pc_fixture = fixture_for_round(world_seed, season, div_idx, &div_clubs, pc_club_id, round);
 
-    let (pc_goals, pc_output, pc_result, match_result_opt) = match pc_fixture {
-        Some(f) => {
-            let is_home = f.home == pc_club_id;
-            let opp_id = if is_home { f.away } else { f.home };
-            let opp = &CLUBS[opp_id];
-            let own_str = CLUBS[pc_club_id].strength;
-            let view = state.players.snapshot(pc_id);
+    let (pc_goals, pc_assists, pc_decisive, pc_clutch, pc_output, pc_result, match_result_opt) =
+        match pc_fixture {
+            Some(f) => {
+                let is_home = f.home == pc_club_id;
+                let opp_id = if is_home { f.away } else { f.home };
+                let opp = &world.clubs[opp_id];
+                let own_str = world.clubs[pc_club_id].strength;
+                let view = state.players.snapshot(pc_id);
 
-            let match_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
-            let mut match_rng = GoatRng::new(match_seed);
+                let match_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
+                let mut match_rng = GoatRng::new(match_seed);
 
-            // Ref personality: seeded from match seed (deterministic, not consuming match RNG).
-            let ref_personality = {
-                let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
-                RefPersonality::from_rng(&mut rp_rng)
-            };
+                // Ref personality: seeded from match seed (deterministic, not consuming match RNG).
+                let ref_personality = {
+                    let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+                    RefPersonality::from_rng(&mut rp_rng)
+                };
 
-            let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
-                player_role: best_role_for_position(state.pc_position),
-                player_attrs: view.current,
-                player_familiarity: view.familiarity,
-                own_strength: own_str,
-                opp_strength: opp.strength,
-                opp_name: opp.name,
-                form: state.pc_form,
-                player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
-                    .to_int()
-                    .clamp(1, 99) as u8,
-                ref_personality,
-                dirty_rep: state.pc_discipline_rep,
-                player_traits: pc_traits,
-            };
+                let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
+                    player_role: best_role_for_position(state.pc_position),
+                    player_attrs: view.current,
+                    player_familiarity: view.familiarity,
+                    own_strength: own_str,
+                    opp_strength: opp.strength,
+                    opp_name: opp.name.clone(),
+                    form: state.pc_form,
+                    player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+                        .to_int()
+                        .clamp(1, 99) as u8,
+                    ref_personality,
+                    dirty_rep: state.pc_discipline_rep,
+                    player_traits: pc_traits,
+                };
 
-            let result = if play_interactive {
-                let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
-                while !ms.is_complete {
-                    render_beat(out, &ms);
-                    if ms.final_result.is_some() {
-                        break;
+                let result = if play_interactive {
+                    let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
+                    while !ms.is_complete {
+                        render_beat(out, &ms);
+                        if ms.final_result.is_some() {
+                            break;
+                        }
+                        let choice_idx = read_choice(
+                            lines,
+                            out,
+                            ms.current_beat().map(|b| b.choices.len()).unwrap_or(1),
+                        );
+                        ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
                     }
-                    let choice_idx = read_choice(
-                        lines,
+                    ms.final_result.unwrap_or_else(|| {
+                        auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
+                    })
+                } else {
+                    auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
+                };
+
+                render_match_result(out, &result, &opp.name);
+
+                // Show discipline outcome.
+                if result.red_card {
+                    writeln!(out, "  🟥 RED CARD! You'll serve a suspension.").unwrap();
+                } else if result.yellow_cards > 0 {
+                    writeln!(
                         out,
-                        ms.current_beat().map(|b| b.choices.len()).unwrap_or(1),
-                    );
-                    ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
+                        "  🟨 Yellow card ({} this season).",
+                        state.pc_yellow_cards_season + result.yellow_cards as u32
+                    )
+                    .unwrap();
                 }
-                ms.final_result.unwrap_or_else(|| {
-                    auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
-                })
-            } else {
-                auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
-            };
 
-            render_match_result(out, &result, opp.name);
+                let pc_goals = result
+                    .moments
+                    .iter()
+                    .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+                    .count() as u32;
+                let pc_assists = result
+                    .moments
+                    .iter()
+                    .filter(|m| matches!(m.goal_event, Some(ScoreEvent::AssistFor)))
+                    .count() as u32;
+                let pc_decisive = result.moments.iter().filter(|m| is_decisive(m)).count() as u32;
+                let pc_clutch = result.moments.iter().filter(|m| is_clutch(m)).count() as u32;
+                let pc_result: i8 = if result.goals_for > result.goals_against {
+                    1
+                } else if result.goals_for < result.goals_against {
+                    -1
+                } else {
+                    0
+                };
 
-            // Show discipline outcome.
-            if result.red_card {
-                writeln!(out, "  🟥 RED CARD! You'll serve a suspension.").unwrap();
-            } else if result.yellow_cards > 0 {
-                writeln!(
-                    out,
-                    "  🟨 Yellow card ({} this season).",
-                    state.pc_yellow_cards_season + result.yellow_cards as u32
-                )
-                .unwrap();
-            }
-
-            let pc_goals = result
-                .moments
-                .iter()
-                .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
-                .count() as u32;
-            let pc_result: i8 = if result.goals_for > result.goals_against {
-                1
-            } else if result.goals_for < result.goals_against {
-                -1
-            } else {
-                0
-            };
-
-            // Apply match effects (familiarity XP + energy cost).
-            state = reduce(
-                state,
-                Intent::ApplyMatchResult {
-                    familiarity_xp: result.familiarity_xp,
-                    energy_cost: Fixed::from_int(25),
-                    injury_weeks: None,
-                },
-                &mut GoatRng::new(0),
-            );
-
-            // Apply card result (updates suspensions and discipline rep).
-            if result.yellow_cards > 0 || result.red_card {
+                // Apply match effects (familiarity XP + energy cost).
                 state = reduce(
                     state,
-                    Intent::ApplyCardResult {
-                        yellow_cards: result.yellow_cards as u32,
-                        red_card: result.red_card,
+                    Intent::ApplyMatchResult {
+                        familiarity_xp: result.familiarity_xp,
+                        energy_cost: Fixed::from_int(25),
+                        injury_weeks: None,
                     },
                     &mut GoatRng::new(0),
                 );
-            } else {
-                // Clean match: slowly recover dirty rep.
-                state.pc_discipline_rep = (state.pc_discipline_rep - 1).max(0);
-            }
 
-            (pc_goals, result.player_output, pc_result, Some(result))
-        }
-        None => (0, 0, 0i8, None),
-    };
+                // Apply card result (updates suspensions and discipline rep).
+                if result.yellow_cards > 0 || result.red_card {
+                    state = reduce(
+                        state,
+                        Intent::ApplyCardResult {
+                            competition_id: LEAGUE_COMPETITION_ID,
+                            yellow_cards: result.yellow_cards as u32,
+                            red_card: result.red_card,
+                        },
+                        &mut GoatRng::new(0),
+                    );
+                } else {
+                    // Clean match: slowly recover dirty rep.
+                    state.pc_discipline_rep = (state.pc_discipline_rep - 1).max(0);
+                }
+
+                (
+                    pc_goals,
+                    pc_assists,
+                    pc_decisive,
+                    pc_clutch,
+                    result.player_output,
+                    pc_result,
+                    Some(result),
+                )
+            }
+            None => (0, 0, 0, 0, 0, 0i8, None),
+        };
 
     // Simulate all other matches in this round.
-    let all_fixtures = round_fixtures(world_seed, season, div_idx, round);
+    let all_fixtures = round_fixtures(world_seed, season, div_idx, &div_clubs, round);
     let sim_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
     let mut sim_rng = GoatRng::new(sim_seed);
 
@@ -683,10 +1421,14 @@ fn run_next_round(
                 (0, 0)
             }
         } else {
-            sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng)
+            sim_team_match(
+                world.clubs[f.home].strength,
+                world.clubs[f.away].strength,
+                &mut sim_rng,
+            )
         };
-        let h_pos = club_div_pos_in(div_idx, f.home) as u8;
-        let a_pos = club_div_pos_in(div_idx, f.away) as u8;
+        let h_pos = club_div_pos_in(&div_clubs, f.home) as u8;
+        let a_pos = club_div_pos_in(&div_clubs, f.away) as u8;
         round_results.push((h_pos, a_pos, gf, ga));
     }
 
@@ -700,61 +1442,1058 @@ fn run_next_round(
         let (gf, ga) = round_results
             .iter()
             .find(|&&(h, a, _, _)| {
-                h == club_div_pos_in(div_idx, f.home) as u8
-                    && a == club_div_pos_in(div_idx, f.away) as u8
+                h == club_div_pos_in(&div_clubs, f.home) as u8
+                    && a == club_div_pos_in(&div_clubs, f.away) as u8
             })
             .map(|&(_, _, gf, ga)| (gf, ga))
             .unwrap_or((0, 0));
         writeln!(
             out,
             "  {:20} {:1}–{:1}  {}",
-            CLUBS[f.home].name, gf, ga, CLUBS[f.away].name
+            world.clubs[f.home].name, gf, ga, world.clubs[f.away].name
         )
         .unwrap();
     }
 
+    // Importance comes from the season fixture list built by `orbit_fixtures`
+    // (the single source of per-fixture importance); league rounds are always
+    // `League` there today (BL5.2 §3: cup/continental fixtures aren't built as
+    // calendar Fixtures yet). Captured before `state` moves into `reduce`.
+    let fixture_importance = state
+        .pc_season_fixtures
+        .get(round)
+        .map(|f| f.importance)
+        .unwrap_or(goat_calendar::FixtureImportance::League);
     state = reduce(
         state,
         Intent::ApplyRoundResult {
+            competition_id: LEAGUE_COMPETITION_ID,
             pc_goals,
+            pc_assists,
+            pc_decisive_count: pc_decisive,
+            pc_clutch_count: pc_clutch,
+            fixture_importance,
             pc_output,
             pc_result,
             round_results,
+            rest_weeks: goat_world::rest_weeks_after_round(round),
+            week_ends: goat_world::week_ends_after_round(round),
         },
         &mut GoatRng::new(0),
     );
 
+    state = maybe_play_cup_fixture(
+        out,
+        state,
+        world,
+        beat_lib,
+        pc_traits,
+        round,
+        season,
+        div_idx,
+        pc_club_id,
+        world_seed,
+        pc_cup_alive,
+    );
+    state = maybe_play_continental_fixture(
+        out,
+        state,
+        world,
+        beat_lib,
+        pc_traits,
+        round,
+        season,
+        pc_club_id,
+        world_seed,
+        pc_continental,
+    );
+    dispatch_national_flashpoints(
+        out,
+        state,
+        world,
+        beat_lib,
+        pc_traits,
+        pc_qualifying,
+        pc_tournament,
+    )
+}
+
+/// If the PC's club has a domestic-cup tie due this league round (Design round 4,
+/// Slice 5's playable-gate dispatcher — see `cup_dispatch.rs`), play it: a red/yellow
+/// card here suspends the PC from the CUP only (`DOMESTIC_CUP_COMPETITION_ID`), never
+/// the league, and vice versa — the whole point of `SuspensionLedger` (§5.1).
+///
+/// Deliberately simplified (auto-simmed, no interactive beat-by-beat choice loop) —
+/// see `cup_dispatch.rs`'s doc comment for what's scoped out and why.
+#[allow(clippy::too_many_arguments)]
+fn maybe_play_cup_fixture(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    league_round: usize,
+    season: u32,
+    div_idx: usize,
+    pc_club_id: usize,
+    world_seed: u64,
+    pc_cup_alive: &mut bool,
+) -> WorldState {
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return state,
+    };
+    let league = &world.leagues[div_idx];
+    let fixture = match cup_fixture_due(
+        world,
+        world_seed,
+        season,
+        league.nation,
+        pc_club_id,
+        league.tier,
+        league_round,
+        *pc_cup_alive,
+    ) {
+        Some(f) => f,
+        None => return state,
+    };
+
+    let opp = &world.clubs[fixture.opponent];
+    let own_str = world.clubs[pc_club_id].strength;
+    let round_label = if fixture.is_final {
+        "FINAL".to_string()
+    } else {
+        format!("Round {}", fixture.cup_round + 1)
+    };
+    writeln!(
+        out,
+        "\n--- DOMESTIC CUP {round_label}: {} vs {} ---",
+        if fixture.pc_is_home {
+            &state.pc_club
+        } else {
+            &opp.name
+        },
+        if fixture.pc_is_home {
+            &opp.name
+        } else {
+            &state.pc_club
+        },
+    )
+    .unwrap();
+
+    let cup_seed = world_seed
+        ^ ((season as u64) << 40)
+        ^ ((fixture.cup_round as u64) << 8)
+        ^ 0x0000_0000_0000_0CA1;
+
+    let (pc_goals, pc_result, red_card, yellow_cards, familiarity_xp, pc_survives);
+    if state.pc_suspension_matches_remaining(DOMESTIC_CUP_COMPETITION_ID) > 0 {
+        writeln!(
+            out,
+            "  You are SUSPENDED from the cup ({} match(es) remaining after this) — the \
+             club plays on without you.",
+            state.pc_suspension_matches_remaining(DOMESTIC_CUP_COMPETITION_ID) - 1
+        )
+        .unwrap();
+        let mut sim_rng = GoatRng::new(cup_seed);
+        let (gf, ga) = sim_team_match(own_str, opp.strength, &mut sim_rng);
+        let winner = if gf == ga {
+            let mut tiebreak_rng = GoatRng::new(cup_seed ^ 0xBEEF);
+            break_tie(pc_club_id, fixture.opponent, gf, ga, &mut tiebreak_rng)
+        } else if gf > ga {
+            pc_club_id
+        } else {
+            fixture.opponent
+        };
+        writeln!(out, "  {} {}–{} {}", state.pc_club, gf, ga, opp.name).unwrap();
+        pc_goals = 0;
+        pc_result = 0i8;
+        red_card = false;
+        yellow_cards = 0u32;
+        familiarity_xp = [Fixed::ZERO; goat_core::roles::NUM_ROLES];
+        pc_survives = winner == pc_club_id;
+    } else {
+        let mut match_rng = GoatRng::new(cup_seed);
+        let ref_personality = {
+            let mut rp_rng = GoatRng::new(cup_seed ^ 0xBADCAFE);
+            RefPersonality::from_rng(&mut rp_rng)
+        };
+        let view = state.players.snapshot(pc_id);
+        let setup = MatchSetup {
+            player_role: best_role_for_position(state.pc_position),
+            player_attrs: view.current,
+            player_familiarity: view.familiarity,
+            own_strength: own_str,
+            opp_strength: opp.strength,
+            opp_name: opp.name.clone(),
+            form: state.pc_form,
+            player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+                .to_int()
+                .clamp(1, 99) as u8,
+            ref_personality,
+            dirty_rep: state.pc_discipline_rep,
+            player_traits: pc_traits,
+        };
+        let result = auto_play_match(beat_lib, setup, &mut match_rng);
+        render_match_result(out, &result, &opp.name);
+        let goals = result
+            .moments
+            .iter()
+            .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+            .count() as u32;
+        let winner = if result.goals_for == result.goals_against {
+            let mut tiebreak_rng = GoatRng::new(cup_seed ^ 0xBEEF);
+            break_tie(
+                pc_club_id,
+                fixture.opponent,
+                result.goals_for,
+                result.goals_against,
+                &mut tiebreak_rng,
+            )
+        } else if result.goals_for > result.goals_against {
+            pc_club_id
+        } else {
+            fixture.opponent
+        };
+        pc_goals = goals;
+        pc_result = if result.goals_for > result.goals_against {
+            1
+        } else if result.goals_for < result.goals_against {
+            -1
+        } else {
+            0
+        };
+        red_card = result.red_card;
+        yellow_cards = result.yellow_cards as u32;
+        familiarity_xp = result.familiarity_xp;
+        pc_survives = winner == pc_club_id;
+    }
+    let _ = (pc_goals, pc_result);
+
+    state = reduce(
+        state,
+        Intent::ApplyMatchResult {
+            familiarity_xp,
+            energy_cost: Fixed::from_int(25),
+            injury_weeks: None,
+        },
+        &mut GoatRng::new(0),
+    );
+    if yellow_cards > 0 || red_card {
+        if red_card {
+            writeln!(out, "  🟥 RED CARD (cup)! You'll serve a cup suspension.").unwrap();
+        }
+        state = reduce(
+            state,
+            Intent::ApplyCardResult {
+                competition_id: DOMESTIC_CUP_COMPETITION_ID,
+                yellow_cards,
+                red_card,
+            },
+            &mut GoatRng::new(0),
+        );
+    }
+    state = reduce(
+        state,
+        Intent::ApplyOrbitMatchResult {
+            competition_id: DOMESTIC_CUP_COMPETITION_ID,
+        },
+        &mut GoatRng::new(0),
+    );
+
+    *pc_cup_alive = pc_survives;
+    if pc_survives {
+        writeln!(out, "  You advance in the cup!").unwrap();
+    } else {
+        writeln!(out, "  Knocked out of the cup.").unwrap();
+    }
+
     state
 }
 
-fn club_div_pos_in(div_idx: usize, club_id: usize) -> usize {
-    DIV_CLUBS[div_idx]
+/// Play one live-or-suspended orbit match for `competition_id` (suspension-gated the
+/// same way `maybe_play_cup_fixture` is), applying `ApplyMatchResult`/`ApplyCardResult`/
+/// `ApplyOrbitMatchResult` and returning the PC's own goals-for/against. Shared by
+/// `maybe_play_continental_fixture`'s group and knockout legs — unlike the cup
+/// dispatcher (one call site, so it inlines this), continental needs the same shape
+/// twice (group matchday, each knockout leg), so it's factored out here instead of
+/// duplicated a third time.
+#[allow(clippy::too_many_arguments)]
+fn play_orbit_match(
+    out: &mut impl Write,
+    mut state: WorldState,
+    pc_id: goat_core::player::PlayerId,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    own_str: u8,
+    opp_strength: u8,
+    opp_name: &str,
+    competition_id: goat_calendar::CompetitionId,
+    seed: u64,
+) -> (WorldState, u32, u32) {
+    let (gf, ga, red_card, yellow_cards, familiarity_xp);
+    if state.pc_suspension_matches_remaining(competition_id) > 0 {
+        writeln!(
+            out,
+            "  You are SUSPENDED from {} ({} match(es) remaining after this) — the club \
+             plays on without you.",
+            competition_label(competition_id),
+            state.pc_suspension_matches_remaining(competition_id) - 1
+        )
+        .unwrap();
+        let mut sim_rng = GoatRng::new(seed);
+        let (g_for, g_against) = sim_team_match(own_str, opp_strength, &mut sim_rng);
+        writeln!(
+            out,
+            "  {} {}–{} {}",
+            state.pc_club, g_for, g_against, opp_name
+        )
+        .unwrap();
+        gf = g_for;
+        ga = g_against;
+        red_card = false;
+        yellow_cards = 0u32;
+        familiarity_xp = [Fixed::ZERO; goat_core::roles::NUM_ROLES];
+    } else {
+        let mut match_rng = GoatRng::new(seed);
+        let ref_personality = {
+            let mut rp_rng = GoatRng::new(seed ^ 0xBADCAFE);
+            RefPersonality::from_rng(&mut rp_rng)
+        };
+        let view = state.players.snapshot(pc_id);
+        let setup = MatchSetup {
+            player_role: best_role_for_position(state.pc_position),
+            player_attrs: view.current,
+            player_familiarity: view.familiarity,
+            own_strength: own_str,
+            opp_strength,
+            opp_name: opp_name.to_string(),
+            form: state.pc_form,
+            player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+                .to_int()
+                .clamp(1, 99) as u8,
+            ref_personality,
+            dirty_rep: state.pc_discipline_rep,
+            player_traits: pc_traits,
+        };
+        let result = auto_play_match(beat_lib, setup, &mut match_rng);
+        render_match_result(out, &result, opp_name);
+        gf = result.goals_for;
+        ga = result.goals_against;
+        red_card = result.red_card;
+        yellow_cards = result.yellow_cards as u32;
+        familiarity_xp = result.familiarity_xp;
+    }
+
+    state = reduce(
+        state,
+        Intent::ApplyMatchResult {
+            familiarity_xp,
+            energy_cost: Fixed::from_int(25),
+            injury_weeks: None,
+        },
+        &mut GoatRng::new(0),
+    );
+    if yellow_cards > 0 || red_card {
+        if red_card {
+            writeln!(
+                out,
+                "  🟥 RED CARD ({})! You'll serve a suspension there.",
+                competition_label(competition_id)
+            )
+            .unwrap();
+        }
+        state = reduce(
+            state,
+            Intent::ApplyCardResult {
+                competition_id,
+                yellow_cards,
+                red_card,
+            },
+            &mut GoatRng::new(0),
+        );
+    }
+    state = reduce(
+        state,
+        Intent::ApplyOrbitMatchResult { competition_id },
+        &mut GoatRng::new(0),
+    );
+    (state, gf, ga)
+}
+
+/// If the PC's club has a continental fixture due this league round (Design round 4,
+/// Slice 5 follow-up — see `continental_dispatch.rs`'s doc comment), play it. Mirrors
+/// `maybe_play_cup_fixture`'s shape: a red/yellow card here suspends the PC from that
+/// TIER only (`CONTINENTAL_TIERn_COMPETITION_ID`), never the league/cup or another
+/// tier, proving `SuspensionLedger` scoping composes for continental too.
+#[allow(clippy::too_many_arguments)]
+fn maybe_play_continental_fixture(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    league_round: usize,
+    season: u32,
+    pc_club_id: usize,
+    world_seed: u64,
+    pc_continental: &mut Option<ContinentalRun>,
+) -> WorldState {
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return state,
+    };
+    let is_due = pc_continental
+        .as_ref()
+        .is_some_and(|run| run.fixture_due(league_round));
+    if !is_due {
+        return state;
+    }
+    let tier = pc_continental.as_ref().unwrap().tier;
+    let competition_id = match tier {
+        ContinentalTier::Tier1 => CONTINENTAL_TIER1_COMPETITION_ID,
+        ContinentalTier::Tier2 => CONTINENTAL_TIER2_COMPETITION_ID,
+        ContinentalTier::Tier3 => CONTINENTAL_TIER3_COMPETITION_ID,
+    };
+    let own_str = world.clubs[pc_club_id].strength;
+    let phase = pc_continental.as_ref().unwrap().phase;
+
+    match phase {
+        ContinentalPhase::GroupMatchday(md) => {
+            {
+                let run = pc_continental.as_mut().unwrap();
+                run.sim_other_pair(world, world_seed, season, md);
+            }
+            let opp_id = pc_continental.as_ref().unwrap().group_opponent(md);
+            let opp = world.clubs[opp_id].clone();
+            writeln!(
+                out,
+                "\n--- CONTINENTAL {:?} — GROUP MATCHDAY {}: {} vs {} ---",
+                tier,
+                md + 1,
+                state.pc_club,
+                opp.name
+            )
+            .unwrap();
+            let seed = world_seed
+                ^ ((season as u64) << 36)
+                ^ ((md as u64) << 4)
+                ^ (competition_id as u64).rotate_left(13)
+                ^ 0x0000_0000_0000_C701;
+            let (new_state, gf, ga) = play_orbit_match(
+                out,
+                state,
+                pc_id,
+                beat_lib,
+                pc_traits,
+                own_str,
+                opp.strength,
+                &opp.name,
+                competition_id,
+                seed,
+            );
+            state = new_state;
+
+            let run = pc_continental.as_mut().unwrap();
+            run.record_pc_group_result(gf, ga);
+            render_continental_group_table(out, &state, world, run);
+            run.advance(world, world_seed, season, pc_club_id);
+            if matches!(run.phase, ContinentalPhase::Done) {
+                writeln!(out, "  Eliminated at the group stage.").unwrap();
+                *pc_continental = None;
+            }
+        }
+        ContinentalPhase::KnockoutLeg { round, leg } => {
+            let is_final = pc_continental.as_ref().unwrap().is_final_round();
+            let opp_id = pc_continental.as_ref().unwrap().knockout_opponent.unwrap();
+            let opp = world.clubs[opp_id].clone();
+            let round_label = if is_final {
+                "FINAL".to_string()
+            } else {
+                format!("Knockout Round {} Leg {}", round + 1, leg + 1)
+            };
+            writeln!(
+                out,
+                "\n--- CONTINENTAL {tier:?} {round_label}: {} vs {} ---",
+                state.pc_club, opp.name
+            )
+            .unwrap();
+            let seed = world_seed
+                ^ ((season as u64) << 36)
+                ^ ((round as u64) << 8)
+                ^ ((leg as u64) << 2)
+                ^ (competition_id as u64).rotate_left(17)
+                ^ 0x0000_0000_0000_C702;
+            let (new_state, gf, ga) = play_orbit_match(
+                out,
+                state,
+                pc_id,
+                beat_lib,
+                pc_traits,
+                own_str,
+                opp.strength,
+                &opp.name,
+                competition_id,
+                seed,
+            );
+            state = new_state;
+
+            let run = pc_continental.as_mut().unwrap();
+            run.accumulate_knockout_leg(gf, ga);
+            if leg == 0 && !is_final {
+                run.advance(world, world_seed, season, pc_club_id);
+            } else {
+                let mut tiebreak_rng = GoatRng::new(seed ^ 0xBEEF);
+                let pc_wins = run.resolve_knockout_tie(
+                    world,
+                    world_seed,
+                    season,
+                    pc_club_id,
+                    &mut tiebreak_rng,
+                );
+                let (agg_pc, agg_opp) = run.knockout_agg;
+                writeln!(
+                    out,
+                    "  Aggregate: {} {}–{} {}",
+                    state.pc_club, agg_pc, agg_opp, opp.name
+                )
+                .unwrap();
+                if pc_wins && is_final {
+                    writeln!(
+                        out,
+                        "  *** {} ARE CROWNED CONTINENTAL {:?} CHAMPIONS! ***",
+                        state.pc_club, tier
+                    )
+                    .unwrap();
+                    *pc_continental = None;
+                } else if pc_wins {
+                    writeln!(out, "  You advance in the continental knockout!").unwrap();
+                } else if is_final {
+                    writeln!(
+                        out,
+                        "  Runners-up. {} are crowned continental {:?} champions.",
+                        opp.name, tier
+                    )
+                    .unwrap();
+                    *pc_continental = None;
+                } else {
+                    writeln!(out, "  Knocked out of the continental {tier:?}.").unwrap();
+                    *pc_continental = None;
+                }
+            }
+        }
+        ContinentalPhase::Done => {}
+    }
+
+    state
+}
+
+/// Print the PC's continental group's live standings (points/goal-diff/gf sorted).
+fn render_continental_group_table(
+    out: &mut impl Write,
+    state: &WorldState,
+    world: &WorldGenesis,
+    run: &ContinentalRun,
+) {
+    let mut order: Vec<usize> = (0..4).collect();
+    order.sort_by(|&a, &b| {
+        run.standings[b]
+            .points()
+            .cmp(&run.standings[a].points())
+            .then(
+                run.standings[b]
+                    .goal_diff()
+                    .cmp(&run.standings[a].goal_diff()),
+            )
+            .then(run.standings[b].gf.cmp(&run.standings[a].gf))
+    });
+    writeln!(out, "  --- Group table ---").unwrap();
+    for &i in &order {
+        let s = &run.standings[i];
+        let name = if i == 0 {
+            state.pc_club.as_str()
+        } else {
+            world.clubs[s.club].name.as_str()
+        };
+        writeln!(
+            out,
+            "  {:<20} P{} W{} D{} L{} GD{:+} Pts{}",
+            name,
+            s.w + s.d + s.l,
+            s.w,
+            s.d,
+            s.l,
+            s.goal_diff(),
+            s.points()
+        )
+        .unwrap();
+    }
+}
+
+/// Roll the PC's national-team call-up chance for one fixture (Design round 2, Doc
+/// B §B.3's call-up layer, finally wired to a live trigger — see `national_dispatch.rs`'s
+/// doc comment for why club-tier `team_fit`'s tiered odds don't apply here: there's no
+/// national-squad tactical-identity concept, so this uses the PC's own OVR directly as
+/// a percent chance, floored/ceilinged so neither a bench player nor a legend is ever
+/// fully guaranteed or fully excluded).
+fn national_call_up_roll(state: &WorldState, seed: u64) -> bool {
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return false,
+    };
+    let view = state.players.snapshot(pc_id);
+    let position = state.players.get_primary_position(pc_id);
+    let pct = ovr(&view.current, position).to_int().clamp(10, 95) as u32;
+    let mut rng = GoatRng::new(seed);
+    rng.next_range_u32(0, 99) < pct
+}
+
+/// Play one national-team fixture: suspension-gated and call-up-gated. A card here
+/// suspends the PC from `competition_id` (World Cup or continental championship) only
+/// — never a club competition, and vice versa. Fires `Intent::NationalTeamCallUp` every
+/// time (Design round 2, Doc B §B.3), including a `called_up: false` no-op when the PC
+/// wasn't selected, so `pc_season_caps`/`pc_season_international_goals` stay accurate.
+#[allow(clippy::too_many_arguments)]
+fn play_national_fixture(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    pop: &Population,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    pc_nation: NationId,
+    opp_nation: NationId,
+    elapsed_weeks: u32,
+    competition_id: goat_calendar::CompetitionId,
+    seed: u64,
+) -> (WorldState, u32, u32) {
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return (state, 0, 0),
+    };
+    let own_str = national_team_strength(
+        pop,
+        world.nations[pc_nation].stature,
+        pc_nation,
+        elapsed_weeks,
+    );
+    let opp_str = national_team_strength(
+        pop,
+        world.nations[opp_nation].stature,
+        opp_nation,
+        elapsed_weeks,
+    );
+    let opp_name = world.nation_name(opp_nation).to_string();
+    let suspended = state.pc_suspension_matches_remaining(competition_id) > 0;
+    let called_up = !suspended && national_call_up_roll(&state, seed ^ 0x0000_0000_0000_CA11);
+
+    if !suspended && !called_up {
+        writeln!(
+            out,
+            "  Not called up this window ({}) — {} play on without you.",
+            competition_label(competition_id),
+            world.nation_name(pc_nation)
+        )
+        .unwrap();
+        let mut rng = GoatRng::new(seed);
+        let (gf, ga) = sim_team_match(own_str, opp_str, &mut rng);
+        writeln!(
+            out,
+            "  {} {}–{} {}",
+            world.nation_name(pc_nation),
+            gf,
+            ga,
+            opp_name
+        )
+        .unwrap();
+        state = reduce(
+            state,
+            Intent::NationalTeamCallUp {
+                called_up: false,
+                started: false,
+                goals: 0,
+            },
+            &mut GoatRng::new(0),
+        );
+        return (state, gf, ga);
+    }
+
+    if called_up {
+        writeln!(
+            out,
+            "  *** Called up for {}! ***",
+            competition_label(competition_id)
+        )
+        .unwrap();
+    }
+    let (new_state, gf, ga) = play_orbit_match(
+        out,
+        state,
+        pc_id,
+        beat_lib,
+        pc_traits,
+        own_str,
+        opp_str,
+        &opp_name,
+        competition_id,
+        seed,
+    );
+    state = new_state;
+    state = reduce(
+        state,
+        Intent::NationalTeamCallUp {
+            called_up,
+            started: called_up,
+            goals: if called_up { gf } else { 0 },
+        },
+        &mut GoatRng::new(0),
+    );
+    (state, gf, ga)
+}
+
+/// If an `InternationalBreak` or `OffSeason` flashpoint fired this week, dispatch the
+/// PC's national-team tournament cycle (Design round 4, Slice 4/5 follow-up — see
+/// `national_dispatch.rs`'s doc comment for why an entire cycle — qualifying, group
+/// stage, knockout — resolves within one tournament season rather than spread across
+/// several real seasons like the engine's own doc comment describes).
+#[allow(clippy::too_many_arguments)]
+fn dispatch_national_flashpoints(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    pc_qualifying: &mut Option<QualifyingCampaign>,
+    pc_tournament: &mut Option<TournamentRun>,
+) -> WorldState {
+    let flashpoints = state.last_week_flashpoints.clone();
+    for fp in flashpoints {
+        match fp.window {
+            goat_calendar::WindowKind::InternationalBreak => {
+                state = maybe_run_qualifying_campaign(
+                    out,
+                    state,
+                    world,
+                    beat_lib,
+                    pc_traits,
+                    pc_qualifying,
+                    pc_tournament,
+                );
+            }
+            goat_calendar::WindowKind::OffSeason => {
+                state =
+                    maybe_play_tournament(out, state, world, beat_lib, pc_traits, pc_tournament);
+            }
+            _ => {}
+        }
+    }
+    state
+}
+
+/// Resolve the PC's entire qualifying campaign (all 5 rounds) at this tournament
+/// season's `InternationalBreak` flashpoint, if one is due and hasn't already run this
+/// season.
+#[allow(clippy::too_many_arguments)]
+fn maybe_run_qualifying_campaign(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    pc_qualifying: &mut Option<QualifyingCampaign>,
+    pc_tournament: &mut Option<TournamentRun>,
+) -> WorldState {
+    if pc_qualifying.is_some() {
+        return state; // already resolved this season
+    }
+    let season = state.season_number;
+    let kind = match TournamentKind::for_season(season) {
+        Some(k) => k,
+        None => return state,
+    };
+    let pc_nation = match world
+        .nations
+        .iter()
+        .find(|n| n.name == state.pc_nationality)
+    {
+        Some(n) => n.id,
+        None => return state,
+    };
+
+    writeln!(out, "\n*** {} QUALIFYING CAMPAIGN ***", kind.label()).unwrap();
+    let pop = goat_world::population::genesis(state.world_seed, world);
+    let competition_id = if kind.is_world_cup() {
+        WORLD_CUP_COMPETITION_ID
+    } else {
+        CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID
+    };
+    let elapsed_weeks = national_dispatch::elapsed_weeks_for(season);
+    let mut campaign = QualifyingCampaign::start(state.world_seed, season, pc_nation);
+
+    while !campaign.is_complete() {
+        let seed = state.world_seed
+            ^ ((season as u64) << 40)
+            ^ ((campaign.round as u64) << 4)
+            ^ 0x0000_0000_0000_FB01;
+        if let Some(opp_nation) = campaign.play_round(world, &pop, seed) {
+            writeln!(
+                out,
+                "\n--- {} QUALIFYING: {} vs {} ---",
+                kind.label(),
+                world.nation_name(pc_nation),
+                world.nation_name(opp_nation)
+            )
+            .unwrap();
+            let (new_state, gf, ga) = play_national_fixture(
+                out,
+                state,
+                world,
+                &pop,
+                beat_lib,
+                pc_traits,
+                pc_nation,
+                opp_nation,
+                elapsed_weeks,
+                competition_id,
+                seed,
+            );
+            state = new_state;
+            campaign.record_pc_result(gf, ga);
+        }
+        campaign.advance_round();
+    }
+
+    let tiebreak_seed = state.world_seed ^ (season as u64).rotate_left(31) ^ 0x0000_0000_0000_FB02;
+    if campaign.pc_qualifies(tiebreak_seed) {
+        writeln!(
+            out,
+            "  *** {} qualify for the {}! ***",
+            world.nation_name(pc_nation),
+            kind.label()
+        )
+        .unwrap();
+        *pc_tournament = Some(TournamentRun::start(
+            state.world_seed,
+            kind,
+            season,
+            pc_nation,
+        ));
+    } else {
+        writeln!(
+            out,
+            "  {} fail to qualify for the {}.",
+            world.nation_name(pc_nation),
+            kind.label()
+        )
+        .unwrap();
+    }
+    *pc_qualifying = Some(campaign);
+    state
+}
+
+/// Resolve the PC's entire tournament-proper run (group stage + knockout) at this
+/// tournament season's `OffSeason` flashpoint, if their nation qualified.
+fn maybe_play_tournament(
+    out: &mut impl Write,
+    mut state: WorldState,
+    world: &WorldGenesis,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    pc_tournament: &mut Option<TournamentRun>,
+) -> WorldState {
+    let mut run = match pc_tournament.take() {
+        Some(r) => r,
+        None => return state,
+    };
+    let pc_nation = run.standings[0].nation;
+    let kind = run.kind;
+    let season = run.tournament_season;
+    let competition_id = if kind.is_world_cup() {
+        WORLD_CUP_COMPETITION_ID
+    } else {
+        CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID
+    };
+    let pop = goat_world::population::genesis(state.world_seed, world);
+    let elapsed_weeks = national_dispatch::elapsed_weeks_for(season);
+    writeln!(out, "\n*** THE {} BEGINS ***", kind.label()).unwrap();
+
+    loop {
+        match run.phase {
+            TournamentPhase::GroupMatchday(md) => {
+                run.sim_other_pair(world, &pop, state.world_seed ^ ((season as u64) << 44), md);
+                let opp_nation = run.group_opponent(md);
+                let seed = state.world_seed
+                    ^ ((season as u64) << 40)
+                    ^ ((md as u64) << 4)
+                    ^ 0x0000_0000_0000_FB03;
+                writeln!(
+                    out,
+                    "\n--- {} GROUP MATCHDAY {}: {} vs {} ---",
+                    kind.label(),
+                    md + 1,
+                    world.nation_name(pc_nation),
+                    world.nation_name(opp_nation)
+                )
+                .unwrap();
+                let (new_state, gf, ga) = play_national_fixture(
+                    out,
+                    state,
+                    world,
+                    &pop,
+                    beat_lib,
+                    pc_traits,
+                    pc_nation,
+                    opp_nation,
+                    elapsed_weeks,
+                    competition_id,
+                    seed,
+                );
+                state = new_state;
+                run.record_pc_group_result(gf, ga);
+                run.advance_group(state.world_seed);
+            }
+            TournamentPhase::Semifinal | TournamentPhase::Final => {
+                let is_final = matches!(run.phase, TournamentPhase::Final);
+                let round_label = if is_final { "FINAL" } else { "SEMIFINAL" };
+                let opp_nation = run.knockout_opponent.unwrap();
+                let seed = state.world_seed
+                    ^ ((season as u64) << 40)
+                    ^ (is_final as u64)
+                    ^ 0x0000_0000_0000_FB04;
+                writeln!(
+                    out,
+                    "\n--- {} {round_label}: {} vs {} ---",
+                    kind.label(),
+                    world.nation_name(pc_nation),
+                    world.nation_name(opp_nation)
+                )
+                .unwrap();
+                let (new_state, gf, ga) = play_national_fixture(
+                    out,
+                    state,
+                    world,
+                    &pop,
+                    beat_lib,
+                    pc_traits,
+                    pc_nation,
+                    opp_nation,
+                    elapsed_weeks,
+                    competition_id,
+                    seed,
+                );
+                state = new_state;
+                let mut tiebreak_rng = GoatRng::new(seed ^ 0xBEEF);
+                let pc_wins = run.resolve_knockout_match(
+                    state.world_seed,
+                    pc_nation,
+                    gf,
+                    ga,
+                    &mut tiebreak_rng,
+                );
+                if pc_wins && is_final {
+                    writeln!(
+                        out,
+                        "  *** {} ARE CROWNED {} CHAMPIONS! ***",
+                        world.nation_name(pc_nation),
+                        kind.label()
+                    )
+                    .unwrap();
+                    state = reduce(
+                        state,
+                        Intent::ApplyNationalTournamentWin {
+                            is_world_cup: kind.is_world_cup(),
+                        },
+                        &mut GoatRng::new(0),
+                    );
+                } else if pc_wins {
+                    writeln!(
+                        out,
+                        "  {} advance to the final!",
+                        world.nation_name(pc_nation)
+                    )
+                    .unwrap();
+                } else if is_final {
+                    writeln!(
+                        out,
+                        "  Runners-up. {} are crowned {} champions.",
+                        world.nation_name(opp_nation),
+                        kind.label()
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
+                        out,
+                        "  {} are eliminated in the semifinal.",
+                        world.nation_name(pc_nation)
+                    )
+                    .unwrap();
+                }
+            }
+            TournamentPhase::Done => break,
+        }
+        if matches!(run.phase, TournamentPhase::Done) {
+            break;
+        }
+    }
+    state
+}
+
+fn club_div_pos_in(div_clubs: &[usize], club_id: usize) -> usize {
+    div_clubs
         .iter()
         .position(|&c| c == club_id)
         .expect("club in division")
 }
 
+/// Human-readable competition name for suspension display (Design round 4, Slice 5).
+fn competition_label(competition_id: goat_calendar::CompetitionId) -> &'static str {
+    if competition_id == LEAGUE_COMPETITION_ID {
+        "League"
+    } else if competition_id == DOMESTIC_CUP_COMPETITION_ID {
+        "Domestic Cup"
+    } else if competition_id == CONTINENTAL_TIER1_COMPETITION_ID {
+        "Continental Tier 1"
+    } else if competition_id == CONTINENTAL_TIER2_COMPETITION_ID {
+        "Continental Tier 2"
+    } else if competition_id == CONTINENTAL_TIER3_COMPETITION_ID {
+        "Continental Tier 3"
+    } else if competition_id == WORLD_CUP_COMPETITION_ID {
+        "World Cup"
+    } else if competition_id == CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID {
+        "Continental Championship"
+    } else {
+        "Competition"
+    }
+}
+
+/// Family-representative match role for a 0..7 PrimaryPosition discriminant
+/// (0=ST … 7=CB). The pre-revision 0..2 mapping would deploy a Striker (0) as
+/// a CentreBack.
 fn best_role_for_position(pc_position: u8) -> RoleId {
-    match pc_position {
-        0 => RoleId::CentreBack,
-        1 => RoleId::CentralMid,
-        _ => RoleId::CompleteForward,
+    use goat_core::{positions::PrimaryPosition, roles::PositionFamily};
+    match PrimaryPosition::from_u8(pc_position)
+        .unwrap_or(PrimaryPosition::ST)
+        .family()
+    {
+        PositionFamily::Defender => RoleId::CentreBack,
+        PositionFamily::Midfielder => RoleId::CentralMid,
+        PositionFamily::Forward => RoleId::CompleteForward,
     }
 }
 
 // ── Table display ─────────────────────────────────────────────────────────────
 
-fn render_table(out: &mut impl Write, state: &WorldState) {
+fn render_table(out: &mut impl Write, state: &WorldState, world: &WorldGenesis) {
     let div_idx = state.pc_div_idx as usize;
-    let div_club_ids = DIV_CLUBS[div_idx];
-    let table = Table::from_raw(&state.table_raw, &div_club_ids);
+    let div_club_ids = &world.leagues[div_idx].clubs;
+    let table = Table::from_raw(&state.table_raw, div_club_ids);
     let sorted = table.sorted();
     let pc_club_id = state.pc_club_idx as usize;
 
     writeln!(
         out,
         "\n  {} — Round {}",
-        DIV_NAMES[div_idx], state.season_round
+        world.leagues[div_idx].name, state.season_round
     )
     .unwrap();
     writeln!(
@@ -770,7 +2509,7 @@ fn render_table(out: &mut impl Write, state: &WorldState) {
             out,
             " {}{:<22} {:>3} {:>3} {:>3} {:>3} {:>4} {:>4} {:>4}",
             marker,
-            CLUBS[e.club_id].name,
+            world.clubs[e.club_id].name,
             e.played(),
             e.w,
             e.d,
@@ -785,7 +2524,12 @@ fn render_table(out: &mut impl Write, state: &WorldState) {
 
 // ── Season review ─────────────────────────────────────────────────────────────
 
-fn render_season_review(out: &mut impl Write, state: &WorldState, view: &PlayerView) {
+fn render_season_review(
+    out: &mut impl Write,
+    state: &WorldState,
+    view: &PlayerView,
+    world: &WorldGenesis,
+) {
     writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
     writeln!(
         out,
@@ -796,21 +2540,22 @@ fn render_season_review(out: &mut impl Write, state: &WorldState, view: &PlayerV
     writeln!(out, "╠══════════════════════════════════════════════╣").unwrap();
 
     let div_idx = state.pc_div_idx as usize;
-    let div_club_ids = DIV_CLUBS[div_idx];
-    let table = Table::from_raw(&state.table_raw, &div_club_ids);
+    let div_club_ids = &world.leagues[div_idx].clubs;
+    let table = Table::from_raw(&state.table_raw, div_club_ids);
     let pos = table.position_of(state.pc_club_idx as usize);
 
     writeln!(
         out,
         "║  {}: finished {}th in {}",
-        CLUBS[state.pc_club_idx as usize].name, pos, DIV_NAMES[div_idx]
+        state.pc_club, pos, world.leagues[div_idx].name
     )
     .unwrap();
     writeln!(
         out,
-        "║  Your season: {} matches  {} goals  Output avg: {}",
+        "║  Your season: {} matches  {} goals  {} assists  Output avg: {}",
         state.pc_season_matches,
         state.pc_season_goals,
+        state.pc_season_assists,
         if state.pc_season_matches > 0 {
             state.pc_season_output / state.pc_season_matches as i32
         } else {
@@ -838,7 +2583,7 @@ fn render_season_review(out: &mut impl Write, state: &WorldState, view: &PlayerV
             "║ {}{:2}. {:<20} {:2}pts {:2}GD",
             marker,
             rank + 1,
-            CLUBS[e.club_id].name,
+            world.clubs[e.club_id].name,
             e.points(),
             e.goal_diff()
         )
@@ -861,18 +2606,25 @@ fn build_legacy_evidence(state: &WorldState) -> LegacyEvidence {
         league_titles: state.pc_league_titles,
         clubs_served: state.pc_clubs_served,
         longest_club_tenure: state.pc_longest_club_tenure,
+        career_standout_matches: state.pc_career_standout_matches,
+        career_best_ovr: state.pc_career_best_ovr,
+        career_transfer_requests: state.pc_career_transfer_requests,
+        career_caps: state.pc_career_caps,
+        career_international_goals: state.pc_career_international_goals,
+        career_world_cups_won: state.pc_career_world_cups_won,
+        career_continental_championships_won: state.pc_career_continental_championships_won,
     }
 }
 
 fn render_legacy_screen(out: &mut impl Write, ev: &LegacyEvidence, state: &WorldState) {
-    let pc_name = CLUBS[state.pc_club_idx as usize].name; // placeholder — use player name
+    let pc_name = &state.pc_club; // placeholder — use player name
     let axes = compute_axes(ev);
     let rep = compute_reputation(
         state.pc_sporting_rep,
         state.pc_discipline_rep,
         state.pc_club_fan_rep,
     );
-    let rankings = all_rankings(&axes);
+    let rankings = all_rankings(ev, &axes);
 
     writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
     writeln!(
@@ -936,17 +2688,30 @@ fn render_legacy_screen(out: &mut impl Write, ev: &LegacyEvidence, state: &World
     }
     writeln!(out, "╚══════════════════════════════════════════════╝").unwrap();
     let _ = pc_name;
+
+    // Career totals/Pantheon scores are batched at season end (docs/CALENDAR.md's
+    // season-boundary pipeline) — mid-season they're intentionally frozen, but
+    // nothing told the player that (playtest finding).
+    if state.season_round < ROUNDS_PER_SEASON as u32 {
+        writeln!(
+            out,
+            "  (Career totals and Pantheon scores update at season end — Round {}/{} so far.)",
+            state.season_round, ROUNDS_PER_SEASON
+        )
+        .unwrap();
+    }
 }
 
 fn run_awards_and_pundits(
     out: &mut impl Write,
     mut state: WorldState,
     view: &PlayerView,
+    world: &WorldGenesis,
 ) -> WorldState {
     let season = state.season_number;
     let world_seed = state.world_seed;
     let pc_name = &view.name;
-    let pc_club = state.pc_club;
+    let pc_club = state.pc_club.clone();
 
     let season_avg = if state.pc_season_matches > 0 {
         state.pc_season_output / state.pc_season_matches as i32
@@ -988,8 +2753,8 @@ fn run_awards_and_pundits(
 
     // Compute finish position for legacy/rep update.
     let div_idx = state.pc_div_idx as usize;
-    let div_clubs = goat_world::DIV_CLUBS[div_idx];
-    let table = goat_world::Table::from_raw(&state.table_raw, &div_clubs);
+    let div_clubs = &world.leagues[div_idx].clubs;
+    let table = goat_world::Table::from_raw(&state.table_raw, div_clubs);
     let finish_pos = table.position_of(state.pc_club_idx as usize) as u32;
     let won_title = finish_pos == 1;
 
@@ -1004,22 +2769,42 @@ fn run_awards_and_pundits(
 
     // Capture before moving state into reduce.
     let s_goals = state.pc_season_goals;
+    let s_assists = state.pc_season_assists;
     let s_matches = state.pc_season_matches;
     let s_output = state.pc_season_output;
+    let s_standout_matches = state.pc_season_standout_matches;
+    let s_transfer_requests = state.pc_season_transfer_requests;
+    let s_caps = state.pc_season_caps;
+    let s_international_goals = state.pc_season_international_goals;
+    let s_world_cups_won = state.pc_season_world_cups_won;
+    let s_continental_championships_won = state.pc_season_continental_championships_won;
+    let s_decisive_moments = state.pc_season_decisive_moments;
+    let s_clutch_index = state.pc_season_clutch_index;
 
     // Update legacy evidence via intent.
     state = reduce(
         state,
         Intent::ApplySeasonEndLegacy {
             season_goals: s_goals,
+            season_assists: s_assists,
             season_matches: s_matches,
             season_output_sum: s_output,
             won_title,
             player_of_year: player_of_year_won,
             finish_position: finish_pos,
-            decisive_moments: 0,
+            decisive_moments: s_decisive_moments,
+            season_clutch_index: s_clutch_index,
             new_sporting_rep: new_sporting,
             new_club_fan_rep: new_club_fan,
+            season_standout_matches: s_standout_matches,
+            season_transfer_requests: s_transfer_requests,
+            // National-team call-ups (Design round 2, Doc B §B.3) and tournaments
+            // (Design round 4, Slice 4) are now live-dispatched from `national_dispatch`
+            // (see its doc comment) — these season-live accumulators are real.
+            season_caps: s_caps,
+            season_international_goals: s_international_goals,
+            season_world_cups_won: s_world_cups_won,
+            season_continental_championships_won: s_continental_championships_won,
         },
         &mut GoatRng::new(0),
     );
@@ -1027,7 +2812,7 @@ fn run_awards_and_pundits(
     // Pundit reactions.
     let ev = build_legacy_evidence(&state);
     let axes = compute_axes(&ev);
-    let rankings = all_rankings(&axes);
+    let rankings = all_rankings(&ev, &axes);
 
     writeln!(out, "\n  --- THE PUNDITS ---").unwrap();
     for pundit in PUNDITS.iter() {
@@ -1038,7 +2823,7 @@ fn run_awards_and_pundits(
             avg_output: season_avg,
             finish_pos,
         };
-        let comment = pundit_comment(pundit, &axes, &ctx, pc_name, pc_club, season);
+        let comment = pundit_comment(pundit, &axes, &ctx, pc_name, &pc_club, season);
         writeln!(out, "\n  {} ({}):", pundit.name, pundit.role).unwrap();
         // Word-wrap at ~60 chars
         let words: Vec<&str> = comment.split_whitespace().collect();
@@ -1062,7 +2847,11 @@ fn run_awards_and_pundits(
 
 // ── Phase 8: Transfer window + contract ──────────────────────────────────────
 
-fn generate_transfer_offers(state: &WorldState, view: &PlayerView) -> Vec<(usize, u8, i64, u32)> {
+fn generate_transfer_offers(
+    state: &WorldState,
+    view: &PlayerView,
+    world: &WorldGenesis,
+) -> Vec<(usize, u8, i64, u32)> {
     // Returns Vec of (club_idx, div_idx, wage_offer, length)
     use goat_rng::RngSource;
     let form = state.pc_form.to_int();
@@ -1074,12 +2863,15 @@ fn generate_transfer_offers(state: &WorldState, view: &PlayerView) -> Vec<(usize
     let mut rng = GoatRng::new(state.world_seed ^ ((state.season_number as u64) << 32) ^ 0xA11BEEF);
     let n_offers = rng.next_range_u64(0, 2) as usize; // 0-2 offers
     let mut offers = Vec::new();
+    let num_leagues = world.leagues.len() as u64;
     for _ in 0..n_offers {
-        // Pick a random club from a different division
-        let target_div = ((state.pc_div_idx as u64 + 1 + rng.next_range_u64(0, 2)) % 4) as usize;
-        let club_pos = rng.next_range_u64(0, (goat_world::CLUBS_PER_DIV - 1) as u64) as usize;
-        let club_id = goat_world::DIV_CLUBS[target_div][club_pos];
-        let target_strength = CLUBS[club_id].strength;
+        // Pick a random club from a different division.
+        let target_div = ((state.pc_div_idx as u64 + 1 + rng.next_range_u64(0, num_leagues - 2))
+            % num_leagues) as usize;
+        let league_clubs = &world.leagues[target_div].clubs;
+        let club_pos = rng.next_range_u64(0, league_clubs.len() as u64 - 1) as usize;
+        let club_id = league_clubs[club_pos];
+        let target_strength = world.clubs[club_id].strength;
         let wage_offer =
             state.pc_wage_annual + (target_strength as i64 * 2) + rng.next_range_u64(0, 50) as i64;
         let length = 2 + rng.next_range_u64(0, 2) as u32;
@@ -1095,8 +2887,9 @@ fn run_transfer_window(
     out: &mut impl Write,
     mut state: WorldState,
     view: &PlayerView,
+    world: &WorldGenesis,
 ) -> WorldState {
-    let offers = generate_transfer_offers(&state, view);
+    let offers = generate_transfer_offers(&state, view, world);
     if offers.is_empty() {
         // Check if player wants to agitate
         if state.pc_power_ladder > 0 || state.pc_contract_seasons_left == 0 {
@@ -1109,13 +2902,13 @@ fn run_transfer_window(
     writeln!(out, "║  TRANSFER WINDOW                             ║").unwrap();
     writeln!(out, "╠══════════════════════════════════════════════╣").unwrap();
     for (i, &(club_id, div_idx, wage, length)) in offers.iter().enumerate() {
-        let stars = "*".repeat((CLUBS[club_id].strength as usize / 20).clamp(1, 5));
+        let stars = "*".repeat((world.clubs[club_id].strength as usize / 20).clamp(1, 5));
         writeln!(
             out,
             "║  {}. {:22} ({}) £{}/yr {}yr  ║",
             i + 1,
-            CLUBS[club_id].name,
-            goat_world::DIV_NAMES[div_idx as usize],
+            world.clubs[club_id].name,
+            world.leagues[div_idx as usize].name,
             wage,
             length
         )
@@ -1140,14 +2933,14 @@ fn run_transfer_window(
         } else if let Ok(n) = l.parse::<usize>() {
             if n >= 1 && n <= offers.len() {
                 let (club_id, div_idx, wage, length) = offers[n - 1];
-                let club = &CLUBS[club_id];
+                let club = &world.clubs[club_id];
                 writeln!(
                     out,
                     "  TRANSFER COMPLETE: {} → {}",
                     state.pc_club, club.name
                 )
                 .unwrap();
-                let fee_bonus = (CLUBS[state.pc_club_idx as usize].strength as i64) * 3;
+                let fee_bonus = (world.clubs[state.pc_club_idx as usize].strength as i64) * 3;
                 state = reduce(
                     state,
                     Intent::ExecuteTransfer {
@@ -1155,7 +2948,7 @@ fn run_transfer_window(
                         to_div_idx: div_idx,
                         new_wage: wage,
                         new_length: length,
-                        new_club_name: club.name,
+                        new_club_name: club.name.clone(),
                         facilities_mult: club.facilities_mult(),
                         fee_bonus,
                     },
@@ -1172,12 +2965,11 @@ fn run_contract_negotiation(
     out: &mut impl Write,
     mut state: WorldState,
 ) -> WorldState {
-    let current_club = &CLUBS[state.pc_club_idx as usize];
     let new_wage = state.pc_wage_annual + (state.pc_form.to_int() as i64 / 10) * 5;
     let new_length = 2u32;
 
     writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
-    writeln!(out, "║  CONTRACT RENEWAL — {}  ║", current_club.name).unwrap();
+    writeln!(out, "║  CONTRACT RENEWAL — {}  ║", state.pc_club).unwrap();
     writeln!(out, "╠══════════════════════════════════════════════╣").unwrap();
     writeln!(
         out,
@@ -1254,17 +3046,12 @@ fn build_peer_cohort(world_seed: u64, nationality: &str) -> Vec<goat_core::state
         .map(|(_, names)| *names)
         .unwrap_or(PEER_NAMES_BY_NATION[0].1);
 
-    let nat: &'static str = if nationality == "Brazil" {
-        "Brazil"
-    } else {
-        "England"
-    };
     let mut rng = GoatRng::new(world_seed ^ 0xC0_CA_FE_BE_EF_u64);
     (0..8)
         .map(|i| goat_core::state::PeerState {
             seed: rng.next_u64(),
             name: names[i % names.len()].to_string(),
-            nationality: nat,
+            nationality: nationality.to_string(),
             career_goals: 0,
             career_matches: 0,
             avg_output: 0,
@@ -1303,7 +3090,7 @@ fn render_retirement_screen(out: &mut impl Write, state: &WorldState, view: &Pla
         state.pc_sponsor_tier,
         state.pc_bankrupt,
     );
-    let rankings = all_rankings(&axes);
+    let rankings = all_rankings(&ev, &axes);
     let rep = compute_reputation(
         state.pc_sporting_rep,
         state.pc_discipline_rep,
@@ -1375,14 +3162,92 @@ fn render_retirement_screen(out: &mut impl Write, state: &WorldState, view: &Pla
 
 // ── Save / Load ───────────────────────────────────────────────────────────────
 
-fn run_save(out: &mut impl Write, state: &WorldState) {
-    if let Some(pc_id) = state.pc_player_id {
-        let view = state.players.snapshot(pc_id);
-        let data = from_world_state(state, &view);
-        match save_to_file(&data, SAVE_PATH) {
-            Ok(()) => writeln!(out, "  Game saved to {SAVE_PATH}.").unwrap(),
-            Err(e) => writeln!(out, "  Save failed: {e}").unwrap(),
+/// One line per slot: `"  [3] Alex Turner — S4, age 24"` when occupied,
+/// `"  [3] <empty>"` when not.
+fn render_slot_picker(out: &mut impl Write, slots: &[SaveSlotSummary]) {
+    for s in slots {
+        if s.occupied {
+            writeln!(
+                out,
+                "  [{}] {} — S{}, age {}",
+                s.slot,
+                s.pc_name,
+                s.season_number,
+                s.pc_age_weeks / 52
+            )
+            .unwrap();
+        } else {
+            writeln!(out, "  [{}] <empty>", s.slot).unwrap();
         }
+    }
+}
+
+/// Reads a single digit `1..=NUM_SLOTS`. `Q`/blank cancels (`None`); anything else
+/// reprompts instead of silently dropping back to the caller.
+fn prompt_slot_choice(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+) -> Option<u8> {
+    loop {
+        let s = prompt_or_exit(
+            lines,
+            out,
+            &format!("Slot (1-{NUM_SLOTS}, blank/Q to cancel)"),
+        );
+        let t = s.trim();
+        if t.is_empty() || t.eq_ignore_ascii_case("q") {
+            return None;
+        }
+        match t.parse::<u8>() {
+            Ok(n) if (1..=NUM_SLOTS).contains(&n) => return Some(n),
+            _ => writeln!(
+                out,
+                "  Please enter a slot number 1-{NUM_SLOTS}, or Q to cancel."
+            )
+            .unwrap(),
+        }
+    }
+}
+
+fn run_save(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+    state: &WorldState,
+) {
+    let Some(pc_id) = state.pc_player_id else {
+        return;
+    };
+
+    let slots = list_slots(SAVE_DIR, NUM_SLOTS);
+    render_slot_picker(out, &slots);
+    let Some(slot) = prompt_slot_choice(lines, out) else {
+        writeln!(out, "  Save cancelled.").unwrap();
+        return;
+    };
+
+    let summary = &slots[(slot - 1) as usize];
+    if summary.occupied {
+        write!(
+            out,
+            "  Slot {slot} has a save ({}, S{}). Overwrite? [Y/N] ",
+            summary.pc_name, summary.season_number
+        )
+        .unwrap();
+        out.flush().unwrap();
+        match lines.next() {
+            Some(Ok(l)) if l.trim().eq_ignore_ascii_case("y") => {}
+            _ => {
+                writeln!(out, "  Save cancelled.").unwrap();
+                return;
+            }
+        }
+    }
+
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(state, &view);
+    match save_to_file(&data, slot_path(SAVE_DIR, slot)) {
+        Ok(()) => writeln!(out, "  Saved to slot {slot}.").unwrap(),
+        Err(e) => writeln!(out, "  Save failed: {e}").unwrap(),
     }
 }
 
@@ -1428,7 +3293,7 @@ fn run_set_routine(
     writeln!(out).unwrap();
 
     let focus_attrs = {
-        let s = prompt(lines, out, "Attr numbers (e.g. 1,7,9) or Enter to clear");
+        let s = prompt_or_exit(lines, out, "Attr numbers (e.g. 1,7,9) or Enter to clear");
         if s.trim().is_empty() {
             vec![]
         } else {
@@ -1442,7 +3307,7 @@ fn run_set_routine(
     };
 
     writeln!(out, "Intensity:  1. Low   2. Medium (default)   3. High").unwrap();
-    let intensity_input = prompt(lines, out, "Choice [1-3]");
+    let intensity_input = prompt_or_exit(lines, out, "Choice [1-3]");
     let intensity = match intensity_input.trim() {
         "1" => Intensity::Low,
         "3" => Intensity::High,
@@ -1465,10 +3330,75 @@ fn run_set_routine(
 
 // ── Rendering ─────────────────────────────────────────────────────────────────
 
+/// Interior width of the standard box (matching the `╔══...══╗` borders, which
+/// are 48 columns total: 1 border char + 46 interior + 1 border char).
+const BOX_WIDTH: usize = 46;
+
+/// Truncate `text` to at most `max_chars` *characters* (not bytes — multi-byte
+/// glyphs like emoji or accented letters must count as one), breaking at the
+/// last word boundary within budget rather than mid-word, and appending `…`
+/// when truncation actually occurred.
+fn truncate_ellipsis(text: &str, max_chars: usize) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    if chars.len() <= max_chars {
+        return text.to_string();
+    }
+    let budget = max_chars.saturating_sub(1).max(1);
+    let mut cut = budget;
+    while cut > 0 && !chars[cut - 1].is_whitespace() {
+        cut -= 1;
+    }
+    if cut == 0 {
+        cut = budget; // no word boundary within budget — hard cut
+    }
+    let mut truncated: String = chars[..cut].iter().collect();
+    while truncated.ends_with(' ') {
+        truncated.pop();
+    }
+    format!("{truncated}…")
+}
+
+/// Write one line of box content, clamping/padding it to the box's fixed
+/// interior width (`BOX_WIDTH`) so every line closes with a matching `║` —
+/// truncating with `…` at a word boundary when content overflows, padding
+/// with spaces when it's short. Counts by `chars()`, not byte length, so
+/// emoji/accents don't throw off alignment.
+fn box_line(out: &mut impl Write, content: &str) {
+    let clamped = truncate_ellipsis(content, BOX_WIDTH);
+    let pad = BOX_WIDTH.saturating_sub(clamped.chars().count());
+    writeln!(out, "║{clamped}{}║", " ".repeat(pad)).unwrap();
+}
+
+/// Wrap pre-formatted `items` across as many box lines as needed (starting
+/// with `prefix`, continuation lines indented two spaces) so that a variable
+/// number of items — e.g. up to 4 training-focus attrs — never gets silently
+/// dropped just to fit one line, the way a hard `.take(3)` would.
+fn box_lines_wrapped(out: &mut impl Write, prefix: &str, items: &[String], sep: &str) {
+    let mut line = prefix.to_string();
+    let mut any_on_line = false;
+    for item in items {
+        let would_be = line.chars().count()
+            + if any_on_line { sep.chars().count() } else { 0 }
+            + item.chars().count();
+        if any_on_line && would_be > BOX_WIDTH {
+            box_line(out, &line);
+            line = String::from("  ");
+            any_on_line = false;
+        }
+        if any_on_line {
+            line.push_str(sep);
+        }
+        line.push_str(item);
+        any_on_line = true;
+    }
+    box_line(out, &line);
+}
+
 fn render_game_sheet(out: &mut impl Write, view: &PlayerView, state: &WorldState) {
     let age_y = view.age_weeks / 52;
     let age_w = view.age_weeks % 52;
-    let energy_bars = (view.energy.to_int() / 10) as usize;
+    let energy_pct = view.energy.to_int().clamp(0, 100);
+    let energy_bars = (energy_pct / 10) as usize;
     let energy_bar = format!(
         "{}{}",
         "█".repeat(energy_bars),
@@ -1482,69 +3412,80 @@ fn render_game_sheet(out: &mut impl Write, view: &PlayerView, state: &WorldState
     };
 
     writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
-    writeln!(
+    box_line(
         out,
-        "║  {}  Age {}y{}w  Energy {}{}",
-        view.name, age_y, age_w, energy_bar, injury_str
-    )
-    .unwrap();
+        &format!("  {}  Age {}y{}w{injury_str}", view.name, age_y, age_w),
+    );
+    box_line(out, &format!("  Energy {energy_bar} {energy_pct}%"));
 
     if state.season_number > 0 {
-        let round = state.season_round;
+        let round = state.season_round + 1; // 1-indexed: next round to play, matches the match header
         let total = ROUNDS_PER_SEASON as u32;
-        let club_name = CLUBS[state.pc_club_idx as usize].name;
-        let susp_str = if state.pc_suspension_weeks > 0 {
-            format!("  SUSPENDED({})", state.pc_suspension_weeks)
-        } else {
-            String::new()
-        };
+        let club_name = &state.pc_club;
         let disc_label = match state.pc_discipline_rep {
             0..=30 => "Clean",
             31..=60 => "Neutral",
             61..=80 => "Combative",
             _ => "Enforcer",
         };
-        writeln!(
+        box_line(
             out,
-            "║  S{}  Round {}/{}  {}  Form:{}  Disc:{} 🟨{}{}",
-            state.season_number,
-            round,
-            total,
-            club_name,
-            state.pc_form.to_int(),
-            disc_label,
-            state.pc_yellow_cards_season,
-            susp_str
-        )
-        .unwrap();
+            &format!(
+                "  S{} Round {}/{}  {}",
+                state.season_number, round, total, club_name
+            ),
+        );
+        box_line(
+            out,
+            &format!(
+                "  Form:{}  Disc:{} 🟨{} (cards)",
+                state.pc_form.to_int(),
+                disc_label,
+                state.pc_yellow_cards_season,
+            ),
+        );
+        for ledger in &state.pc_suspensions {
+            let label = competition_label(ledger.competition_id);
+            box_line(
+                out,
+                &format!(
+                    "  SUSPENDED — {label} ({} match(es) left)",
+                    ledger.matches_remaining
+                ),
+            );
+        }
     }
 
-    // Routine summary
-    let routine_str = if state.pc_routine.focus_attrs.is_empty() {
-        "No focus".to_string()
+    // Routine summary — wrapped so up to 4 focus attrs never get truncated
+    // away just because their names happen to be long.
+    let mut routine_items: Vec<String> = if state.pc_routine.focus_attrs.is_empty() {
+        vec!["No focus".to_string()]
     } else {
+        let n = state.pc_routine.focus_attrs.len();
         state
             .pc_routine
             .focus_attrs
             .iter()
-            .map(|&a| {
-                ATTR_NAMES[a as usize]
+            .enumerate()
+            .map(|(idx, &a)| {
+                let name = ATTR_NAMES[a as usize]
                     .split_whitespace()
                     .next()
-                    .unwrap_or("?")
+                    .unwrap_or("?");
+                if idx + 1 < n {
+                    format!("{name},")
+                } else {
+                    name.to_string()
+                }
             })
-            .collect::<Vec<_>>()
-            .join(", ")
+            .collect()
     };
-    writeln!(
-        out,
-        "║  Routine: {} [{}]",
-        routine_str,
-        state.pc_routine.intensity.name()
-    )
-    .unwrap();
+    routine_items.push(format!("[{}]", state.pc_routine.intensity.name()));
+    box_lines_wrapped(out, "  Routine: ", &routine_items, " ");
 
-    // Last week growth
+    // Last week growth. `to_int()` truncates toward zero, which is 0 for
+    // essentially every real week (base growth is sub-1.0/week) — display the
+    // raw Fixed value as a decimal instead so real growth is visible.
     let had_growth = state.last_week_growth.iter().any(|&g| g != Fixed::ZERO);
     if had_growth {
         let mut v: Vec<_> = state
@@ -1554,35 +3495,35 @@ fn render_game_sheet(out: &mut impl Write, view: &PlayerView, state: &WorldState
             .filter(|(_, &g)| g > Fixed::ZERO)
             .collect();
         v.sort_by_key(|&(_, &g)| Reverse(g));
-        let growth_str = v
+        let items: Vec<String> = v
             .into_iter()
-            .take(3)
             .map(|(i, &g)| {
                 format!(
                     "{} +{:.1}",
                     ATTR_NAMES[i].split_whitespace().next().unwrap_or("?"),
-                    g.to_int()
+                    g.to_raw() as f64 / 1000.0
                 )
             })
-            .collect::<Vec<_>>()
-            .join("  ");
-        writeln!(out, "║  Last week: {growth_str}").unwrap();
+            .collect();
+        box_lines_wrapped(out, "  Last week: ", &items, "  ");
     }
 
     let fam = derive_attrs(&view.current);
     let player_ovr = ovr(&view.current, view.primary_position);
-    writeln!(
+    let family_items = vec![
+        format!("Pac:{}", fam.pace.to_int()),
+        format!("Sho:{}", fam.shooting.to_int()),
+        format!("Pas:{}", fam.passing.to_int()),
+        format!("Dri:{}", fam.dribbling.to_int()),
+        format!("Def:{}", fam.defending.to_int()),
+        format!("Phy:{}", fam.physical.to_int()),
+    ];
+    box_lines_wrapped(
         out,
-        "║  OVR {:<3}  Pac:{:<3} Sho:{:<3} Pas:{:<3} Dri:{:<3} Def:{:<3} Phy:{:<3}",
-        player_ovr.to_int(),
-        fam.pace.to_int(),
-        fam.shooting.to_int(),
-        fam.passing.to_int(),
-        fam.dribbling.to_int(),
-        fam.defending.to_int(),
-        fam.physical.to_int()
-    )
-    .unwrap();
+        &format!("  OVR {}  ", player_ovr.to_int()),
+        &family_items,
+        " ",
+    );
     writeln!(out, "╚══════════════════════════════════════════════╝").unwrap();
 }
 
@@ -1591,6 +3532,7 @@ fn render_player_sheet(
     player: &PlayerView,
     choices: &CreationChoices,
     seed: u64,
+    lifestyle: u8,
 ) {
     let cur = &player.current;
     let fam = &player.familiarity;
@@ -1604,22 +3546,31 @@ fn render_player_sheet(
         format!("{}  OVR {}", player.name, player_ovr.to_int())
     )
     .unwrap();
+    box_line(out, "  OVR is position-weighted, not a simple avg.");
     writeln!(out, "╠══════════════════════════════════════════════╣").unwrap();
     if seed > 0 {
         writeln!(
             out,
             "║  Position: {:<10}  Seed: {:<16}║",
-            choices.position.name(),
+            choices.primary_position.name(),
             seed
         )
         .unwrap();
-        writeln!(
+        box_line(
             out,
-            "║  Nationality: {:<10}  Club: {:<14}║",
-            choices.nationality, choices.club
-        )
-        .unwrap();
+            &format!(
+                "  Nationality: {}  Club: {}",
+                choices.nationality, choices.club
+            ),
+        );
     }
+    // Lifestyle is a read-only, emergent readout (bible §8.6) — never a menu pick.
+    let lifestyle_label = match lifestyle {
+        0 => "Professional",
+        2 => "Flashy",
+        _ => "Balanced",
+    };
+    writeln!(out, "║  Lifestyle: {:<34}║", lifestyle_label).unwrap();
     writeln!(out, "╠══════════════════════════════════════════════╣").unwrap();
     writeln!(out, "║  ATTRIBUTES (current / potential)            ║").unwrap();
     writeln!(out, "║  ─────────────────────────────────────────── ║").unwrap();
@@ -1679,7 +3630,7 @@ fn render_player_sheet(
 
 /// Phase 9 world screen: the seeded pantheon canon + this career's emergent rival.
 /// Pure renderer — all data comes from `goat_world` functions; no sim logic here.
-fn render_world_screen(out: &mut impl Write, state: &WorldState) {
+fn render_world_screen(out: &mut impl Write, state: &WorldState, world: &WorldGenesis) {
     use goat_world::history::{backfill_history, great_nation_name};
     use goat_world::rival::{crystallise_rival, RivalVerdict};
     let seed = state.world_seed;
@@ -1689,7 +3640,7 @@ fn render_world_screen(out: &mut impl Write, state: &WorldState) {
     writeln!(out, "╚══════════════════════════════════════════════╝").unwrap();
 
     // Backfilled canon of past greats (pure-derivable from the world seed).
-    let hist = backfill_history(seed, 30);
+    let hist = backfill_history(seed, 30, world);
     writeln!(out, "\n  PANTHEON — past greats of this universe").unwrap();
     writeln!(
         out,
@@ -1703,7 +3654,7 @@ fn render_world_screen(out: &mut impl Write, state: &WorldState) {
             out,
             "  {:<20} {:<9} {:>4} {:>4}",
             g.name,
-            great_nation_name(g.nationality),
+            great_nation_name(g.nationality, world),
             g.ballon_dors,
             g.peak_ovr
         )
@@ -1711,10 +3662,11 @@ fn render_world_screen(out: &mut impl Write, state: &WorldState) {
     }
 
     // Your generation: batch-tick the cohort up to now, then crystallise.
-    let mut pop = goat_world::population::genesis(seed);
+    let league_clubs = world.static_league_clubs();
+    let mut pop = goat_world::population::genesis(seed, world);
     let seasons = state.season_number.max(1);
     for s in 1..=seasons {
-        goat_world::batch_tick::batch_tick_season(&mut pop, seed, s, s * 52);
+        goat_world::batch_tick::batch_tick_season(&mut pop, world, &league_clubs, seed, s, s * 52);
     }
     writeln!(out, "\n  YOUR GENERATION").unwrap();
     match crystallise_rival(&pop, 16 * 52, state.pc_career_goals, state.pc_league_titles) {
@@ -1818,7 +3770,7 @@ fn read_choice(
     n_choices: usize,
 ) -> usize {
     loop {
-        let s = prompt(lines, out, "Your choice");
+        let s = prompt_or_exit(lines, out, "Your choice");
         if let Ok(n) = s.trim().parse::<usize>() {
             if n >= 1 && n <= n_choices {
                 return n - 1;
@@ -1859,6 +3811,7 @@ fn render_match_result(out: &mut impl Write, result: &MatchResult, opp: &str) {
     {
         let icon = match m.goal_event {
             Some(ScoreEvent::GoalFor) => "⚽",
+            Some(ScoreEvent::AssistFor) => "🅰",
             Some(ScoreEvent::GoalAgainst) => "❌",
             None => {
                 if m.success {
@@ -1868,25 +3821,58 @@ fn render_match_result(out: &mut impl Write, result: &MatchResult, opp: &str) {
                 }
             }
         };
-        writeln!(
-            out,
-            "║  {icon} {}'  {}",
-            m.minute,
-            m.outcome_text.chars().take(38).collect::<String>()
-        )
-        .unwrap();
+        box_line(out, &format!("  {icon} {}'  {}", m.minute, m.outcome_text));
     }
     writeln!(out, "╚══════════════════════════════════════════════╝").unwrap();
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
 
+/// Current real-world year from wall-clock — renderer-layer only (§9 bans
+/// wall-clock inside the core; the year is captured once at new-game and then
+/// persisted in the save). Exact civil-from-days conversion (Howard Hinnant's
+/// algorithm), integer-only, no chrono.
+fn current_year() -> u32 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let z = (secs / 86_400) as i64 + 719_468; // days since epoch -> civil day number
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    (yoe + era * 400) as u32
+}
+
+/// Read one line of input, distinguishing a genuine blank Enter (`Some(String::new())`)
+/// from stdin EOF (`None`) — the two must never be conflated, or a closed pipe
+/// looks identical to "bad input" and a reprompt loop spins forever.
 fn prompt(
     lines: &mut impl Iterator<Item = io::Result<String>>,
     out: &mut impl Write,
     label: &str,
-) -> String {
+) -> Option<String> {
     write!(out, "  {label}: ").unwrap();
     out.flush().unwrap();
-    lines.next().and_then(|r| r.ok()).unwrap_or_default()
+    match lines.next() {
+        Some(Ok(l)) => Some(l),
+        _ => None,
+    }
+}
+
+/// `prompt()`, treating stdin EOF like an explicit quit: no more input will
+/// ever arrive on a closed pipe, so reprompting would hang the process forever.
+fn prompt_or_exit(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+    label: &str,
+) -> String {
+    match prompt(lines, out, label) {
+        Some(s) => s,
+        None => {
+            writeln!(out, "\n  No more input — exiting.").unwrap();
+            out.flush().unwrap();
+            std::process::exit(0);
+        }
+    }
 }

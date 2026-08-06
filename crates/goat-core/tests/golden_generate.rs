@@ -5,16 +5,17 @@
 //! bounded noise). New behaviour = new goldens. Never update to fix a failing test.
 
 use goat_core::attrs::{AttrId, NUM_ATTRS};
-use goat_core::generation::{generate_player, CreationChoices, Position};
+use goat_core::generation::{generate_player, CreationChoices};
+use goat_core::positions::PrimaryPosition;
 use goat_core::roles::{FamiliarityTier, RoleId};
 use goat_fixed::Fixed;
 
 fn forward_choices() -> CreationChoices {
     CreationChoices {
         name: "Golden Forward".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
-        club: "Local FC",
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
+        club: "Local FC".to_string(),
     }
 }
 
@@ -92,9 +93,9 @@ fn golden_seed_12345_forward() {
 fn golden_seed_777_defender() {
     let choices = CreationChoices {
         name: "Golden Defender".into(),
-        position: Position::Defender,
-        nationality: "English",
-        club: "Academy United",
+        primary_position: PrimaryPosition::CB,
+        nationality: "English".to_string(),
+        club: "Academy United".to_string(),
     };
     let p = generate_player(777, &choices);
 

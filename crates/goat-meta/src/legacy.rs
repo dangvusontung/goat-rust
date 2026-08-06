@@ -9,6 +9,9 @@ use goat_fixed::Fixed;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct LegacyEvidence {
     pub career_goals: u32,
+    // BL5.1: `pc_career_assists` exists on WorldState but is deliberately NOT fed in
+    // here — Legacy stays goals-only until the assist-weighting design question is
+    // asked. Future hook: add `career_assists` and let a later axis pass weight it.
     pub career_matches: u32,
     /// Sum of per-match output scores (0–100 each).
     pub career_output_sum: i64,
@@ -25,6 +28,25 @@ pub struct LegacyEvidence {
     pub clubs_served: u32,
     /// Longest consecutive tenure at one club (in seasons).
     pub longest_club_tenure: u32,
+    /// Cumulative count of standout/big-match performances, career-wide (Design round 1).
+    pub career_standout_matches: u32,
+    /// Career-peak OVR (talent ceiling, not match-performance average).
+    pub career_best_ovr: i32,
+    /// Cumulative count of AgitateForTransfer escalations, career-wide.
+    pub career_transfer_requests: u32,
+    /// National-team caps won, career-wide (Design round 2, Doc B §B.4) — a minimal
+    /// legacy-evidence counter for the new call-up/tactical-fit layer so international
+    /// honors aren't entirely disconnected from the Pantheon. No school-weighting logic
+    /// reads this yet (out of scope this round); it's raw evidence for a future axis pass.
+    pub career_caps: u32,
+    /// Goals scored while capped for the national team, career-wide.
+    pub career_international_goals: u32,
+    /// World Cups won with the PC's nation, career-wide (Design round 4, Slice 4 §4.5) --
+    /// a minimal legacy-evidence counter mirroring `career_caps` exactly. No
+    /// school-weighting logic reads this yet (raw evidence for a future axis pass).
+    pub career_world_cups_won: u32,
+    /// Continental championships won with the PC's nation, career-wide.
+    pub career_continental_championships_won: u32,
 }
 
 /// The 7+1 legacy axes (all 0–100 Fixed).

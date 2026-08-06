@@ -4,7 +4,8 @@
 //! Values frozen from first green run. NEVER update them to fix a failing test.
 
 use goat_core::attrs::{AttrId, NUM_ATTRS};
-use goat_core::generation::{CreationChoices, Position};
+use goat_core::generation::CreationChoices;
+use goat_core::positions::PrimaryPosition;
 use goat_core::state::{reduce, Intent, WorldState};
 use goat_core::week::{Intensity, Routine};
 use goat_fixed::Fixed;
@@ -13,9 +14,9 @@ use goat_rng::GoatRng;
 fn forward_state() -> WorldState {
     let choices = CreationChoices {
         name: "Golden Fwd".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
-        club: "Riverside Town",
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     let s = WorldState::new();
     reduce(
@@ -49,21 +50,25 @@ fn golden_52_weeks_forward() {
 
     let s = reduce(s, Intent::AdvanceWeeks { n: 52 }, &mut GoatRng::new(999));
 
-    // ── Frozen values (re-frozen after C.9b tuning: KEY=95, IMP=92, SEC=91) ───
-    // CloseControl: Secondary for ST (weight 1), potential now ~90 (91%×99).
-    // Starts at 70%×90=63.0 (was 70%×87=60.9). Trained 52 wks; growth unchanged (no ceiling hit).
+    // ── Frozen values (re-frozen after BL7 durability/injury-proneness trait, Design
+    // round 9): seed 12345's rolled `durability_x10` isn't the neutral midpoint, so
+    // this seed's injury-week timing over the 52-week horizon shifted, changing how
+    // many weeks actually trained. Expected — this coefficient is designed to add
+    // per-seed injury variance (see `week.rs::durability_neutral_value_reproduces_
+    // pre_existing_injury_numbers` for proof the *formula* itself is unchanged at
+    // neutral durability).
     let dri = s.players.get_current(0, AttrId::CloseControl as usize);
     assert_eq!(
         dri,
-        Fixed::raw(69_331),
-        "CloseControl frozen at 69.331 after 52 wks"
+        Fixed::raw(63_173),
+        "CloseControl frozen at 63.173 after 52 wks"
     );
 
     let vis = s.players.get_current(0, AttrId::Vision as usize);
     assert_eq!(
         vis,
-        Fixed::raw(29_026),
-        "Vision frozen at 29.026 after 52 wks"
+        Fixed::raw(24_292),
+        "Vision frozen at 24.292 after 52 wks"
     );
 
     // Energy must still be in valid range.
@@ -121,8 +126,13 @@ fn long_horizon_full_career() {
     let mut rng = GoatRng::new(77777);
 
     // Run 22 seasons (16 → 38 years) = 1 144 weeks.
+    // AdvanceWeek is gated to one session per calendar week
+    // (TASK-CORE-double-week-tick); this harness has no round loop, so it
+    // simulates each week boundary itself by clearing the flag. The per-tick
+    // math is untouched — every tick below runs exactly as before the gate.
     for _ in 0..1_144 {
         s = reduce(s, Intent::AdvanceWeek, &mut rng);
+        s.pc_week_training_done = false;
     }
 
     // ── Invariants (must hold at all ages) ───────────────────────────────────

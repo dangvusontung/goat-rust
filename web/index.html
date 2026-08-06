@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>GOAT — web demo</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 900px; margin: 1rem auto; padding: 0 1rem; background: #10141a; color: #dde3ea; }
+    h1 { font-size: 1.3rem; }
+    label { display: block; margin: .4rem 0 .1rem; font-size: .85rem; color: #9aa5b1; }
+    input, select, button { font: inherit; padding: .35rem .5rem; background: #1c232e; color: inherit; border: 1px solid #38424f; border-radius: 4px; }
+    button { cursor: pointer; margin: .15rem .15rem .15rem 0; }
+    button:hover { background: #27313f; }
+    table { border-collapse: collapse; width: 100%; font-size: .8rem; margin-top: .5rem; }
+    th, td { border-bottom: 1px solid #26303c; padding: .2rem .4rem; text-align: right; }
+    th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+    tr.pc { background: #1d3040; font-weight: bold; }
+    pre { background: #161c24; border: 1px solid #26303c; border-radius: 4px; padding: .6rem; white-space: pre-wrap; font-size: .82rem; }
+    .hidden { display: none; }
+    #status { color: #9fd3a8; }
+    .choices button { display: block; width: 100%; text-align: left; margin: .3rem 0; }
+  </style>
+</head>
+<body>
+  <h1>GOAT — deterministic football life-sim (web demo)</h1>
+
+  <section id="setup">
+    <input id="seed" type="hidden" value="" />
+    <label>Player name</label>
+    <input id="pname" type="text" value="Web Wonderkid" />
+    <label>Position</label>
+    <select id="position">
+      <option value="0">ST — Striker</option>
+      <option value="1">W — Winger</option>
+      <option value="2">WM — Wide Midfielder</option>
+      <option value="3">CAM — Attacking Mid</option>
+      <option value="4">CM — Central Mid</option>
+      <option value="5">DM — Defensive Mid</option>
+      <option value="6">FB — Full-back</option>
+      <option value="7">CB — Centre-back</option>
+    </select>
+    <label>Nation</label>
+    <select id="nation"></select>
+    <label>League</label>
+    <select id="league"></select>
+    <label>Club</label>
+    <select id="club"></select>
+    <p><button id="start">Start career</button></p>
+    <pre id="setup-log" class="hidden"></pre>
+  </section>
+
+  <section id="game" class="hidden">
+    <pre id="status"></pre>
+    <div>
+      <button id="train">Train</button>
+      <button id="rest">Rest</button>
+      <button id="friendly">Play Friendly</button>
+      <button id="play">Play Match</button>
+      <button id="skip">Skip Match</button>
+      <button id="season-end">Season End</button>
+      <button id="next-season">Next Season</button>
+      <button id="save">Save</button>
+      <button id="load">Load</button>
+    </div>
+    <div id="match" class="hidden">
+      <pre id="beat"></pre>
+      <div class="choices" id="choices"></div>
+    </div>
+    <pre id="log"></pre>
+    <table id="table">
+      <thead>
+        <tr><th>#</th><th>Club</th><th>Pld</th><th>W</th><th>D</th><th>L</th><th>GF</th><th>GA</th><th>Pts</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <script type="module" src="./main.js"></script>
+</body>
+</html>

@@ -9,13 +9,49 @@
 //! windows.
 
 use goat_calendar::{
-    CalendarEngine, CalendarWindow, DayContext, DayReport, Season, StopClass, Subsystem,
-    SubsystemId, WindowKind,
+    CalendarEngine, CalendarWindow, Competition, CompetitionId, CompetitionKind, DayContext,
+    DayReport, Fixture, Season, StopClass, Subsystem, SubsystemId, WindowKind,
 };
 use goat_rng::RngSource;
 
 /// Fixed-length in-game year (§2.3 — no leap years).
 pub const SEASON_DAYS: u32 = 365;
+
+/// The PC's league competition id. `goat-core` stays headless (no `goat-world`
+/// dependency — see that crate's own doc comment), so this is the one fixed id the
+/// bridge (the TUI, which links `goat-core` and `goat-world` together) must use when it
+/// builds the season's `Fixture`s to hand into `Intent::StartSeason`.
+pub const LEAGUE_COMPETITION_ID: CompetitionId = 1;
+
+/// The PC's domestic-cup competition id (Design round 4, Slices 2-3/5). Same
+/// headless-`goat-core` rationale as `LEAGUE_COMPETITION_ID`: the TUI bridge is where
+/// this id is actually attached to real cup fixtures/results.
+pub const DOMESTIC_CUP_COMPETITION_ID: CompetitionId = 2;
+
+/// The PC's continental-tier competition ids (Design round 4, Slices 2-3/5 follow-up —
+/// continental club competitions). One id per tier so `SuspensionLedger` scoping never
+/// conflates a Tier-1 ban with a Tier-2/3 one, same rationale as the domestic cup's own
+/// id above.
+pub const CONTINENTAL_TIER1_COMPETITION_ID: CompetitionId = 3;
+pub const CONTINENTAL_TIER2_COMPETITION_ID: CompetitionId = 4;
+pub const CONTINENTAL_TIER3_COMPETITION_ID: CompetitionId = 5;
+
+/// The PC's national-team competition ids (Design round 4, Slice 4/5 follow-up — World
+/// Cup / continental championship). Distinct from every club competition id above so a
+/// national-team suspension never bleeds into a club fixture and vice versa.
+pub const WORLD_CUP_COMPETITION_ID: CompetitionId = 6;
+pub const CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID: CompetitionId = 7;
+
+/// The competitions active this season. Slice 1: just the league; sibling slices append
+/// domestic-cup/continental/national-team competitions to this same list.
+fn standard_competitions() -> Vec<Competition> {
+    vec![Competition {
+        id: LEAGUE_COMPETITION_ID,
+        kind: CompetitionKind::League,
+        priority: 100,
+        is_orbit: true,
+    }]
+}
 
 /// A calendar flashpoint surfaced to the renderer (template + slot; the TUI formats it).
 /// Produced when a calendar window opens during the week.
@@ -26,32 +62,65 @@ pub struct CalendarFlashpoint {
     pub window: WindowKind,
 }
 
+/// First day of the `WindowKind::OffSeason` tournament window (§4.2). The
+/// 45-week grid (7 pre-season + 38 competition weeks, Jul-1 anchor) ends on day
+/// 314; the window sits in the remaining gap and ends exactly where
+/// `TransferSummer` (348-364) begins.
+const OFF_SEASON_START_DAY: u32 = 318;
+/// Last day of the `WindowKind::OffSeason` window (inclusive).
+const OFF_SEASON_END_DAY: u32 = 347;
+
+/// True in a World Cup or continental-championship year (§4.1: `season_number % 4 == 1`
+/// is a World Cup year, `== 3` a continental-championship year — the two formulas can
+/// never both hold for the same season). Only a tournament season gets the `OffSeason`
+/// window added to its layout at all (§4.2) — a non-tournament season fires no
+/// `OffSeason` window and plays out no off-season content, matching how every other
+/// window here only matters once something is scheduled inside it.
+fn is_tournament_season(season_number: u32) -> bool {
+    season_number % 4 == 1 || season_number % 4 == 3
+}
+
 /// The standard season window layout. Placeholder shape; the day ranges mirror the
 /// frozen sample in `goat-calendar`'s own clock tests (international break, winter and
-/// summer transfer windows). Tuning belongs to a later pass.
-fn standard_season() -> Season {
+/// summer transfer windows). Tuning belongs to a later pass. `season_number` gates the
+/// tournament-only `OffSeason` window (§4.2) — every other window fires every season.
+///
+/// Day numbers are on the Jul-1-anchored axis (the career day-0 anchor moved from
+/// Aug 15 to Jul 1 with the 7-week pre-season lead, 2026-08): the two in-grid
+/// windows sit +49 days (7 weeks) later than the old Aug-15 axis so they keep
+/// the same real dates, and the post-grid windows compress into the 50-day gap
+/// after day 314.
+fn standard_season(season_number: u32) -> Season {
+    let mut windows = vec![
+        CalendarWindow {
+            kind: WindowKind::InternationalBreak,
+            start_day: 79,
+            end_day: 93,
+        },
+        CalendarWindow {
+            kind: WindowKind::TransferWinter,
+            start_day: 209,
+            end_day: 244,
+        },
+        CalendarWindow {
+            kind: WindowKind::TransferSummer,
+            start_day: 348,
+            end_day: 364,
+        },
+    ];
+    if is_tournament_season(season_number) {
+        windows.push(CalendarWindow {
+            kind: WindowKind::OffSeason,
+            start_day: OFF_SEASON_START_DAY,
+            end_day: OFF_SEASON_END_DAY,
+        });
+    }
     Season {
         id: 1,
         start_day: 0,
         end_day: SEASON_DAYS - 1,
-        windows: vec![
-            CalendarWindow {
-                kind: WindowKind::InternationalBreak,
-                start_day: 30,
-                end_day: 44,
-            },
-            CalendarWindow {
-                kind: WindowKind::TransferWinter,
-                start_day: 160,
-                end_day: 195,
-            },
-            CalendarWindow {
-                kind: WindowKind::TransferSummer,
-                start_day: 330,
-                end_day: 364,
-            },
-        ],
-        competition_ids: vec![],
+        windows,
+        competition_ids: vec![LEAGUE_COMPETITION_ID],
     }
 }
 
@@ -83,12 +152,36 @@ impl Subsystem for WindowWatch {
 /// Advance the calendar by 7 days (one week) from `epoch_day`, returning the new epoch
 /// day and any window-entry flashpoints. `world_seed` seeds the calendar's own RNG —
 /// it never touches the growth RNG, so this is golden-safe.
-pub fn advance_calendar_week(epoch_day: u32, world_seed: u64) -> (u32, Vec<CalendarFlashpoint>) {
-    let season = standard_season();
+///
+/// `orbit_fixtures` is the PC's current-season fixture list (league fixtures this
+/// slice; cup/continental/national-team fixtures once sibling slices ship), built by the
+/// TUI bridge (see `goat_calendar::Fixture`/`LEAGUE_COMPETITION_ID`) and threaded in via
+/// `Intent::StartSeason` — `goat-core` never constructs these itself, since it stays
+/// headless with respect to `goat-world`.
+///
+/// Note: this constructs a fresh, throwaway `CalendarEngine` every call (one per week),
+/// seeded each time from the SAME immutable `orbit_fixtures` baseline. A conflict-
+/// resolution reschedule that lands outside the current 7-day window is therefore not
+/// carried forward to the next call — harmless for a single-competition (league-only)
+/// season, since a club is never double-booked against itself, but something a sibling
+/// slice threading a second orbit competition through here will need to address (see
+/// the slice1 task doc's final report for detail).
+pub fn advance_calendar_week(
+    epoch_day: u32,
+    world_seed: u64,
+    season_number: u32,
+    orbit_fixtures: &[Fixture],
+) -> (u32, Vec<CalendarFlashpoint>) {
+    let season = standard_season(season_number);
     let windows = season.windows.clone();
     let start = epoch_day % SEASON_DAYS;
 
-    let mut engine = CalendarEngine::new(world_seed, season, Vec::new());
+    let mut engine = CalendarEngine::new(
+        world_seed,
+        season,
+        orbit_fixtures.to_vec(),
+        standard_competitions(),
+    );
     engine.clock.epoch_day = start;
     engine.register(Box::new(WindowWatch));
 
@@ -119,20 +212,69 @@ mod tests {
         let mut seen: Vec<(u32, WindowKind)> = Vec::new();
         // 53 weeks ≈ one full 365-day season plus a little, so each window opens once.
         for _ in 0..53 {
-            let (next, fps) = advance_calendar_week(day, 42);
+            let (next, fps) = advance_calendar_week(day, 42, 1, &[]);
             for f in fps {
                 seen.push((f.day, f.window));
             }
             day = next;
         }
-        assert!(seen.contains(&(30, WindowKind::InternationalBreak)));
-        assert!(seen.contains(&(160, WindowKind::TransferWinter)));
-        assert!(seen.contains(&(330, WindowKind::TransferSummer)));
+        assert!(seen.contains(&(79, WindowKind::InternationalBreak)));
+        assert!(seen.contains(&(209, WindowKind::TransferWinter)));
+        assert!(seen.contains(&(348, WindowKind::TransferSummer)));
     }
 
     #[test]
     fn epoch_day_advances_seven_per_week() {
-        let (next, _) = advance_calendar_week(100, 1);
+        let (next, _) = advance_calendar_week(100, 1, 1, &[]);
         assert_eq!(next, 107);
+    }
+
+    #[test]
+    fn off_season_window_only_fires_in_a_tournament_season() {
+        // Season 1 (%4==1): a World Cup year -- OffSeason must fire on day 318.
+        let mut day = 0u32;
+        let mut seen: Vec<(u32, WindowKind)> = Vec::new();
+        for _ in 0..53 {
+            let (next, fps) = advance_calendar_week(day, 7, 1, &[]);
+            seen.extend(fps.into_iter().map(|f| (f.day, f.window)));
+            day = next;
+        }
+        assert!(seen.contains(&(318, WindowKind::OffSeason)));
+
+        // Season 2 (%4==2): not a tournament year -- OffSeason must never fire.
+        let mut day = 0u32;
+        let mut seen: Vec<(u32, WindowKind)> = Vec::new();
+        for _ in 0..53 {
+            let (next, fps) = advance_calendar_week(day, 7, 2, &[]);
+            seen.extend(fps.into_iter().map(|f| (f.day, f.window)));
+            day = next;
+        }
+        assert!(!seen.iter().any(|(_, w)| *w == WindowKind::OffSeason));
+
+        // Season 3 (%4==3): a continental-championship year -- OffSeason must fire too.
+        let mut day = 0u32;
+        let mut seen: Vec<(u32, WindowKind)> = Vec::new();
+        for _ in 0..53 {
+            let (next, fps) = advance_calendar_week(day, 7, 3, &[]);
+            seen.extend(fps.into_iter().map(|f| (f.day, f.window)));
+            day = next;
+        }
+        assert!(seen.contains(&(318, WindowKind::OffSeason)));
+    }
+
+    #[test]
+    fn off_season_window_does_not_overlap_transfer_summer() {
+        let season = standard_season(1);
+        let off_season = season
+            .windows
+            .iter()
+            .find(|w| w.kind == WindowKind::OffSeason)
+            .expect("tournament season must have an OffSeason window");
+        let transfer_summer = season
+            .windows
+            .iter()
+            .find(|w| w.kind == WindowKind::TransferSummer)
+            .unwrap();
+        assert!(off_season.end_day < transfer_summer.start_day);
     }
 }

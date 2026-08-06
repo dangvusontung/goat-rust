@@ -1,0 +1,272 @@
+{
+  "situations": [
+    {
+      "id": "counter_press",
+      "phase": "defend",
+      "bias": [
+        2,
+        3,
+        3
+      ],
+      "setup": "Their attack breaks down. You win the ball and can launch a counter.",
+      "tags": [
+        "defend",
+        "transition"
+      ]
+    },
+    {
+      "id": "setpiece_defend",
+      "phase": "setpiece",
+      "bias": [
+        3,
+        2,
+        2
+      ],
+      "setup": "Their corner kick is coming in. You must mark your man.",
+      "tags": [
+        "setpiece",
+        "defend"
+      ]
+    },
+    {
+      "id": "channel_run",
+      "phase": "attack",
+      "bias": [
+        3,
+        3,
+        2
+      ],
+      "setup": "You find space to run into the channel. Their defender is closing.",
+      "tags": [
+        "attack",
+        "wide"
+      ]
+    },
+    {
+      "id": "high_press",
+      "phase": "defend",
+      "bias": [
+        2,
+        3,
+        3
+      ],
+      "setup": "Their goalkeeper has the ball. You can press high.",
+      "tags": [
+        "defend",
+        "pressing"
+      ]
+    },
+    {
+      "id": "two_on_one",
+      "phase": "attack",
+      "bias": [
+        3,
+        2,
+        2
+      ],
+      "setup": "You have a two-on-one break. Their last defender is backpedaling.",
+      "tags": [
+        "attack",
+        "counter"
+      ]
+    }
+  ],
+  "choices": [
+    {
+      "id": "early_cross_low",
+      "text": "Deliver a low, early cross",
+      "attr": "Crossing",
+      "difficulty": 50,
+      "tags": [
+        "attack",
+        "wide",
+        "delivery"
+      ]
+    },
+    {
+      "id": "beat_to_outside",
+      "text": "Beat the defender to the outside",
+      "attr": "Dribbling",
+      "difficulty": 60,
+      "tags": [
+        "attack",
+        "wide",
+        "beating"
+      ]
+    },
+    {
+      "id": "play_one_two",
+      "text": "Play a one-two with your teammate",
+      "attr": "Vision",
+      "difficulty": 55,
+      "tags": [
+        "attack",
+        "passing",
+        "combination"
+      ]
+    },
+    {
+      "id": "switch_flanks",
+      "text": "Switch the ball to the other flank",
+      "attr": "LongPassing",
+      "difficulty": 58,
+      "tags": [
+        "attack",
+        "switching"
+      ]
+    },
+    {
+      "id": "pressure_keeper",
+      "text": "Pressure the goalkeeper into a mistake",
+      "attr": "Reactions",
+      "difficulty": 62,
+      "tags": [
+        "defend",
+        "pressing"
+      ]
+    },
+    {
+      "id": "track_back",
+      "text": "Track back and support your defender",
+      "attr": "Strength",
+      "difficulty": 40,
+      "tags": [
+        "defend",
+        "support"
+      ]
+    },
+    {
+      "id": "shoot_first_time",
+      "text": "Shoot first time with your left foot",
+      "attr": "Finishing",
+      "difficulty": 65,
+      "tags": [
+        "attack",
+        "shooting",
+        "first_time"
+      ]
+    },
+    {
+      "id": "hold_up_ball",
+      "text": "Hold up the ball and wait for support",
+      "attr": "Heading",
+      "difficulty": 45,
+      "tags": [
+        "attack",
+        "hold_up"
+      ]
+    }
+  ],
+  "outcomes": [
+    {
+      "id": "clean_sheet_kept",
+      "text": "You keep a clean sheet for the half.",
+      "output_delta": 10,
+      "confidence": 8,
+      "frustration": -5,
+      "flow": 8,
+      "score_event": null,
+      "stamina_cost": 2,
+      "polarity": "success"
+    },
+    {
+      "id": " header_won",
+      "text": "You win the header and clear the ball.",
+      "output_delta": 5,
+      "confidence": 3,
+      "frustration": -2,
+      "flow": 3,
+      "score_event": null,
+      "stamina_cost": 1,
+      "polarity": "success"
+    },
+    {
+      "id": "counter_failed",
+      "text": "The counter attack breaks down. They win the ball back.",
+      "output_delta": -8,
+      "confidence": -6,
+      "frustration": 5,
+      "flow": -6,
+      "score_event": null,
+      "stamina_cost": 3,
+      "polarity": "failure"
+    },
+    {
+      "id": "goal_line_clearance",
+      "text": "You clear the ball off the goal line.",
+      "output_delta": 12,
+      "confidence": 10,
+      "frustration": -8,
+      "flow": 10,
+      "score_event": null,
+      "stamina_cost": 4,
+      "polarity": "success"
+    },
+    {
+      "id": "dispossessed",
+      "text": "You're dispossessed by their defender.",
+      "output_delta": -5,
+      "confidence": -3,
+      "frustration": 4,
+      "flow": -3,
+      "score_event": null,
+      "stamina_cost": 2,
+      "polarity": "failure"
+    },
+    {
+      "id": "half_chance_missed",
+      "text": "You miss a half-chance in front of goal.",
+      "output_delta": -3,
+      "confidence": -2,
+      "frustration": 3,
+      "flow": -2,
+      "score_event": null,
+      "stamina_cost": 1,
+      "polarity": "failure"
+    },
+    {
+      "id": " turnover_won",
+      "text": "You win the turnover and launch a counter.",
+      "output_delta": 8,
+      "confidence": 6,
+      "frustration": -5,
+      "flow": 6,
+      "score_event": null,
+      "stamina_cost": 2,
+      "polarity": "success"
+    },
+    {
+      "id": "decisive_block",
+      "text": "You make a decisive block to deny their attack.",
+      "output_delta": 9,
+      "confidence": 7,
+      "frustration": -6,
+      "flow": 7,
+      "score_event": null,
+      "stamina_cost": 3,
+      "polarity": "success"
+    },
+    {
+      "id": "goal_conceded_transition",
+      "text": "You concede a goal on the transition.",
+      "output_delta": -15,
+      "confidence": -12,
+      "frustration": 10,
+      "flow": -12,
+      "score_event": "goal_against",
+      "stamina_cost": 4,
+      "polarity": "failure"
+    },
+    {
+      "id": "chance_created",
+      "text": "You create a chance with a through ball.",
+      "output_delta": 11,
+      "confidence": 9,
+      "frustration": -7,
+      "flow": 9,
+      "score_event": null,
+      "stamina_cost": 3,
+      "polarity": "success"
+    }
+  ]
+}

@@ -6,16 +6,17 @@
 //! reverse. These are explicit intents (renderer drives them by exception) — they never
 //! touch the week/growth loop, so existing goldens are untouched.
 
-use goat_core::generation::{CreationChoices, Position};
+use goat_core::generation::CreationChoices;
+use goat_core::positions::PrimaryPosition;
 use goat_core::state::{reduce, Intent, WorldState};
 use goat_rng::GoatRng;
 
 fn player() -> WorldState {
     let choices = CreationChoices {
         name: "Life".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
-        club: "Riverside Town",
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     let mut s = WorldState::new();
     s = reduce(

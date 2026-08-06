@@ -426,10 +426,21 @@ version = "0.1.0"
 name = "goat-save"
 version = "0.1.0"
 dependencies = [
+ "goat-calendar",
  "goat-core",
  "goat-fixed",
  "goat-rng",
  "goat-world",
+]
+
+[[package]]
+name = "goat-training"
+version = "0.1.0"
+dependencies = [
+ "goat-calendar",
+ "goat-core",
+ "goat-fixed",
+ "goat-rng",
 ]
 
 [[package]]
@@ -453,6 +464,24 @@ dependencies = [
  "goat-save",
  "goat-traits",
  "goat-world",
+]
+
+[[package]]
+name = "goat-web"
+version = "0.1.0"
+dependencies = [
+ "goat-calendar",
+ "goat-core",
+ "goat-fixed",
+ "goat-match",
+ "goat-meta",
+ "goat-rng",
+ "goat-save",
+ "goat-traits",
+ "goat-world",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]
