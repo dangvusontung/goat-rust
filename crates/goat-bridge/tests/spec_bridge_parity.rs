@@ -428,8 +428,8 @@ fn interactive_match_completes_and_advances_round() {
         "completing the match must advance the season round"
     );
     assert_eq!(
-        game_state.calendar_week, 1,
-        "opener played → calendar moves to week 1"
+        game_state.calendar_week, 8,
+        "opener played → calendar moves to week 8 (7-week pre-season lead)"
     );
     assert_eq!(
         final_result.goals_for, outcome.goals_for,
@@ -448,34 +448,35 @@ fn interactive_match_completes_and_advances_round() {
 
 /// The calendar week is derived from the next unplayed round (same rule the
 /// TUI uses). Single-fixture weeks shift after one match; double-fixture
-/// weeks (e.g. calendar week 1: rounds 1–2) stay until both are played.
+/// weeks (e.g. calendar week 8: rounds 1–2) stay until both are played.
+/// Week numbers include the 7-week pre-season lead (round 0 = week 7).
 #[test]
 fn calendar_shifts_with_played_rounds() {
     let _g = serial();
     let s = api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
-    assert_eq!(s.calendar_week, 0);
-    assert_eq!(s.week_fixtures.len(), 1, "week 0 is a single-fixture week");
+    assert_eq!(s.calendar_week, 7);
+    assert_eq!(s.week_fixtures.len(), 1, "week 7 is a single-fixture week");
 
-    // Round 0 (week 0, one fixture): playing it shifts to week 1.
+    // Round 0 (week 7, one fixture): playing it shifts to week 8.
     let (s, _) = api::play_round(false);
     assert_eq!(
-        s.calendar_week, 1,
+        s.calendar_week, 8,
         "single-fixture week shifts after its match"
     );
-    assert_eq!(s.week_fixtures.len(), 2, "week 1 is a double-fixture week");
+    assert_eq!(s.week_fixtures.len(), 2, "week 8 is a double-fixture week");
     assert_eq!(s.week_fixtures_played, 0);
 
-    // Round 1 (first of week 1's two fixtures): calendar stays put.
+    // Round 1 (first of week 8's two fixtures): calendar stays put.
     let (s, _) = api::play_round(false);
     assert_eq!(
-        s.calendar_week, 1,
+        s.calendar_week, 8,
         "double-fixture week holds until both played"
     );
     assert_eq!(s.week_fixtures_played, 1);
 
     // Round 2 (second fixture): now the week advances.
     let (s, _) = api::play_round(false);
-    assert_eq!(s.calendar_week, 2);
+    assert_eq!(s.calendar_week, 9);
     assert_eq!(s.week_fixtures_played, 0);
 }
 

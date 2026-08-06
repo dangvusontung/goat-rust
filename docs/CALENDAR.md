@@ -20,8 +20,8 @@ This spec assumes the three decisions already made: **day-tick granularity**, **
 
 ## Assumptions
 
-- `[ASSUMED]` Every `Date` in the core is an **in-game date** (epoch = save's start day), never wall-clock. The core must never call `DateTime.now()` — that violates §9 (determinism is sacred).
-- `[ASSUMED]` A "season" is a football season frame (e.g. Aug→May) plus transfer windows and an off-season gap — not a calendar year.
+- `[ASSUMED]` Every `Date` in the core is an **in-game date** (epoch = save's start day), never wall-clock. The core must never call `DateTime.now()` — that violates §9 (determinism is sacred). *(Amended 2026-08: the career's real-world base year is read from wall-clock ONCE by the outer renderer layer at new-game — TUI/bridge/web — and persisted as `career_base_year` in the save (v19+). The rule stands: nothing below the renderer reads the clock.)*
+- `[ASSUMED]` A "season" is a football season frame plus transfer windows and an off-season gap — not a calendar year. *(Amended 2026-08: the frame is now anchored Jul 1 — a 7-week pre-season of real ticked content (train/rest/friendlies) followed by the 38-round competition grid kicking off mid-August. The grid is 45 weeks; with the 7-week off-season the season-year stays exactly 52 weeks, so the age model is unchanged.)*
 - `[ASSUMED]` A year is a fixed **365 days** in-game. No leap years, no real-weekday mapping. The player does not care whether a match is on a Tuesday; they care about gaps between matches. This keeps arithmetic deterministic and trivial. `[DECISION NEEDED]` confirm.
 - `[ASSUMED]` The calendar deep-ticks day-by-day for the **orbit only** (player's club + competitions). The outer world batch-ticks at season granularity (§7.1) and is reconciled at season boundaries.
 - `[ASSUMED]` Multi-competition = league + 1–2 domestic cups + (nationality-dependent) continental + international windows. All orbit-relevant fixtures merge into **one** unified timeline.

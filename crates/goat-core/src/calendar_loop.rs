@@ -62,12 +62,13 @@ pub struct CalendarFlashpoint {
     pub window: WindowKind,
 }
 
-/// First day of the `WindowKind::OffSeason` tournament window (§4.2): "cứ tháng 1x/6 đến
-/// 1x/7" — day 300 sits inside the calendar's existing, otherwise-empty off-season gap
-/// (days ~267-364) and ends exactly where `TransferSummer` (330-364) begins.
-const OFF_SEASON_START_DAY: u32 = 300;
+/// First day of the `WindowKind::OffSeason` tournament window (§4.2). The
+/// 45-week grid (7 pre-season + 38 competition weeks, Jul-1 anchor) ends on day
+/// 314; the window sits in the remaining gap and ends exactly where
+/// `TransferSummer` (348-364) begins.
+const OFF_SEASON_START_DAY: u32 = 318;
 /// Last day of the `WindowKind::OffSeason` window (inclusive).
-const OFF_SEASON_END_DAY: u32 = 329;
+const OFF_SEASON_END_DAY: u32 = 347;
 
 /// True in a World Cup or continental-championship year (§4.1: `season_number % 4 == 1`
 /// is a World Cup year, `== 3` a continental-championship year — the two formulas can
@@ -83,21 +84,27 @@ fn is_tournament_season(season_number: u32) -> bool {
 /// frozen sample in `goat-calendar`'s own clock tests (international break, winter and
 /// summer transfer windows). Tuning belongs to a later pass. `season_number` gates the
 /// tournament-only `OffSeason` window (§4.2) — every other window fires every season.
+///
+/// Day numbers are on the Jul-1-anchored axis (the career day-0 anchor moved from
+/// Aug 15 to Jul 1 with the 7-week pre-season lead, 2026-08): the two in-grid
+/// windows sit +49 days (7 weeks) later than the old Aug-15 axis so they keep
+/// the same real dates, and the post-grid windows compress into the 50-day gap
+/// after day 314.
 fn standard_season(season_number: u32) -> Season {
     let mut windows = vec![
         CalendarWindow {
             kind: WindowKind::InternationalBreak,
-            start_day: 30,
-            end_day: 44,
+            start_day: 79,
+            end_day: 93,
         },
         CalendarWindow {
             kind: WindowKind::TransferWinter,
-            start_day: 160,
-            end_day: 195,
+            start_day: 209,
+            end_day: 244,
         },
         CalendarWindow {
             kind: WindowKind::TransferSummer,
-            start_day: 330,
+            start_day: 348,
             end_day: 364,
         },
     ];
@@ -211,9 +218,9 @@ mod tests {
             }
             day = next;
         }
-        assert!(seen.contains(&(30, WindowKind::InternationalBreak)));
-        assert!(seen.contains(&(160, WindowKind::TransferWinter)));
-        assert!(seen.contains(&(330, WindowKind::TransferSummer)));
+        assert!(seen.contains(&(79, WindowKind::InternationalBreak)));
+        assert!(seen.contains(&(209, WindowKind::TransferWinter)));
+        assert!(seen.contains(&(348, WindowKind::TransferSummer)));
     }
 
     #[test]
@@ -224,7 +231,7 @@ mod tests {
 
     #[test]
     fn off_season_window_only_fires_in_a_tournament_season() {
-        // Season 1 (%4==1): a World Cup year -- OffSeason must fire on day 300.
+        // Season 1 (%4==1): a World Cup year -- OffSeason must fire on day 318.
         let mut day = 0u32;
         let mut seen: Vec<(u32, WindowKind)> = Vec::new();
         for _ in 0..53 {
@@ -232,7 +239,7 @@ mod tests {
             seen.extend(fps.into_iter().map(|f| (f.day, f.window)));
             day = next;
         }
-        assert!(seen.contains(&(300, WindowKind::OffSeason)));
+        assert!(seen.contains(&(318, WindowKind::OffSeason)));
 
         // Season 2 (%4==2): not a tournament year -- OffSeason must never fire.
         let mut day = 0u32;
@@ -252,7 +259,7 @@ mod tests {
             seen.extend(fps.into_iter().map(|f| (f.day, f.window)));
             day = next;
         }
-        assert!(seen.contains(&(300, WindowKind::OffSeason)));
+        assert!(seen.contains(&(318, WindowKind::OffSeason)));
     }
 
     #[test]

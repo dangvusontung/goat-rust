@@ -538,20 +538,58 @@ fn new_game_reaching_menu() -> String {
     "N\n\n1\n42\n1\n1\n1\nS\n".to_string()
 }
 
+/// Tick through the 7-week pre-season (Jul-1 anchor), declining every friendly
+/// offer — lands on the first competition week with round 1 still unplayed.
+fn through_pre_season() -> String {
+    let mut s = String::new();
+    for _ in 0..7 {
+        s.push_str("C\nX\n");
+    }
+    s
+}
+
+#[test]
+fn preseason_friendly_is_playable_and_leaves_the_league_untouched() {
+    // One [C] ticks a real pre-season week; [P] plays the offered friendly as a
+    // normal beat match — but no league round advances and no stats accrue.
+    let mut script = format!("{}C\nP\n", new_game_reaching_menu());
+    for _ in 0..20 {
+        script.push_str("1\n"); // first choice at every beat
+    }
+    script.push_str("Q\n");
+    let stdout = run_scripted(&script).expect("process should exit cleanly");
+    assert!(
+        stdout.contains("--- FRIENDLY (pre-season)"),
+        "the pre-season week must offer a friendly:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("FULL TIME vs"),
+        "the friendly must play to completion:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("S1 Round 1/38"),
+        "a friendly must not advance the league season:\n{stdout}"
+    );
+}
+
 #[test]
 fn continue_trains_week_and_offers_match_once_in_one_match_week() {
-    // [C] auto-trains the current week (age 0w -> 1w, no [W] keypress) and
+    // Past pre-season, [C] auto-trains the current week (no [W] keypress) and
     // stops once to offer the due match; deferring returns to the menu with
     // the round still unplayed.
-    let script = format!("{}C\nX\nQ\n", new_game_reaching_menu());
+    let script = format!(
+        "{}{}C\nX\nQ\n",
+        new_game_reaching_menu(),
+        through_pre_season()
+    );
     let stdout = run_scripted(&script).expect("process should exit cleanly");
     assert!(
         stdout.contains("Round 1/38 due this week"),
         "[C] should stop once to offer the round-1 match:\n{stdout}"
     );
     assert!(
-        stdout.contains("Age 16y1w"),
-        "[C] should have auto-trained one week without a [W] keypress:\n{stdout}"
+        stdout.contains("Age 16y8w"),
+        "7 pre-season weeks + 1 auto-trained competition week = 8 weeks:\n{stdout}"
     );
     assert_eq!(
         stdout.matches("due this week").count(),
@@ -562,9 +600,13 @@ fn continue_trains_week_and_offers_match_once_in_one_match_week() {
 
 #[test]
 fn continue_two_match_week_stops_once_per_match() {
-    // Week 2 has 2 matches (rounds 2 and 3). [C] must stop for BOTH in
+    // Grid week 8 has 2 matches (rounds 2 and 3). [C] must stop for BOTH in
     // sequence — no silent collapse — with no extra week ticked in between.
-    let script = format!("{}K\nC\nK\nC\nX\nQ\n", new_game_reaching_menu());
+    let script = format!(
+        "{}{}K\nC\nK\nC\nX\nQ\n",
+        new_game_reaching_menu(),
+        through_pre_season()
+    );
     let stdout = run_scripted(&script).expect("process should exit cleanly");
     assert!(
         stdout.contains("Round 2/38 due this week"),
@@ -575,39 +617,44 @@ fn continue_two_match_week_stops_once_per_match() {
         "second stop of the 2-match week (round 3) — both matches must be offered:\n{stdout}"
     );
     // After skipping round 2 (mid double-fixture week), the second [C] offers
-    // round 3 WITHOUT ticking another week — age never passes 16y2w before the
-    // round-3 offer.
+    // round 3 WITHOUT ticking another week — age never passes 16y9w before the
+    // round-3 offer (7 pre-season + R1 rest tick + 1 trained week = 9).
     let offer_pos = stdout.find("Round 3/38 due this week").unwrap();
     assert!(
-        !stdout[..offer_pos].contains("Age 16y3w"),
+        !stdout[..offer_pos].contains("Age 16y10w"),
         "no week may elapse between the two matches of the same week:\n{stdout}"
     );
 }
 
 #[test]
 fn continue_break_week_elapses_without_a_keypress() {
-    // Rounds 1–5 skipped: Game Week 5 is a break week with no fixture. It must
+    // Rounds 1–5 skipped: grid week 11 is a break week with no fixture. It must
     // elapse on its own — the next [C] trains the NEXT match week exactly once
-    // and offers round 6; no round header ever reads Game Week 5.
-    let script = format!("{}K\nK\nK\nK\nK\nC\nX\nQ\n", new_game_reaching_menu());
+    // and offers round 6; no round header ever reads Game Week 12.
+    let script = format!(
+        "{}{}K\nK\nK\nK\nK\nC\nX\nQ\n",
+        new_game_reaching_menu(),
+        through_pre_season()
+    );
     let stdout = run_scripted(&script).expect("process should exit cleanly");
     assert!(
         stdout.contains("Round 6/38 due this week"),
         "after the break, [C] should offer round 6:\n{stdout}"
     );
     assert!(
-        stdout.contains("Game Week 4"),
+        stdout.contains("Game Week 11"),
         "round 5 (the match right before the break) should have been played:\n{stdout}"
     );
     assert!(
-        !stdout.contains("Game Week 5"),
-        "the break week (Game Week 5) has no fixture — no header may reference it:\n{stdout}"
+        !stdout.contains("Game Week 12"),
+        "the break week (grid week 11) has no fixture — no header may reference it:\n{stdout}"
     );
-    // Five skipped match weeks (round 3 shares its week with round 2, and the
-    // break week elapses as rest) + one auto-trained week after the break = 6w.
+    // 7 pre-season weeks + five skipped match weeks (round 3 shares its week
+    // with round 2, and the break week elapses as rest) + one auto-trained
+    // week after the break = 13w.
     assert!(
-        stdout.contains("Age 16y6w"),
-        "the break week must elapse silently — 5 skipped rounds + 1 auto-train = 6 weeks:\n{stdout}"
+        stdout.contains("Age 16y13w"),
+        "the break week must elapse silently — 7 pre-season + 5 rounds + 1 auto-train:\n{stdout}"
     );
 }
 
@@ -619,10 +666,11 @@ fn continue_break_week_elapses_without_a_keypress() {
 // print exactly once per boundary even with read-only [G] side trips in between
 // (the d77170b idempotency bug class).
 
-/// Skip a full season: 38 rounds of [K], then N ("Stay") at the transfer-window
-/// prompt, landing at the season-end [Y/G/Z/Q] menu.
+/// Skip a full season: the 7-week pre-season (declining every friendly), then
+/// 38 rounds of [K], then N ("Stay") at the transfer-window prompt, landing at
+/// the season-end [Y/G/Z/Q] menu.
 fn play_full_season_skipped() -> String {
-    let mut s = String::new();
+    let mut s = through_pre_season();
     for _ in 0..38 {
         s.push_str("K\n");
     }
