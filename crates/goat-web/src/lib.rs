@@ -34,7 +34,7 @@ use goat_world::{
     promotion::{apply_season_end_for_nation, effective_league_clubs, sim_league_season},
     round_to_week,
     world::WorldGenesis,
-    Table, ROUNDS_PER_SEASON,
+    Table, PRE_SEASON_WEEKS, ROUNDS_PER_SEASON,
 };
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -103,6 +103,11 @@ struct ActiveMatchSession {
     season: u32,
     world_seed: u64,
     opp_name: String,
+    /// True for pre-season friendlies: on completion they apply ONLY
+    /// `ApplyMatchResult` (development) — never `ApplyRoundResult`/cards, so no
+    /// league table, season stats, or suspensions (mirrors the TUI's
+    /// `run_friendly`; not a calendar fixture, nothing persisted).
+    friendly: bool,
 }
 
 // ── JSON DTOs ─────────────────────────────────────────────────────────────────
@@ -161,6 +166,11 @@ struct StateSnapshot {
     season_clutch: u32,
     trained_this_week: bool,
     season_over: bool,
+    /// Pre-season (Jul-1 anchor, 7-week lead): true while the season's first
+    /// league round hasn't come due yet. Friendlies only in this window.
+    pre_season: bool,
+    /// Current pre-season week (0..6); meaningless when `pre_season` is false.
+    pre_season_week: u32,
     table: Vec<TableRowDto>,
 }
 
@@ -188,6 +198,25 @@ struct BeatDto {
 
 fn to_json<T: Serialize>(v: &T) -> String {
     serde_json::to_string(v).expect("DTO serialization is infallible")
+}
+
+/// The current grid week of the season, derived from the PC's age (mirrors the
+/// TUI's `season_week`): the StartSeason back-fill pins age to
+/// START_AGE + (N−1)·52 at every season start, so the difference IS the grid
+/// week — pre-season weeks included.
+fn season_week(s: &WorldState) -> u32 {
+    match s.pc_player_id {
+        Some(id) => {
+            let start = goat_core::tuning::START_AGE_WEEKS + (s.season_number - 1) * 52;
+            s.players.get_age_weeks(id).saturating_sub(start)
+        }
+        None => 0,
+    }
+}
+
+/// True during the 7-week pre-season lead (before round 1's grid week).
+fn in_pre_season(s: &WorldState) -> bool {
+    s.season_number > 0 && s.season_round == 0 && season_week(s) < PRE_SEASON_WEEKS as u32
 }
 
 fn err_json(msg: impl std::fmt::Display) -> String {
@@ -327,6 +356,8 @@ fn build_snapshot(s: &WorldState) -> StateSnapshot {
         season_clutch: s.pc_season_clutch_index,
         trained_this_week: s.pc_week_training_done,
         season_over: s.season_round >= ROUNDS_PER_SEASON as u32,
+        pre_season: in_pre_season(s),
+        pre_season_week: season_week(s),
         table,
     }
 }
@@ -726,16 +757,48 @@ pub fn state() -> String {
 
 /// Advance one training week. Guards the already-trained case like the TUI:
 /// reports instead of double-training. Returns events text + fresh state.
+///
+/// Pre-season weeks (Jul-1 anchor) tick via `AdvanceWeeks{1}` — each pre-season
+/// week is fresh, and the per-week training flag only resets on round
+/// boundaries (mirrors the TUI's pre-season [C]/[W] branch exactly).
 #[wasm_bindgen]
 pub fn train() -> String {
     let state = match take_state() {
         Ok(s) => s,
         Err(e) => return err_json(e),
     };
-    let already_trained = state.pc_week_training_done;
     let pc_id = state.pc_player_id.unwrap_or(0);
     let view = state.players.snapshot(pc_id);
     let seed = (view.age_weeks as u64).wrapping_mul(6364136223846793005);
+
+    if in_pre_season(&state) {
+        let mut state = reduce(
+            state,
+            Intent::AdvanceWeeks { n: 1 },
+            &mut GoatRng::new(seed),
+        );
+        let events = week_events_text(&state);
+        let mut text = if events.is_empty() {
+            format!(
+                "Trained. Pre-season week {}/{} done.",
+                season_week(&state),
+                PRE_SEASON_WEEKS
+            )
+        } else {
+            format!("Trained.\n{}", events.join("\n"))
+        };
+        if !in_pre_season(&state) {
+            // The first competition week opens fresh (round 1's week is still
+            // trainable) — same boundary rule as the TUI.
+            state.pc_week_training_done = false;
+            text.push_str("\nPre-season complete — the league campaign opens this week.");
+        }
+        let snap = build_snapshot(&state);
+        set_state(state);
+        return serde_json::json!({ "text": text, "state": snap }).to_string();
+    }
+
+    let already_trained = state.pc_week_training_done;
     let state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(seed));
 
     let text = if already_trained {
@@ -755,6 +818,132 @@ pub fn train() -> String {
     serde_json::json!({ "text": text, "state": snap }).to_string()
 }
 
+/// Rest one pre-season week: tick the week with a no-focus routine (no
+/// attribute growth) using existing intents only — the standing routine is
+/// restored afterwards. Pre-season only; the competition weeks already rest
+/// automatically via the round bookkeeping. Mirrors the TUI, where "rest" is
+/// simply not having a focus for the week's tick.
+#[wasm_bindgen]
+pub fn rest_week() -> String {
+    let state = match take_state() {
+        Ok(s) => s,
+        Err(e) => return err_json(e),
+    };
+    if !in_pre_season(&state) {
+        let snap = build_snapshot(&state);
+        set_state(state);
+        return serde_json::json!({
+            "text": "Rest weeks are a pre-season option — during the season the calendar handles rest automatically.",
+            "state": snap,
+        })
+        .to_string();
+    }
+    let pc_id = state.pc_player_id.unwrap_or(0);
+    let seed = {
+        let view = state.players.snapshot(pc_id);
+        (view.age_weeks as u64).wrapping_mul(6364136223846793005)
+    };
+    let saved_routine = state.pc_routine.clone();
+    let mut state = reduce(
+        state,
+        Intent::SetRoutine {
+            routine: goat_core::week::Routine {
+                focus_attrs: vec![],
+                intensity: saved_routine.intensity,
+            },
+        },
+        &mut GoatRng::new(0),
+    );
+    state = reduce(
+        state,
+        Intent::AdvanceWeeks { n: 1 },
+        &mut GoatRng::new(seed),
+    );
+    state = reduce(
+        state,
+        Intent::SetRoutine {
+            routine: saved_routine,
+        },
+        &mut GoatRng::new(0),
+    );
+    let mut text = format!(
+        "Rested. Pre-season week {}/{} done.",
+        season_week(&state),
+        PRE_SEASON_WEEKS
+    );
+    if !in_pre_season(&state) {
+        state.pc_week_training_done = false;
+        text.push_str("\nPre-season complete — the league campaign opens this week.");
+    }
+    let snap = build_snapshot(&state);
+    set_state(state);
+    serde_json::json!({ "text": text, "state": snap }).to_string()
+}
+
+/// Begin an interactive pre-season FRIENDLY (beat-by-beat, like
+/// `play_match_start`). Ad-hoc match only — no calendar fixture, and on
+/// completion only `ApplyMatchResult` applies (development), never the league
+/// table/season stats/discipline. Pre-season only.
+#[wasm_bindgen]
+pub fn play_friendly_start() -> String {
+    let result = with_state(|s| -> Result<ActiveMatchSession, String> {
+        if !in_pre_season(s) {
+            return Err(
+                "Friendlies are a pre-season option — the league season is on.".to_string(),
+            );
+        }
+        let pc_club_id = s.pc_club_idx as usize;
+        let week = season_week(s);
+        let pc_league_id = s.pc_div_idx as usize;
+        let world = get_world(s.world_seed);
+        let nation = world.leagues[pc_league_id].nation;
+        let mut tiers: Vec<usize> = world
+            .leagues
+            .iter()
+            .filter(|l| l.nation == nation)
+            .map(|l| l.id)
+            .collect();
+        tiers.sort_by_key(|&id| world.leagues[id].tier as usize);
+        let pos = tiers.iter().position(|&id| id == pc_league_id).unwrap_or(0);
+        let sibling_tiers: Vec<usize> = (0..tiers.len()).filter(|&i| i != pos).collect();
+        let opp_league = tiers[sibling_tiers[week as usize % sibling_tiers.len()]];
+        let slot = world.club_league_pos(pc_club_id);
+        let opp_id = world.leagues[opp_league].clubs[slot % goat_world::CLUBS_PER_DIV];
+        let opp = &world.clubs[opp_id];
+
+        let match_seed =
+            s.world_seed ^ ((s.season_number as u64) << 32) ^ (week as u64) ^ 0xF21E_5A17;
+        let mut rng = GoatRng::new(match_seed);
+        let own_str = world.clubs[pc_club_id].strength;
+        let setup = build_match_setup(s, own_str, opp.strength, &opp.name, match_seed);
+        let ms = with_beat_lib(|lib| start_match(lib, setup, &mut rng));
+        Ok(ActiveMatchSession {
+            state: ms,
+            rng,
+            round: 0, // unused for friendlies — no round is resolved on completion
+            pc_club_id,
+            div_idx: pc_league_id,
+            season: s.season_number,
+            world_seed: s.world_seed,
+            opp_name: opp.name.clone(),
+            friendly: true,
+        })
+    });
+
+    let session = match result {
+        Ok(Ok(session)) => session,
+        Ok(Err(e)) => return err_json(e),
+        Err(e) => return err_json(e),
+    };
+    let Some(beat) = session.state.current_beat() else {
+        return err_json("match produced no beats");
+    };
+    let mut dto = beat_to_dto(beat, &session.state, &session.opp_name.clone());
+    dto.setup = format!("[FRIENDLY] {}", dto.setup);
+    *ACTIVE_MATCH.lock().expect("match lock poisoned") = Some(session);
+    to_json(&dto)
+}
+
 /// Auto-play the current round and apply the result, exactly like the bridge's
 /// `play_round`. Returns result summary text + state.
 #[wasm_bindgen]
@@ -768,6 +957,15 @@ pub fn skip_match() -> String {
         set_state(state);
         return serde_json::json!({
             "text": "No match left to play — the season is over.",
+            "state": snap,
+        })
+        .to_string();
+    }
+    if in_pre_season(&state) {
+        let snap = build_snapshot(&state);
+        set_state(state);
+        return serde_json::json!({
+            "text": "No league fixture yet — pre-season friendlies are optional; train or rest through the week.",
             "state": snap,
         })
         .to_string();
@@ -915,6 +1113,12 @@ pub fn play_match_start() -> String {
         if s.season_number == 0 || s.season_round >= ROUNDS_PER_SEASON as u32 {
             return Err("No match to play — the season is over.".to_string());
         }
+        if in_pre_season(s) {
+            return Err(
+                "No league fixture yet — this is a pre-season week (play a friendly instead)."
+                    .to_string(),
+            );
+        }
         if s.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) > 0 {
             return Err(
                 "You are suspended — skip the match to serve the ban (bible AC-06).".to_string(),
@@ -954,6 +1158,7 @@ pub fn play_match_start() -> String {
             season,
             world_seed,
             opp_name: opp.name.clone(),
+            friendly: false,
         })
     });
 
@@ -1062,6 +1267,44 @@ pub fn play_match_choice(idx: usize) -> String {
         Ok(s) => s,
         Err(e) => return err_json(e),
     };
+
+    // Friendly (pre-season): development only — no round resolution, no table,
+    // no season stats, no discipline (mirrors the TUI's run_friendly).
+    if session.friendly {
+        let state = reduce(
+            state,
+            Intent::ApplyMatchResult {
+                familiarity_xp: session.state.familiarity_xp,
+                energy_cost: Fixed::from_int(25),
+                injury_weeks: None,
+            },
+            &mut GoatRng::new(0),
+        );
+        let snap = build_snapshot(&state);
+        set_state(state);
+        return serde_json::json!({
+            "success": success,
+            "outcome_text": outcome_text,
+            "goals_for": goals_for,
+            "goals_against": goals_against,
+            "player_output": pc_output,
+            "is_complete": true,
+            "friendly": true,
+            "final": {
+                "scoreline": format!("FRIENDLY — {scoreline}"),
+                "rating": star_rating(pc_output),
+                "output": pc_output,
+                "goals": pc_goals,
+                "assists": pc_assists,
+                "decisive": 0,
+                "clutch": 0,
+                "moments": moments,
+            },
+            "state": snap,
+        })
+        .to_string();
+    }
+
     let state = apply_round(
         state,
         session.round,
