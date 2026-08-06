@@ -31,7 +31,13 @@ function renderState(s) {
     `Season ${s.season_number} · Round ${s.season_round}/${s.rounds_per_season} · ${s.week_label}\n` +
     `Season: ${s.season_goals}g ${s.season_assists}a · ${s.season_decisive} decisive · ${s.season_clutch} clutch` +
     (s.trained_this_week ? ' · trained ✓' : '') +
+    (s.pre_season ? `\nPRE-SEASON — week ${s.pre_season_week + 1}/7 (train / rest / friendlies only)` : '') +
     (s.season_over ? '\nSEASON OVER — use Season End / Next Season.' : '');
+  // Pre-season swaps the league-match buttons for the friendly/rest pair.
+  $('friendly').classList.toggle('hidden', !s.pre_season);
+  $('rest').classList.toggle('hidden', !s.pre_season);
+  $('play').classList.toggle('hidden', s.pre_season);
+  $('skip').classList.toggle('hidden', s.pre_season);
   const tbody = $('table').querySelector('tbody');
   tbody.innerHTML = '';
   for (const r of s.table) {
@@ -148,6 +154,18 @@ async function main() {
     const r = parse(goat.train());
     log(r.text);
     renderState(r.state);
+  };
+  $('rest').onclick = () => {
+    const r = parse(goat.rest_week());
+    log(r.text);
+    renderState(r.state);
+  };
+  $('friendly').onclick = () => {
+    try {
+      showBeat(parse(goat.play_friendly_start()));
+    } catch (e) {
+      log(String(e));
+    }
   };
   $('skip').onclick = () => {
     const r = parse(goat.skip_match());

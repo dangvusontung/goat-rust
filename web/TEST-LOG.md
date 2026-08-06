@@ -149,3 +149,41 @@ $ curl -s -o /dev/null -w "%{http_code}" http://localhost:8123/pkg/goat_web_bg.w
 Cross-check worth noting: the node smoke's promotion/relegation events at the
 S1→S2 boundary (seed 42, England) are byte-identical to the goat-tui playable
 gate run of A3.3 — same seed, same events, two different renderers.
+
+---
+
+## Pre-season port (added 2026-08-06, after fa00244)
+
+goat-web exposes the TUI's pre-season loop: state gains pre_season/pre_season_week; train() ticks pre-season weeks via AdvanceWeeks{1}; new rest_week() (no-focus week tick, existing intents only); new play_friendly_start() (ad-hoc, no fixture; completion applies only ApplyMatchResult); play_match_start/skip_match are blocked during pre-season; UI shows a PRE-SEASON banner and swaps Play/Skip for Friendly/Rest buttons.
+
+### Node smoke (real output, `node web/smoke.mjs`)
+```
+PASS  get_nations returns 20 nations
+  nation[0]: England (stature 81)
+PASS  get_leagues returns 3 leagues
+  leagues: England Premier League (tier 0), England Division Two (tier 1), England Division Three (tier 2)
+PASS  get_clubs returns 20 clubs
+  club[0]: Draymoor Rovers (strength 79)
+PASS  new_game starts season 1 round 0
+  Smoke Test @ Draymoor Rovers — England Premier League (England)
+PASS  new game opens in pre-season
+PASS  league match blocked in pre-season
+  friendly vs Redcliffe Town: [FRIENDLY] You've beaten your marker and a second defender rushes to cover.
+PASS  friendly completed
+  FT: FRIENDLY — Draymoor Rovers 1–3 Redcliffe Town  (★☆☆☆☆ · output 7)
+PASS  friendly left the league round untouched
+PASS  still in pre-season after friendly
+PASS  rest week ticks one pre-season week
+PASS  pre-season ends after the 7-week lead
+  Pre-season complete — the league campaign opens this week.
+PASS  train round 1 not already-trained
+  beat 1/15 vs Draymoor United: They've won a corner. You must pick up your man and hold position.
+PASS  interactive match completed
+  FT: Draymoor Rovers 4–1 Draymoor United  (★★★★★ · output 94)
+  ...
+  save size: 1440 bytes
+PASS  save/load roundtrip preserves player_name, club_name, league_name, nation_name, season_number, season_round, week_label, pre_season, pre_season_week
+PASS  table survives roundtrip
+
+SMOKE OK
+```

@@ -39,6 +39,37 @@ let st = parse(goat.new_game(SEED, 'Smoke Test', 0, 0, 0, 0, 2026), 'new_game');
 check('new_game starts season 1 round 0', st.season_number === 1 && st.season_round === 0);
 console.log(`  ${st.player_name} @ ${st.club_name} — ${st.league_name} (${st.nation_name})`);
 
+// ── Pre-season (Jul-1 anchor, 7-week lead): friendly + rest + train ─────────
+check('new game opens in pre-season', st.pre_season === true && st.pre_season_week === 0);
+{
+  // League play is gated during pre-season.
+  const early = JSON.parse(goat.play_match_start());
+  check('league match blocked in pre-season', !!early.error);
+
+  // A friendly plays a full beat match but never advances the league round.
+  let beat = parse(goat.play_friendly_start(), 'play_friendly_start');
+  console.log(`  friendly vs ${beat.opp_name}: ${beat.setup}`);
+  let final = null;
+  for (let i = 0; i < 64 && !final; i++) {
+    const out = parse(goat.play_match_choice(0), 'play_match_choice (friendly)');
+    if (out.is_complete) final = out.final;
+    else beat = out.next_beat;
+  }
+  check('friendly completed', final !== null);
+  console.log(`  FT: ${final.scoreline}  (${final.rating} · output ${final.output})`);
+  const after = parse(goat.state(), 'state after friendly');
+  check('friendly left the league round untouched', after.season_round === 0);
+  check('still in pre-season after friendly', after.pre_season === true);
+
+  const r = parse(goat.rest_week(), 'rest_week');
+  check('rest week ticks one pre-season week', r.state.pre_season_week === 1);
+
+  let t = r;
+  while (t.state.pre_season) t = parse(goat.train(), 'train (pre-season)');
+  check('pre-season ends after the 7-week lead', t.state.pre_season === false);
+  console.log(`  ${t.text.split('\n').pop()}`);
+}
+
 // ── Round 1: interactive match (proves the beat loop end-to-end) ────────────
 {
   const t = parse(goat.train(), 'train r1');
@@ -99,7 +130,7 @@ const bytes = goat.save_game();
 check('save_game returns bytes', bytes instanceof Uint8Array && bytes.length > 100);
 console.log(`  save size: ${bytes.length} bytes`);
 const loaded = parse(goat.load_game(bytes), 'load_game');
-const fields = ['player_name', 'club_name', 'league_name', 'nation_name', 'season_number', 'season_round', 'week_label'];
+const fields = ['player_name', 'club_name', 'league_name', 'nation_name', 'season_number', 'season_round', 'week_label', 'pre_season', 'pre_season_week'];
 const mismatch = fields.filter((f) => before[f] !== loaded[f]);
 check(`save/load roundtrip preserves ${fields.join(', ')}`, mismatch.length === 0);
 if (mismatch.length) console.log(`  mismatched: ${mismatch.join(', ')}`);
