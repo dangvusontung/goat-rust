@@ -28,7 +28,8 @@ use crate::manager::{hire_replacement, should_fire, Manager, ManagerId, ManagerP
 use crate::population::{apply_youth_intake, Population};
 use crate::season::Table;
 use crate::transfers::{run_transfer_pass_with_log, TransferLane, TransferLogEntry};
-use crate::world::{ClubId, LeagueId, WorldGenesis, PROMO_RELEGATION_N};
+use crate::world::{ClubId, League, LeagueId, NationId, WorldGenesis, PROMO_RELEGATION_N};
+use goat_rng::GoatRng;
 
 /// The per-club outcome of a season boundary — deliberately not a `bool` (A3.2's
 /// refinement): a typed enum leaves room for a later round to add variants (playoff
@@ -49,6 +50,56 @@ pub struct PromoRelegationEvent {
     pub transition: TransitionType,
 }
 
+/// Apply one tier-boundary's swaps: bottom-N of `upper` drop, top-N of `lower` rise.
+/// Shared body of `apply_season_end` (all nations, replay path) and
+/// `apply_season_end_for_nation` (PC's nation only, live pipeline).
+fn move_between_tiers(
+    upper: &League,
+    lower: &League,
+    membership: &mut [Vec<ClubId>],
+    season: u32,
+    tables: &[Table],
+    events: &mut Vec<PromoRelegationEvent>,
+) {
+    let upper_sorted = tables[upper.id].sorted();
+    let lower_sorted = tables[lower.id].sorted();
+
+    let relegated: Vec<ClubId> = upper_sorted
+        .iter()
+        .rev()
+        .take(PROMO_RELEGATION_N)
+        .map(|e| e.club_id)
+        .collect();
+    let promoted: Vec<ClubId> = lower_sorted
+        .iter()
+        .take(PROMO_RELEGATION_N)
+        .map(|e| e.club_id)
+        .collect();
+
+    for &club in &relegated {
+        membership[upper.id].retain(|&c| c != club);
+        membership[lower.id].push(club);
+        events.push(PromoRelegationEvent {
+            club,
+            season,
+            from_league: upper.id,
+            to_league: lower.id,
+            transition: TransitionType::DirectRelegation,
+        });
+    }
+    for &club in &promoted {
+        membership[lower.id].retain(|&c| c != club);
+        membership[upper.id].push(club);
+        events.push(PromoRelegationEvent {
+            club,
+            season,
+            from_league: lower.id,
+            to_league: upper.id,
+            transition: TransitionType::DirectPromotion,
+        });
+    }
+}
+
 /// Apply one season's promotion/relegation given that season's final tables (one `Table`
 /// per league, indexed the same way as `world.leagues`). Mutates `membership` in place and
 /// returns the ordered list of events. Top-`PROMO_RELEGATION_N` of a tier rise into the
@@ -64,7 +115,7 @@ pub fn apply_season_end(
     let mut events = Vec::new();
 
     for nation in &world.nations {
-        let mut nation_leagues: Vec<&crate::world::League> = world
+        let mut nation_leagues: Vec<&League> = world
             .leagues
             .iter()
             .filter(|l| l.nation == nation.id)
@@ -72,50 +123,123 @@ pub fn apply_season_end(
         nation_leagues.sort_by_key(|l| l.tier as usize);
 
         for pair in nation_leagues.windows(2) {
-            let upper = pair[0];
-            let lower = pair[1];
-
-            let upper_sorted = tables[upper.id].sorted();
-            let lower_sorted = tables[lower.id].sorted();
-
-            let relegated: Vec<ClubId> = upper_sorted
-                .iter()
-                .rev()
-                .take(PROMO_RELEGATION_N)
-                .map(|e| e.club_id)
-                .collect();
-            let promoted: Vec<ClubId> = lower_sorted
-                .iter()
-                .take(PROMO_RELEGATION_N)
-                .map(|e| e.club_id)
-                .collect();
-
-            for &club in &relegated {
-                membership[upper.id].retain(|&c| c != club);
-                membership[lower.id].push(club);
-                events.push(PromoRelegationEvent {
-                    club,
-                    season,
-                    from_league: upper.id,
-                    to_league: lower.id,
-                    transition: TransitionType::DirectRelegation,
-                });
-            }
-            for &club in &promoted {
-                membership[lower.id].retain(|&c| c != club);
-                membership[upper.id].push(club);
-                events.push(PromoRelegationEvent {
-                    club,
-                    season,
-                    from_league: lower.id,
-                    to_league: upper.id,
-                    transition: TransitionType::DirectPromotion,
-                });
-            }
+            move_between_tiers(pair[0], pair[1], membership, season, tables, &mut events);
         }
     }
 
     events
+}
+
+/// PC-orbit variant (A3.3): apply promotion/relegation for ONE nation only. The live
+/// season-end pipeline only has real (played) tables for the PC's own league and
+/// batch-simmed tables for its two siblings; other nations' drift is the ReplayCache's
+/// domain, not the live pipeline's. `tables` is indexed by `LeagueId` like
+/// `apply_season_end`'s — only this nation's entries are ever read.
+pub fn apply_season_end_for_nation(
+    world: &WorldGenesis,
+    membership: &mut [Vec<ClubId>],
+    nation: NationId,
+    season: u32,
+    tables: &[Table],
+) -> Vec<PromoRelegationEvent> {
+    let mut events = Vec::new();
+    let mut nation_leagues: Vec<&League> = world
+        .leagues
+        .iter()
+        .filter(|l| l.nation == nation)
+        .collect();
+    nation_leagues.sort_by_key(|l| l.tier as usize);
+    for pair in nation_leagues.windows(2) {
+        move_between_tiers(pair[0], pair[1], membership, season, tables, &mut events);
+    }
+    events
+}
+
+/// Batch-sim one league's season table from static club strengths (A3.3) — the live
+/// pipeline needs final tables for the two leagues ADJACENT to the PC's (whose own table
+/// is played for real). Uses the same strength-only `sim_team_match` idiom the orbit
+/// round-sim already uses for non-PC fixtures. Deterministic in
+/// `(world_seed, season, league_id)` for a fixed membership.
+pub fn sim_league_season(
+    world: &WorldGenesis,
+    league_id: LeagueId,
+    clubs: &[ClubId],
+    world_seed: u64,
+    season: u32,
+) -> Table {
+    let mut table = Table::new(clubs);
+    for round in 0..crate::fixtures::ROUNDS_PER_SEASON {
+        let mut rng = GoatRng::new(
+            world_seed
+                ^ ((season as u64) << 32)
+                ^ ((league_id as u64) << 8)
+                ^ (round as u64)
+                ^ 0xBA44,
+        );
+        for f in crate::fixtures::round_fixtures(world_seed, season, league_id, clubs, round) {
+            let (gf, ga) = crate::season::sim_team_match(
+                world.clubs[f.home].strength,
+                world.clubs[f.away].strength,
+                &mut rng,
+            );
+            table.apply_result(f.home, f.away, gf, ga);
+        }
+    }
+    table
+}
+
+/// The club list to treat as `league_id`'s CURRENT membership in the live pipeline:
+/// the persisted promotion-advanced `membership` (3 leagues × 20 club ids, flattened
+/// in tier order) when it covers this league's nation, else genesis-static.
+/// `membership` belongs to `nation` (the PC's nation); leagues of any other nation
+/// always fall through to the static list.
+pub fn effective_league_clubs(
+    world: &WorldGenesis,
+    nation: NationId,
+    membership: &[u32],
+    league_id: LeagueId,
+) -> Vec<ClubId> {
+    let league = &world.leagues[league_id];
+    let per_league = crate::world::CLUBS_PER_DIV;
+    if league.nation == nation && membership.len() == crate::world::TIERS_PER_NATION * per_league {
+        let mut nation_leagues: Vec<&League> = world
+            .leagues
+            .iter()
+            .filter(|l| l.nation == nation)
+            .collect();
+        nation_leagues.sort_by_key(|l| l.tier as usize);
+        if let Some(slot) = nation_leagues.iter().position(|l| l.id == league_id) {
+            return membership[slot * per_league..(slot + 1) * per_league]
+                .iter()
+                .map(|&c| c as ClubId)
+                .collect();
+        }
+    }
+    league.clubs.clone()
+}
+
+/// Overlay a persisted promotion-advanced membership onto the world's leagues
+/// in-place (the TUI's session-owned `WorldGenesis` variant of
+/// `effective_league_clubs`): the nation's 3 leagues get their clubs replaced;
+/// everything else stays genesis-static. No-op for an empty membership.
+pub fn overlay_nation_membership(world: &mut WorldGenesis, nation: NationId, membership: &[u32]) {
+    let per_league = crate::world::CLUBS_PER_DIV;
+    if membership.len() != crate::world::TIERS_PER_NATION * per_league {
+        return;
+    }
+    let mut nation_leagues: Vec<LeagueId> = world
+        .leagues
+        .iter()
+        .filter(|l| l.nation == nation)
+        .map(|l| l.id)
+        .collect();
+    nation_leagues.sort_by_key(|&id| world.leagues[id].tier as usize);
+    for (slot, id) in nation_leagues.iter().enumerate() {
+        world.leagues[*id].clubs = membership[slot * per_league..(slot + 1) * per_league]
+            .iter()
+            .map(|&c| c as ClubId)
+            .collect();
+    }
 }
 
 /// `club_id -> league_id` for the current membership — built once per season-tick (stable
@@ -746,5 +870,118 @@ mod tests {
     /// carry the season/window it happened in.
     fn cache_elapsed_weeks(cache: &ReplayCache) -> u32 {
         cache.resolved_through * 52
+    }
+
+    // ── A3.3 live-pipeline helpers ─────────────────────────────────────────────
+
+    #[test]
+    fn sim_league_season_is_deterministic_and_complete() {
+        let world = WorldGenesis::generate(11);
+        let clubs = world.leagues[0].clubs.clone();
+        let a = sim_league_season(&world, 0, &clubs, 11, 1);
+        let b = sim_league_season(&world, 0, &clubs, 11, 1);
+        assert_eq!(
+            a.to_raw(),
+            b.to_raw(),
+            "same inputs must give the same table"
+        );
+        for e in &a.entries {
+            assert_eq!(
+                e.played() as usize,
+                crate::fixtures::ROUNDS_PER_SEASON,
+                "every club must play every round"
+            );
+        }
+    }
+
+    #[test]
+    fn apply_for_nation_only_touches_that_nation() {
+        let world = WorldGenesis::generate(5);
+        let nation = world.leagues[0].nation;
+        // Tables: every league gets a batch-simmed table (any would do — the
+        // point is the OTHER nations' membership must not move).
+        let tables: Vec<Table> = world
+            .leagues
+            .iter()
+            .map(|l| sim_league_season(&world, l.id, &l.clubs, 5, 1))
+            .collect();
+        let mut membership = world.static_league_clubs();
+        let before_other: Vec<Vec<ClubId>> = membership
+            .iter()
+            .enumerate()
+            .map(|(id, clubs)| (id, world.leagues[id].nation != nation, clubs.clone()))
+            .filter(|(_, other, _)| *other)
+            .map(|(_, _, clubs)| clubs)
+            .collect();
+
+        let events = apply_season_end_for_nation(&world, &mut membership, nation, 1, &tables);
+
+        assert_eq!(
+            events.len(),
+            2 * PROMO_RELEGATION_N * 2,
+            "two boundaries × {PROMO_RELEGATION_N} each way"
+        );
+        for e in &events {
+            assert_eq!(
+                world.leagues[e.from_league].nation, nation,
+                "events must stay inside the nation"
+            );
+            assert_eq!(world.leagues[e.to_league].nation, nation);
+        }
+        let after_other: Vec<Vec<ClubId>> = membership
+            .iter()
+            .enumerate()
+            .filter(|(id, _)| world.leagues[*id].nation != nation)
+            .map(|(_, clubs)| clubs.clone())
+            .collect();
+        assert_eq!(before_other, after_other, "other nations must be untouched");
+        // The nation's own leagues are all still full.
+        for (id, clubs) in membership.iter().enumerate() {
+            if world.leagues[id].nation == nation {
+                assert_eq!(clubs.len(), crate::world::CLUBS_PER_DIV);
+            }
+        }
+    }
+
+    #[test]
+    fn effective_and_overlay_membership_round_trip() {
+        let mut world = WorldGenesis::generate(3);
+        let nation = world.leagues[0].nation;
+        let mut nation_leagues: Vec<LeagueId> = world
+            .leagues
+            .iter()
+            .filter(|l| l.nation == nation)
+            .map(|l| l.id)
+            .collect();
+        nation_leagues.sort_by_key(|&id| world.leagues[id].tier as usize);
+
+        // Synthetic membership: swap the first clubs of the top two tiers.
+        let mut flat: Vec<u32> = nation_leagues
+            .iter()
+            .flat_map(|&id| world.leagues[id].clubs.iter().map(|&c| c as u32))
+            .collect();
+        flat.swap(0, crate::world::CLUBS_PER_DIV);
+        let promoted_club = flat[0] as usize; // tier-2's first club now heads the top tier
+
+        // effective_ reads the overlaid list for the nation's leagues only.
+        let top = nation_leagues[0];
+        let via_fn = effective_league_clubs(&world, nation, &flat, top);
+        assert_eq!(via_fn[0], promoted_club);
+        let other_nation_league = (0..world.leagues.len())
+            .find(|&id| world.leagues[id].nation != nation)
+            .unwrap();
+        assert_eq!(
+            effective_league_clubs(&world, nation, &flat, other_nation_league),
+            world.leagues[other_nation_league].clubs,
+            "other nations always fall back to static"
+        );
+
+        // overlay_ writes the same list into the world itself.
+        overlay_nation_membership(&mut world, nation, &flat);
+        assert_eq!(world.leagues[top].clubs[0], promoted_club);
+
+        // Empty membership is a no-op (pre-first-promotion / pre-v18 saves).
+        overlay_nation_membership(&mut world, nation, &[]);
+        assert_eq!(world.leagues[top].clubs[0], promoted_club);
     }
 }

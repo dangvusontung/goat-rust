@@ -231,6 +231,13 @@ pub struct WorldState {
     /// Live calendar position (epoch days since career start). Advanced 7/week by the
     /// week loop, which drives the CalendarEngine. Persisted in the save (v6+).
     pub pc_epoch_day: u32,
+    /// PC's nation's current league membership (A3.3): the nation's 3 leagues ×
+    /// 20 club ids, flattened in tier order (top → third), advanced by
+    /// promotion/relegation each season end. Empty = genesis-static membership
+    /// (pre-first-promotion, or a pre-v18 save). Path-dependent — driven by the
+    /// PC league's REAL played results — so persisted; the one piece of league
+    /// structure that cannot be regenerated from `world_seed`.
+    pub pc_nation_membership: Vec<u32>,
     /// Calendar flashpoints (window openings) surfaced by the most recent week tick.
     pub last_week_flashpoints: Vec<CalendarFlashpoint>,
     /// The PC's current-season orbit fixtures (league this slice; cup/continental/
@@ -360,6 +367,7 @@ impl WorldState {
             pc_current_calendar_week: 0,
             pc_week_training_done: false,
             pc_epoch_day: 0,
+            pc_nation_membership: Vec::new(),
             last_week_flashpoints: Vec::new(),
             pc_season_fixtures: Vec::new(),
         }
