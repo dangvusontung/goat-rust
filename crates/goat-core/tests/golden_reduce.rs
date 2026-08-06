@@ -22,7 +22,7 @@ fn make_state() -> WorldState {
     };
     let id = s.players.push(view);
     s.pc_player_id = Some(id);
-    s.pc_club = "Riverside Town";
+    s.pc_club = "Riverside Town".to_string();
     s
 }
 

@@ -17,6 +17,7 @@ fn high_output_low_trophies() -> LegacyEvidence {
         league_titles: 0,
         clubs_served: 2,
         longest_club_tenure: 10,
+        ..Default::default()
     }
 }
 
@@ -32,6 +33,7 @@ fn trophy_machine_low_output() -> LegacyEvidence {
         league_titles: 5,
         clubs_served: 4,
         longest_club_tenure: 4,
+        ..Default::default()
     }
 }
 
@@ -47,6 +49,7 @@ fn one_club_legend() -> LegacyEvidence {
         league_titles: 2,
         clubs_served: 1,
         longest_club_tenure: 18,
+        ..Default::default()
     }
 }
 
@@ -60,8 +63,8 @@ fn schools_disagree_on_mixed_profiles() {
     let axes_trophy = compute_axes(&trophy_king);
 
     // Stats Purists (idx=2) should prefer the stats god.
-    let stats_score_god = SCHOOLS[2].score(&axes_stats);
-    let stats_score_trophy = SCHOOLS[2].score(&axes_trophy);
+    let stats_score_god = SCHOOLS[2].score(&stats_god, &axes_stats);
+    let stats_score_trophy = SCHOOLS[2].score(&trophy_king, &axes_trophy);
     assert!(
         stats_score_god > stats_score_trophy,
         "Stats Purists should prefer high output ({}) over trophy king ({})",
@@ -70,8 +73,8 @@ fn schools_disagree_on_mixed_profiles() {
     );
 
     // Trophy Cabinet (idx=0) should prefer the trophy king.
-    let tc_score_god = SCHOOLS[0].score(&axes_stats);
-    let tc_score_trophy = SCHOOLS[0].score(&axes_trophy);
+    let tc_score_god = SCHOOLS[0].score(&stats_god, &axes_stats);
+    let tc_score_trophy = SCHOOLS[0].score(&trophy_king, &axes_trophy);
     assert!(
         tc_score_trophy > tc_score_god,
         "Trophy Cabinet should prefer trophy king ({}) over stats god ({})",
@@ -89,8 +92,8 @@ fn loyalty_school_prefers_one_club_legend() {
     let axes_legend = compute_axes(&legend);
     let axes_trophy = compute_axes(&trophy);
 
-    let loy_legend = SCHOOLS[3].score(&axes_legend);
-    let loy_trophy = SCHOOLS[3].score(&axes_trophy);
+    let loy_legend = SCHOOLS[3].score(&legend, &axes_legend);
+    let loy_trophy = SCHOOLS[3].score(&trophy, &axes_trophy);
     assert!(
         loy_legend > loy_trophy,
         "Loyalty school should prefer one-club legend ({}) over club-hopper ({})",
@@ -129,11 +132,12 @@ fn no_career_tops_all_schools() {
     let axes: Vec<_> = careers.iter().map(compute_axes).collect();
 
     // For each career, find which school rates it highest.
-    let top_schools: Vec<usize> = axes
+    let top_schools: Vec<usize> = careers
         .iter()
-        .map(|ax| {
+        .zip(axes.iter())
+        .map(|(ev, ax)| {
             (0..4usize)
-                .max_by_key(|&s| SCHOOLS[s].score(ax).to_int())
+                .max_by_key(|&s| SCHOOLS[s].score(ev, ax).to_int())
                 .unwrap()
         })
         .collect();
@@ -160,9 +164,10 @@ fn early_career_ranks_low() {
         league_titles: 0,
         clubs_served: 1,
         longest_club_tenure: 2,
+        ..Default::default()
     };
     let axes = compute_axes(&early);
-    let rankings = all_rankings(&axes);
+    let rankings = all_rankings(&early, &axes);
     // Should rank outside top 5 in all schools (10 greats + self = 11 total).
     for (s, &(_, rank, total)) in rankings.iter().enumerate() {
         assert!(
@@ -170,6 +175,90 @@ fn early_career_ranks_low() {
             "early career should rank outside top 5 in school {s}: rank={rank}/{total}"
         );
     }
+}
+
+// ── Design round 1: raw-signal divergence (Pantheon distinct-school signals) ───
+
+/// Baseline evidence shared by the raw-signal divergence tests below — axes-affecting
+/// fields held constant so `compute_axes` output is identical for both variants; only the
+/// new raw-signal fields (career_standout_matches / career_best_ovr) differ.
+fn raw_signal_baseline() -> LegacyEvidence {
+    LegacyEvidence {
+        career_goals: 120,
+        career_matches: 300,
+        career_output_sum: 300 * 60,
+        best_season_avg_output: 65,
+        seasons_played: 12,
+        decisive_moments: 2,
+        player_of_year_wins: 0,
+        league_titles: 1,
+        clubs_served: 2,
+        longest_club_tenure: 6,
+        ..Default::default()
+    }
+}
+
+/// Eye-Test Romantics (idx=1) read career_standout_matches directly — a moment-maker with
+/// identical composite axes but far more standout performances should outrank a steady
+/// grinder, since the composite score alone would not distinguish them.
+#[test]
+fn eye_test_school_prefers_moment_makers() {
+    let moment_maker = LegacyEvidence {
+        career_standout_matches: 48,
+        ..raw_signal_baseline()
+    };
+    let steady_grinder = LegacyEvidence {
+        career_standout_matches: 5,
+        ..raw_signal_baseline()
+    };
+
+    let axes_mm = compute_axes(&moment_maker);
+    let axes_sg = compute_axes(&steady_grinder);
+    assert_eq!(
+        axes_mm.output.to_int(),
+        axes_sg.output.to_int(),
+        "composite axes must be identical — only the raw signal differs"
+    );
+
+    let score_mm = SCHOOLS[1].score(&moment_maker, &axes_mm);
+    let score_sg = SCHOOLS[1].score(&steady_grinder, &axes_sg);
+    assert!(
+        score_mm > score_sg,
+        "Eye-Test Romantics should prefer the moment maker ({}) over the steady grinder ({})",
+        score_mm.to_int(),
+        score_sg.to_int()
+    );
+}
+
+/// Stats Purists (idx=2) read career_best_ovr directly — a high-talent-ceiling career
+/// should outrank one with a lower peak OVR but otherwise identical composite axes.
+#[test]
+fn stats_purist_school_prefers_high_ovr_over_trophies() {
+    let high_ovr = LegacyEvidence {
+        career_best_ovr: 95,
+        ..raw_signal_baseline()
+    };
+    let low_ovr = LegacyEvidence {
+        career_best_ovr: 40,
+        ..raw_signal_baseline()
+    };
+
+    let axes_high = compute_axes(&high_ovr);
+    let axes_low = compute_axes(&low_ovr);
+    assert_eq!(
+        axes_high.output.to_int(),
+        axes_low.output.to_int(),
+        "composite axes must be identical — only the raw signal differs"
+    );
+
+    let score_high = SCHOOLS[2].score(&high_ovr, &axes_high);
+    let score_low = SCHOOLS[2].score(&low_ovr, &axes_low);
+    assert!(
+        score_high > score_low,
+        "Stats Purists should prefer the high-OVR career ({}) over the low-OVR one ({})",
+        score_high.to_int(),
+        score_low.to_int()
+    );
 }
 
 // ── Phase 10: Icon axis from off-pitch life (TASK-10B.4) ───────────────────────

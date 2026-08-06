@@ -7,10 +7,12 @@
 //!   - Subsystems polled in a fixed `Vec` order — never a HashMap iteration.
 //!   - `epoch_day` mutated in exactly one place.
 
-use crate::clock::{Fixture, GameClock, Season, SeasonId, WindowKind};
+use crate::clock::{
+    Competition, CompetitionId, Fixture, FixtureId, GameClock, Season, SeasonId, WindowKind,
+};
 use crate::rng_stream::RngStream;
 use crate::subsystem::{DayContext, DayReport, StopClass, Subsystem};
-use crate::tuning::SOFT_FLUSH_THRESHOLD;
+use crate::tuning::{MIN_REST_GAP_DAYS, SOFT_FLUSH_THRESHOLD};
 use goat_rng::GoatRng;
 
 /// Returned to the renderer whenever the advance loop halts.
@@ -33,6 +35,9 @@ pub struct CalendarEngine {
     pub season: Season,
     /// Current-season orbit fixtures, sorted by scheduled_day for deterministic iteration.
     pub fixtures: Vec<Fixture>,
+    /// Competitions this season's fixtures belong to (id -> priority/kind lookup for
+    /// conflict resolution). Small (single-digit count); linear scan is fine.
+    competitions: Vec<Competition>,
     /// Registered subsystems in ABI-locked order (SIM_VERSION).
     /// Use a `Vec`, never a `HashMap` — iteration order is load-bearing.
     subsystems: Vec<Box<dyn Subsystem>>,
@@ -45,7 +50,12 @@ impl CalendarEngine {
     /// Create the engine. `root_seed` is the save seed; the calendar immediately forks
     /// its independent stream from it so subsequent forks (match, transfer, …) don't
     /// affect the calendar's randomness.
-    pub fn new(root_seed: u64, season: Season, mut fixtures: Vec<Fixture>) -> Self {
+    pub fn new(
+        root_seed: u64,
+        season: Season,
+        mut fixtures: Vec<Fixture>,
+        competitions: Vec<Competition>,
+    ) -> Self {
         let mut root = RngStream::new(root_seed);
         let calendar_rng = root.fork("calendar");
         // Sort by scheduled_day so iteration order is deterministic.
@@ -55,6 +65,7 @@ impl CalendarEngine {
             clock: GameClock::new(season_id),
             season,
             fixtures,
+            competitions,
             subsystems: vec![],
             calendar_rng,
         }
@@ -104,6 +115,95 @@ impl CalendarEngine {
             .collect()
     }
 
+    fn competition_priority(&self, id: CompetitionId) -> i32 {
+        self.competitions
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.priority)
+            .unwrap_or(0)
+    }
+
+    /// `resolveFixturesForDay` (`docs/MAIN.md:1090-1117`): when more than one orbit
+    /// fixture lands on `day`, sort by `(competition.priority DESC, importance DESC,
+    /// fixture.id ASC)`, keep the winner in place, and reschedule the rest to the next
+    /// legal slot. Two-legged ties (`leg_for_id`) reschedule together — the partner leg
+    /// shifts by the same number of days rather than moving independently.
+    ///
+    /// Idempotent: once at most one orbit fixture remains on `day`, this is a no-op —
+    /// safe to call every tick even on days with no clash.
+    fn resolve_conflicts_for_day(&mut self, day: u32) {
+        let mut todays = self.fixtures_for_day(day);
+        if todays.len() <= 1 {
+            return;
+        }
+        todays.sort_by(|a, b| {
+            let pa = self.competition_priority(a.competition_id);
+            let pb = self.competition_priority(b.competition_id);
+            pb.cmp(&pa)
+                .then_with(|| b.importance.cmp(&a.importance))
+                .then_with(|| a.id.cmp(&b.id))
+        });
+
+        let mut moved: Vec<FixtureId> = Vec::new();
+        for bumped in &todays[1..] {
+            if moved.contains(&bumped.id) {
+                continue; // already carried along as a two-legged partner
+            }
+            let new_day = self.next_legal_day(day);
+            let delta = new_day - day;
+            self.reschedule_fixture(bumped.id, new_day);
+            moved.push(bumped.id);
+
+            // Carry the other leg of a two-legged tie along by the same delta, in
+            // either direction of the leg_for_id relation.
+            let mut partner_ids: Vec<FixtureId> = Vec::new();
+            if let Some(partner_id) = bumped.leg_for_id {
+                partner_ids.push(partner_id);
+            }
+            partner_ids.extend(
+                self.fixtures
+                    .iter()
+                    .filter(|f| f.leg_for_id == Some(bumped.id))
+                    .map(|f| f.id),
+            );
+            for partner_id in partner_ids {
+                if moved.contains(&partner_id) {
+                    continue;
+                }
+                if let Some(partner) = self.fixtures.iter().find(|f| f.id == partner_id) {
+                    let partner_new_day = partner.scheduled_day + delta;
+                    self.reschedule_fixture(partner_id, partner_new_day);
+                    moved.push(partner_id);
+                }
+            }
+        }
+        self.fixtures.sort_by_key(|f| f.scheduled_day);
+    }
+
+    /// First day strictly after `from_day` that: isn't inside an active calendar
+    /// window, doesn't already carry another orbit fixture, and keeps at least
+    /// `MIN_REST_GAP_DAYS` clear of every other orbit fixture already scheduled.
+    fn next_legal_day(&self, from_day: u32) -> u32 {
+        let mut candidate = from_day + 1;
+        loop {
+            let in_window = !self.active_windows(candidate).is_empty();
+            let too_close = self
+                .fixtures
+                .iter()
+                .any(|f| f.is_orbit && f.scheduled_day.abs_diff(candidate) < MIN_REST_GAP_DAYS);
+            if !in_window && !too_close {
+                return candidate;
+            }
+            candidate += 1;
+        }
+    }
+
+    fn reschedule_fixture(&mut self, id: FixtureId, new_day: u32) {
+        if let Some(fx) = self.fixtures.iter_mut().find(|f| f.id == id) {
+            fx.scheduled_day = new_day;
+        }
+    }
+
     fn build_context(&self, day: u32) -> DayContext {
         DayContext {
             epoch_day: day,
@@ -129,6 +229,7 @@ impl CalendarEngine {
     /// increment `epoch_day`. This is the ONLY function permitted to mutate `epoch_day`.
     pub fn tick_one_day(&mut self) -> Vec<DayReport> {
         let day = self.clock.epoch_day;
+        self.resolve_conflicts_for_day(day);
         let ctx = self.build_context(day);
 
         // Poll subsystems in fixed registration order (Vec, not HashMap).
@@ -141,8 +242,11 @@ impl CalendarEngine {
             reports.push(report);
         }
 
-        // Decrement match-scoped suspension counters for matches played today.
-        // Phase 1 stub: SuspensionLedger (per-competition, counts by match not day) added in Phase 2.
+        // Suspension counters live in `goat-core`'s `WorldState::pc_suspensions`
+        // (`SuspensionLedger`, Design round 4 Slice 5 §5.1), decremented by the
+        // renderer via `Intent::ApplyRoundResult`/`ApplyOrbitMatchResult` when a match
+        // of that exact competition is played — not here. This engine only surfaces
+        // fixtures/windows/congestion; it has no reference to player-level state.
 
         // The ONLY increment of epoch_day.
         self.clock.epoch_day += 1;

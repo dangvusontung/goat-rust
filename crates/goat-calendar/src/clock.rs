@@ -80,10 +80,91 @@ impl Season {
     }
 }
 
+/// A competition instance (one league, one cup, one continental tier, etc.).
+///
+/// Phase 2 (this round): the entity fixtures hang off for conflict-resolution priority
+/// and legacy-evidence bookkeeping. `id` is referenced by `Fixture::competition_id`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Competition {
+    pub id: CompetitionId,
+    pub kind: CompetitionKind,
+    /// Conflict-resolution priority; higher wins a same-day clash (see `FixtureImportance`
+    /// for the secondary, per-fixture tie-break).
+    pub priority: i32,
+    /// Relevant to the PC's club/nation this season.
+    pub is_orbit: bool,
+}
+
+/// The shape of a competition. 7 kinds: the bible's original 4-way split
+/// (`league | domesticCup | continental | international`) widened so continental club
+/// competition (3 tiers) and international competition (2 distinct trophies) are each
+/// individually distinguishable — needed for both conflict-resolution priority and
+/// legacy-evidence purposes ("won a World Cup" and "won a continental championship" are
+/// different trophies).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompetitionKind {
+    League,
+    DomesticCup,
+    /// Champions-League-equivalent.
+    ContinentalTier1,
+    /// Europa-equivalent.
+    ContinentalTier2,
+    /// Conference-equivalent.
+    ContinentalTier3,
+    WorldCup,
+    /// Euro/Copa América/Asian Cup/etc. — one enum value, many nations' instances.
+    ContinentalChampionship,
+}
+
+/// Same-day conflict-resolution tie-break ladder, lowest to highest — used as the
+/// secondary sort key after `Competition::priority` (see `resolveFixturesForDay`,
+/// `docs/MAIN.md:1090-1117`). Declaration order IS the ladder order: derived `Ord`
+/// compares by discriminant, so `DeadRubber < League < ... < ContinentalTier1Final`.
+///
+/// National-team fixtures (`WorldCup`/`ContinentalChampionship`) are deliberately absent
+/// from this ladder — an international window excludes club fixtures from being
+/// scheduled at all (a calendar-level rule), rather than winning a same-day priority
+/// contest against them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FixtureImportance {
+    DeadRubber,
+    League,
+    /// A league match, rivalry-flagged.
+    Derby,
+    ContinentalTier3,
+    /// Rounds before the tier-1 entry round.
+    DomesticCupEarly,
+    ContinentalTier2,
+    /// The tier-1-entry round onward, incl. semis.
+    DomesticCupLate,
+    ContinentalTier1,
+    DomesticCupFinal,
+    ContinentalTier1Final,
+}
+
+/// One player's suspension in one specific competition (Design round 4, Slice 5 §5.1).
+///
+/// Replaces a single global "matches remaining" scalar: a ban is scoped to the exact
+/// `CompetitionKind` it was earned in (League, DomesticCup, a continental tier, …), so a
+/// suspension picked up in a cup tie never blocks selection in a league fixture and vice
+/// versa. `matches_remaining` decrements only when a match of THIS competition is played
+/// (bible AC-06: counted by matches actually played, not by elapsed calendar days or
+/// rounds of any other competition).
+///
+/// `player_id` is a bare index rather than `goat_core::player::PlayerId` — this crate
+/// stays independent of `goat-core` (which depends on it, not the reverse); the two
+/// types are structurally the same (`usize`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SuspensionLedger {
+    pub player_id: usize,
+    pub competition_id: CompetitionId,
+    pub matches_remaining: u32,
+}
+
 /// An orbit fixture: a match relevant to the player's club or nation.
 ///
-/// Phase 1: single competition, no conflict resolution.
-/// Phase 2: `scheduled_day` may shift from `original_day` via conflict resolution.
+/// `scheduled_day` may shift from `original_day` via same-day conflict resolution
+/// (`CalendarEngine::resolve_conflicts_for_day`, `docs/MAIN.md:1090-1117`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fixture {
     /// Deterministic id = hash(seed, competition, season, round, slot).
@@ -95,6 +176,11 @@ pub struct Fixture {
     pub original_day: u32,
     /// True when this fixture is relevant to the player's club or nation.
     pub is_orbit: bool,
+    /// Same-day conflict-resolution tie-break (see `FixtureImportance`).
+    pub importance: FixtureImportance,
+    /// For two-legged ties (continental knockout, some cup rounds): the other leg's
+    /// fixture id. Two-legged ties reschedule together, never independently.
+    pub leg_for_id: Option<FixtureId>,
 }
 
 #[cfg(test)]

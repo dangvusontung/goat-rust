@@ -49,7 +49,7 @@ Top-level object with **three arrays**:
 | `confidence` | `i8` | 0 | headspace: confidence delta |
 | `frustration` | `i8` | 0 | headspace: frustration delta |
 | `flow` | `i8` | 0 | headspace: flow/momentum delta |
-| `score_event` | string\|null | null | `null` \| `"goal_for"` \| `"goal_against"` |
+| `score_event` | string\|null | null | `null` \| `"goal_for"` \| `"assist_for"` \| `"goal_against"` |
 | `stamina_cost` | `u8` | 0 | energy drained this beat |
 | `next_situation` | string\|null | null | optional: force the next situation by `id` |
 | `polarity` | string | `"any"` | `"success"` \| `"failure"` \| `"any"` |
@@ -117,7 +117,10 @@ match cross/cutback choices tagged with `wide` or `delivery`.)
   goals and howlers (±18–30). A goal outcome should carry a big positive + `confidence`/
   `flow`; a glaring miss a notable negative + `frustration`.
 - **score_event:** put `goal_for` only on **success** shooting/finishing outcomes;
-  `goal_against` only on **failure** defensive outcomes. Most outcomes have `null`.
+  `goal_against` only on **failure** defensive outcomes. Use `assist_for` on a
+  **success** outcome where the PC makes the final pass and a teammate scores — it
+  still adds to the team's score, but is counted as a PC assist, not a PC goal
+  (BL5.1). Most outcomes have `null`.
 - **headspace:** successes nudge `confidence`/`flow` up; failures push `frustration` up.
   Keep magnitudes small (±3–10) — these accumulate over 15 beats.
 - **Tone:** second person, present tense, terse and dramatic. Setups ≤ ~130 chars. No
@@ -149,8 +152,8 @@ match cross/cutback choices tagged with `wide` or `delivery`.)
 > Agility, Balance, Reactions, StandingTackle, Marking, Interceptions, Heading, Curve,
 > AttPositioning, Strength, Stamina, Aggression, Jumping, Composure, Bravery, SlidingTackle].
 > **outcome** = `{id, text, output_delta, confidence, frustration, flow, score_event,
-> stamina_cost, polarity}`; `score_event` ∈ {null,"goal_for","goal_against"}; `polarity` ∈
-> {success,failure,any}.
+> stamina_cost, polarity}`; `score_event` ∈ {null,"goal_for","assist_for","goal_against"};
+> `polarity` ∈ {success,failure,any}.
 >
 > RULES: a choice is eligible for a situation when they SHARE ≥1 tag — so give every
 > situation ≥3 eligible choices. Outcomes are a SHARED pool picked by polarity only, so

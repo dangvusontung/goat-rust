@@ -186,6 +186,22 @@ pub const INJURY_LIFESTYLE_X10_PRO: u32 = 7;
 pub const INJURY_LIFESTYLE_X10_BALANCED: u32 = 10;
 pub const INJURY_LIFESTYLE_X10_FLASHY: u32 = 15;
 
+// ── Durability / injury-proneness (BL7, Design round 9) ───────────────────────
+// A fixed, innate per-PC trait rolled once at creation — how fragile or tough this
+// particular player's body is, independent of lifestyle/training choices. Neutral
+// (10 = ×1.0) reproduces pre-existing injury numbers exactly (additive variance, not
+// a rebalance). Range [7,13] (±30% around neutral) mirrors `INJURY_LIFESTYLE_X10_*`'s
+// existing spread (7..15, also centred so Balanced=10 is the untouched baseline).
+
+/// Multiplicative salt deriving the durability roll's seed from the player's creation
+/// seed — an independent substream, same idiom as `NOISE_SALT`'s per-attribute noise.
+pub const DURABILITY_SALT: u64 = 0x517c_c1b7_2722_0a95;
+/// Min/max durability roll (×10), uniform, inclusive.
+pub const DURABILITY_X10_MIN: u8 = 7;
+pub const DURABILITY_X10_MAX: u8 = 13;
+/// Neutral roll — reproduces pre-existing injury_prob output unchanged.
+pub const DURABILITY_X10_NEUTRAL: u32 = 10;
+
 /// Effective ceiling: fraction of *potential* a lifestyle lets the player actually
 /// reach. Flashy burns a little of the ceiling (0.96); Professional/Balanced reach
 /// full potential. Never raises a current attr above its potential (pillar §2.4).
@@ -198,6 +214,36 @@ pub const LIFESTYLE_CEILING_FLASHY: Fixed = Fixed::raw(960); // 0.960 — burned
 pub const DECLINE_LIFESTYLE_PRO: Fixed = Fixed::raw(700); // 0.700
 pub const DECLINE_LIFESTYLE_BALANCED: Fixed = Fixed::raw(1_000); // 1.000
 pub const DECLINE_LIFESTYLE_FLASHY: Fixed = Fixed::raw(1_400); // 1.400
+
+// ── Lifestyle score: emergent, not chosen (bible §8.5/§8.6) ───────────────────
+// Lifestyle is no longer picked at creation — it is a slow-moving readout built up
+// from the player's other choices over the career. `pc_lifestyle_score` is a signed
+// Fixed in [-1.000, 1.000]; negative = Pro-leaning, positive = Flashy-leaning, 0 =
+// Balanced. `lifestyle_tier_from_score` derives the cached `pc_lifestyle` tier from it
+// each week (state.rs). Values below are illustrative shape (CLAUDE.md convention),
+// tuned so ~15-20 consistent weeks of one choice crosses a tier threshold.
+
+/// Score clamp bounds.
+pub const LIFESTYLE_SCORE_MIN: Fixed = Fixed::raw(-1_000);
+pub const LIFESTYLE_SCORE_MAX: Fixed = Fixed::raw(1_000);
+/// Tier thresholds: score < -PRO_THRESHOLD → Professional, score > FLASHY_THRESHOLD →
+/// Flashy, else Balanced. Symmetric at ±333 (roughly a third of the range each).
+pub const LIFESTYLE_TIER_THRESHOLD: Fixed = Fixed::raw(333);
+
+/// Weekly score nudge from training intensity (bible §8.5 — habits, not one-off picks).
+/// High intensity is the "professional" grind: nudges toward Pro (score -=). Low
+/// intensity nudges toward Flashy (score +=); Medium is neutral. At ±20/wk, crossing the
+/// ±333 threshold from 0 takes ~17 consistent weeks — within the "several weeks" shape.
+pub const LIFESTYLE_NUDGE_INTENSITY_HIGH: Fixed = Fixed::raw(-20);
+pub const LIFESTYLE_NUDGE_INTENSITY_LOW: Fixed = Fixed::raw(20);
+
+/// Weekly score nudge per dev-investment level above 0 (private trainers/facilities is a
+/// professional habit — bible §8.5). Level × this value, nudging toward Pro (negative).
+pub const LIFESTYLE_NUDGE_PER_DEV_LEVEL: Fixed = Fixed::raw(-10);
+
+/// One-off score nudge applied when signing a sponsor, per tier (bible §8.5
+/// "over-commercializing" — more commercial exposure leans Flashy). Tier × this value.
+pub const LIFESTYLE_NUDGE_PER_SPONSOR_TIER: Fixed = Fixed::raw(15);
 
 // ── Week loop: breakthrough ───────────────────────────────────────────────────
 
@@ -281,3 +327,80 @@ pub const MEDIA_DEFIANT: (i32, i32) = (-8, 10);
 pub const RETIRE_AGE_SOFT: u32 = 34;
 /// Hard retirement age: nobody plays on past it.
 pub const RETIRE_AGE_HARD: u32 = 40;
+
+// ── Pantheon raw-signal evidence (Design round 1) ───────────────────────────────
+
+/// A single-match output score at/above this counts as a "standout" performance for the
+/// Eye-Test Romantics' raw "moments" signal (Design round 1, decision 2). First-pass
+/// number — tune later per TASK-TUNE convention, not guessed against real playtest data.
+pub const STANDOUT_OUTPUT_THRESHOLD: i32 = 78;
+
+// ── Team tactical identity (Design round 2, Doc B §B.1/§B.3) ───────────────────
+// First-pass placeholder numbers — flagged for a TASK-TUNE follow-up once playtested,
+// same convention as every other first-pass threshold in this file.
+
+/// `team_fit`'s best-role-under-this-lens score at/above this buckets to Natural.
+pub const TEAM_FIT_NATURAL_PCT: Fixed = Fixed::from_int(75);
+/// At/above this (below Natural) buckets to Competent.
+pub const TEAM_FIT_COMPETENT_PCT: Fixed = Fixed::from_int(55);
+/// At/above this (below Competent) buckets to Unconvincing; below it, Awkward.
+pub const TEAM_FIT_UNCONVINCING_PCT: Fixed = Fixed::from_int(35);
+
+/// Call-up probability (out of 100) at each `team_fit` tier — modulates the PC's base
+/// call-up odds from `ovr()`, never zeroing them out (non-blocking per the decision's own
+/// wording — a bad fit sits on the bench sometimes, isn't banned from the sport).
+pub const CALLUP_PCT_NATURAL: u32 = 90;
+pub const CALLUP_PCT_COMPETENT: u32 = 65;
+pub const CALLUP_PCT_UNCONVINCING: u32 = 35;
+pub const CALLUP_PCT_AWKWARD: u32 = 15;
+
+/// Starting-XI probability (out of 100) once called up, at each `team_fit` tier.
+pub const START_PCT_NATURAL: u32 = 85;
+pub const START_PCT_COMPETENT: u32 = 60;
+pub const START_PCT_UNCONVINCING: u32 = 30;
+pub const START_PCT_AWKWARD: u32 = 10;
+
+// ── Decisive-moment weighting (BL5.2) ────────────────────────────────────────
+// Static match-value coefficient per `goat_calendar::FixtureImportance` rung,
+// ×10 integers (no floats in sim). Placeholder scale from the BL5.2 task doc,
+// flagged for sign-off once seen against a real career-sim run. Index by the
+// enum's ordinal (DeadRubber=0 … ContinentalTier1Final=9).
+/// ×10 coefficient per FixtureImportance rung.
+pub const DECISIVE_IMPORTANCE_X10: [u32; 10] = [
+    5,  // DeadRubber = 0.5
+    10, // League = 1.0
+    12, // Derby = 1.2
+    13, // ContinentalTier3 = 1.3
+    13, // DomesticCupEarly = 1.3
+    15, // ContinentalTier2 = 1.5
+    16, // DomesticCupLate = 1.6
+    18, // ContinentalTier1 = 1.8
+    20, // DomesticCupFinal = 2.0
+    20, // ContinentalTier1Final = 2.0
+];
+/// ×10 result multipliers: a decisive moment in a match you still lost
+/// contributes nothing to this axis (the "lean simple" default from the doc).
+pub const DECISIVE_RESULT_WIN_X10: u32 = 10; // 1.0
+pub const DECISIVE_RESULT_DRAW_X10: u32 = 5; // 0.5
+pub const DECISIVE_RESULT_LOSS_X10: u32 = 0; // 0.0
+
+// ── Decisive-moment table tension (BL5.2 v2) ─────────────────────────────────
+// An ordinary League fixture late in a still-live title race or relegation
+// battle carries more weight than a mathematically dead one. "Alive" is judged
+// mathematically (Tùng's wording): the points gap can still be closed with the
+// rounds remaining (max one-sided swing = 3 × rounds left). All placeholder
+// values, flagged for sign-off like the coefficient ladder above.
+/// Rounds per season, mirrored from goat-world (goat-core stays headless — the
+/// same hand-sync idiom as the `N = 20` CLUBS_PER_DIV in `ApplyRoundResult`).
+pub const DECISIVE_ROUNDS_PER_SEASON: u32 = 38;
+/// Only the final this-many rounds get tension-adjusted at all; earlier league
+/// matches always use their static rung.
+pub const DECISIVE_TENSION_LAST_ROUNDS: u32 = 8;
+/// Effective ×10 coefficient for a late-season League/Derby match with the title
+/// race or drop battle still mathematically alive (sits between Derby=12 and
+/// DomesticCupLate=16).
+pub const DECISIVE_TENSION_X10: u32 = 15;
+/// Drop-zone size for the drop-battle check: the bottom this-many clubs of the
+/// 20-club division are "in the relegation battle" (hand-synced with the
+/// season-end promotion/relegation shape, same idiom as above).
+pub const DECISIVE_RELEGATION_SPOTS: usize = 3;

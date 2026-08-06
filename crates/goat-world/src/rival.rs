@@ -80,12 +80,15 @@ mod tests {
     use super::*;
     use crate::batch_tick::batch_tick_season;
     use crate::population::genesis;
+    use crate::world::WorldGenesis;
 
     /// Genesis + batch-tick `seasons`, then crystallise against a given PC record.
     fn run(seed: u64, seasons: u32, pc_goals: u32, pc_titles: u32) -> RivalVerdict {
-        let mut pop = genesis(seed);
+        let world = WorldGenesis::generate(seed);
+        let league_clubs = world.static_league_clubs();
+        let mut pop = genesis(seed, &world);
         for s in 1..=seasons {
-            batch_tick_season(&mut pop, seed, s, s * 52);
+            batch_tick_season(&mut pop, &world, &league_clubs, seed, s, s * 52);
         }
         crystallise_rival(&pop, 16 * 52, pc_goals, pc_titles)
     }
@@ -117,7 +120,8 @@ mod tests {
         {
             assert!(!name.is_empty());
             assert!(peer_goals > 0);
-            assert!(idx < genesis(3).len());
+            let world = WorldGenesis::generate(3);
+            assert!(idx < genesis(3, &world).len());
         }
     }
 }

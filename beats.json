@@ -557,10 +557,10 @@
     },
     {
       "id": "through_ball_on",
-      "text": "Your pass splits the defence — the striker is clean through.",
+      "text": "Your pass splits the defence — the striker is clean through and scores!",
       "output_delta": 12,
       "confidence": 8, "frustration": -4, "flow": 8,
-      "score_event": null, "stamina_cost": 2,
+      "score_event": "assist_for", "stamina_cost": 2,
       "polarity": "success"
     },
     {

@@ -1,0 +1,12 @@
+/home/tungdvs/projects/goat-rust/spikes/001-roblox-blocky-walk/target/debug/deps/spin-8d3022d56e360465.d: /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/lib.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/barrier.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/lazy.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/mutex.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/mutex/spin.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/once.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/relax.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/rwlock.rs
+
+/home/tungdvs/projects/goat-rust/spikes/001-roblox-blocky-walk/target/debug/deps/libspin-8d3022d56e360465.rmeta: /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/lib.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/barrier.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/lazy.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/mutex.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/mutex/spin.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/once.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/relax.rs /home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/rwlock.rs
+
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/lib.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/barrier.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/lazy.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/mutex.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/mutex/spin.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/once.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/relax.rs:
+/home/tungdvs/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/spin-0.10.1/src/rwlock.rs:

@@ -694,7 +694,7 @@ Beat {
             text: "Dummy run — let someone else take",
             primary: Vision,
             difficulty: 48,
-            success: Outcome { text: "The dummy worked — your teammate curls it in. 2-1!", next: None, output_delta: 12, headspace: hd!(7,-3,7), score_event: Some(ScoreEvent::GoalFor), stamina_cost: 2 },
+            success: Outcome { text: "The dummy worked — your teammate curls it in. 2-1!", next: None, output_delta: 12, headspace: hd!(7,-3,7), score_event: Some(ScoreEvent::AssistFor), stamina_cost: 2 },
             failure: Outcome { text: "Confusion in the wall. The moment is wasted.", next: None, output_delta: -3, headspace: hd!(-2,4,-2), score_event: None, stamina_cost: 1 },
         },
     ],

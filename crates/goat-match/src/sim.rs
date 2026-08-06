@@ -1,7 +1,9 @@
 //! Match simulation: beat generation, sequencing, team result, familiarity XP.
 
 use goat_core::attrs::{AttrId, ATTR_NAMES, NUM_ATTRS};
-use goat_core::roles::{FamiliarityTier, RoleId, NUM_ROLES, ROLE_WEIGHT_TABLE};
+use goat_core::roles::{
+    FamiliarityTier, PositionFamily, RoleId, NUM_ROLES, ROLE_POSITION_FAMILY, ROLE_WEIGHT_TABLE,
+};
 use goat_core::tuning::{FAM_XP_IMP_PER_WEEK, FAM_XP_KEY_PER_WEEK, W_IMP, W_KEY};
 use goat_fixed::Fixed;
 use goat_rng::RngSource;
@@ -22,6 +24,17 @@ const BASE_STAMINA_COST: u8 = 3;
 const BEATS_PER_MATCH: usize = 15;
 const STARTING_STAMINA: Fixed = Fixed::raw(100_000);
 const FAM_MATCH_BONUS: Fixed = Fixed::raw(60);
+
+/// §A.3 position/role bias: a situation whose phase fits the player's position
+/// family is boosted; a situation whose phase runs against it is suppressed —
+/// proportionally, never to zero, so off-role beats stay reachable as emergent
+/// moments (a striker tracking back) rather than routine occurrences.
+const ROLE_BIAS_FIT_PCT: i32 = 25;
+const ROLE_BIAS_AGAINST_PCT: i32 = -60;
+
+/// BL5.2 decisive-moment detection: only beats at or after this minute can count
+/// as decisive candidates (late-game window; placeholder cutoff, tune with data).
+pub const DECISIVE_MINUTE_CUTOFF: u32 = 80;
 
 // ── Beat library ──────────────────────────────────────────────────────────────
 
@@ -48,32 +61,34 @@ impl BeatLibrary {
     pub fn generate_match(
         &self,
         rng: &mut impl RngSource,
+        player_role: RoleId,
         player_traits: &PlayerTraits,
     ) -> Vec<GeneratedBeat> {
+        let family = ROLE_POSITION_FAMILY[player_role as usize];
         let mut beats = Vec::with_capacity(BEATS_PER_MATCH);
 
         // Five early beats (period 0)
         for _ in 0..5 {
-            if let Some(b) = self.pick_beat(0, rng, player_traits) {
+            if let Some(b) = self.pick_beat(0, rng, family, player_traits) {
                 beats.push(b);
             }
         }
         // Five mid beats (period 1)
         for _ in 0..5 {
-            if let Some(b) = self.pick_beat(1, rng, player_traits) {
+            if let Some(b) = self.pick_beat(1, rng, family, player_traits) {
                 beats.push(b);
             }
         }
         // Four late beats (period 2)
         for _ in 0..4 {
-            if let Some(b) = self.pick_beat(2, rng, player_traits) {
+            if let Some(b) = self.pick_beat(2, rng, family, player_traits) {
                 beats.push(b);
             }
         }
-        // Final climax beat — always a key-moment situation; traits don't bias tag search
+        // Final climax beat — always a key-moment situation; role/traits don't bias tag search
         if let Some(b) = self.pick_beat_by_tag("key", 2, rng) {
             beats.push(b);
-        } else if let Some(b) = self.pick_beat(2, rng, player_traits) {
+        } else if let Some(b) = self.pick_beat(2, rng, family, player_traits) {
             beats.push(b);
         }
 
@@ -84,29 +99,32 @@ impl BeatLibrary {
         &self,
         period: usize,
         rng: &mut impl RngSource,
+        family: PositionFamily,
         player_traits: &PlayerTraits,
     ) -> Option<GeneratedBeat> {
-        // Beat-summoner hook (§A.2 hook type 2): each situation's effective weight is
-        // base + base * trait_bonus_pct / 100, so traits proportionally inflate matching
-        // situations without destroying the relative weights of unmatched ones.
-        let total_weight: u32 = self
-            .raw
-            .situations
-            .iter()
-            .map(|s| {
-                let base = s.bias[period] as u32;
-                let bonus = player_traits.beat_summoner_bonus_pct(&s.tags);
-                base + base * bonus / 100
-            })
-            .sum();
+        // Beat-summoner hook (§A.2 hook type 2) + position/role bias (§A.3): each
+        // situation's effective weight is base + base*trait_bonus_pct/100 +
+        // base*role_bonus_pct/100. Traits and role each proportionally scale matching
+        // situations without destroying the relative weights of unmatched ones, and
+        // role bias never fully zeroes out an off-role situation (floor of 1 when base
+        // > 0) — it biases the selector, it does not lock a beat list.
+        let weight_for = |s: &RawSituation| -> u32 {
+            let base = s.bias[period] as i64;
+            if base == 0 {
+                return 0;
+            }
+            let trait_bonus = player_traits.beat_summoner_bonus_pct(&s.tags) as i64;
+            let role_bonus = role_bias_pct(family, &s.phase) as i64;
+            let w = base + base * trait_bonus / 100 + base * role_bonus / 100;
+            w.max(1) as u32
+        };
+        let total_weight: u32 = self.raw.situations.iter().map(weight_for).sum();
         if total_weight == 0 {
             return None;
         }
         let mut roll = rng.next_range_u64(0, total_weight as u64 - 1) as u32;
         let situation = self.raw.situations.iter().find(|s| {
-            let base = s.bias[period] as u32;
-            let bonus = player_traits.beat_summoner_bonus_pct(&s.tags);
-            let w = base + base * bonus / 100;
+            let w = weight_for(s);
             if roll < w {
                 true
             } else {
@@ -218,6 +236,7 @@ impl BeatLibrary {
             },
             score_event: match raw.score_event.as_deref() {
                 Some("goal_for") => Some(ScoreEvent::GoalFor),
+                Some("assist_for") => Some(ScoreEvent::AssistFor),
                 Some("goal_against") => Some(ScoreEvent::GoalAgainst),
                 _ => None,
             },
@@ -336,6 +355,19 @@ fn parse_phase(s: &str) -> MatchPhase {
     }
 }
 
+/// Position/role bias (§A.3) for a situation's `phase`, relative to the acting
+/// player's position family. Set pieces, positioning, and key moments are shared
+/// team-context phases and stay neutral for every family.
+fn role_bias_pct(family: PositionFamily, phase: &str) -> i32 {
+    match (family, phase) {
+        (PositionFamily::Forward, "attack") => ROLE_BIAS_FIT_PCT,
+        (PositionFamily::Forward, "defend") => ROLE_BIAS_AGAINST_PCT,
+        (PositionFamily::Defender, "defend") => ROLE_BIAS_FIT_PCT,
+        (PositionFamily::Defender, "attack") => ROLE_BIAS_AGAINST_PCT,
+        _ => 0,
+    }
+}
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Everything the match engine needs to run a match.
@@ -346,7 +378,7 @@ pub struct MatchSetup {
     pub player_familiarity: [FamiliarityTier; NUM_ROLES],
     pub own_strength: u8,
     pub opp_strength: u8,
-    pub opp_name: &'static str,
+    pub opp_name: String,
     pub form: Fixed,
     pub player_aggression: u8,
     pub ref_personality: RefPersonality,
@@ -364,6 +396,16 @@ pub struct MomentSummary {
     pub setup_text: String,
     pub outcome_text: String,
     pub goal_event: Option<ScoreEvent>,
+    /// Live score immediately BEFORE this beat's own outcome was applied (BL5.2) —
+    /// a beat that scores the tying goal is judged against the score it broke,
+    /// not the score it created.
+    pub goals_for_before: u32,
+    pub goals_against_before: u32,
+    /// The taken choice's success/failure branch score-events (BL5.2), regardless
+    /// of which branch actually fired — needed to know whether this beat was
+    /// stakes-bearing (could plausibly have ended in a goal either way).
+    pub success_event: Option<ScoreEvent>,
+    pub failure_event: Option<ScoreEvent>,
 }
 
 /// Final result of a completed match.
@@ -376,6 +418,62 @@ pub struct MatchResult {
     pub familiarity_xp: [Fixed; NUM_ROLES],
     pub yellow_cards: u8,
     pub red_card: bool,
+}
+
+/// BL5.2: is this moment a "decisive candidate"? Pure predicate over the recorded
+/// moment — no position bias by construction (replaces the rejected curated-`"key"`-tag
+/// approach, which skewed 6-attacking/1-defensive). All of:
+/// 1. The beat was stakes-bearing: the taken choice's success OR failure branch
+///    carries a `score_event` (a goal was plausibly on the line either way).
+/// 2. Late game: `minute >= DECISIVE_MINUTE_CUTOFF`.
+/// 3. Close score going in: |goals_for_before − goals_against_before| <= 1.
+/// 4. The outcome mattered: either the PC's side scored (GoalFor/AssistFor on a
+///    success), or a threatened concession was prevented (the failure branch
+///    carries GoalAgainst, but no GoalAgainst actually happened — whether a card
+///    was shown on the beat is deliberately irrelevant: the card roll is
+///    independent of and runs after contest resolution).
+pub fn is_decisive(m: &MomentSummary) -> bool {
+    let stakes_bearing = m.success_event.is_some() || m.failure_event.is_some();
+    if !stakes_bearing || m.minute < DECISIVE_MINUTE_CUTOFF {
+        return false;
+    }
+    let gap = m.goals_for_before as i32 - m.goals_against_before as i32;
+    if gap.abs() > 1 {
+        return false;
+    }
+    let scored = m.success
+        && matches!(
+            m.goal_event,
+            Some(ScoreEvent::GoalFor) | Some(ScoreEvent::AssistFor)
+        );
+    let stopped_threat = matches!(m.failure_event, Some(ScoreEvent::GoalAgainst))
+        && !matches!(m.goal_event, Some(ScoreEvent::GoalAgainst));
+    scored || stopped_threat
+}
+
+/// BL5.3: is this decisive moment also CLUTCH — the high-leverage subset that
+/// actually moved the needle (so the clutch index isn't a duplicate of the
+/// decisive count)?
+/// - Scored (GoalFor/AssistFor) while level or trailing going in: an equalizer
+///   or go-ahead goal. An insurance goal while already ahead (gap_before = +1)
+///   stays decisive but is NOT clutch.
+/// - A threatened concession prevented: always clutch — any late stop in a
+///   one-goal game keeps points/hope alive.
+pub fn is_clutch(m: &MomentSummary) -> bool {
+    if !is_decisive(m) {
+        return false;
+    }
+    let scored = m.success
+        && matches!(
+            m.goal_event,
+            Some(ScoreEvent::GoalFor) | Some(ScoreEvent::AssistFor)
+        );
+    if scored {
+        let gap = m.goals_for_before as i32 - m.goals_against_before as i32;
+        gap <= 0
+    } else {
+        true
+    }
 }
 
 /// Live match state stored between `MakeMatchChoice` intents.
@@ -423,7 +521,7 @@ pub fn start_match(
     rng: &mut impl RngSource,
 ) -> ActiveMatchState {
     let headspace = Headspace::from_form(setup.form);
-    let beats = lib.generate_match(rng, &setup.player_traits);
+    let beats = lib.generate_match(rng, setup.player_role, &setup.player_traits);
     ActiveMatchState {
         headspace,
         setup,
@@ -491,9 +589,15 @@ pub fn advance_beat(
     let stamina_cost = Fixed::from_int((BASE_STAMINA_COST + outcome.stamina_cost) as i32);
     ms.stamina = (ms.stamina - stamina_cost).clamp(Fixed::ZERO, STARTING_STAMINA);
 
+    // Capture the score BEFORE this beat's own event lands (BL5.2): a decisive
+    // moment is judged against the score it broke, not the score it created.
+    let goals_for_before = ms.goals_for;
+    let goals_against_before = ms.goals_against;
+
     if let Some(ev) = outcome.score_event {
         match ev {
-            ScoreEvent::GoalFor => ms.goals_for += 1,
+            // An assist is still a goal for the PC's team — a teammate finished it.
+            ScoreEvent::GoalFor | ScoreEvent::AssistFor => ms.goals_for += 1,
             ScoreEvent::GoalAgainst => ms.goals_against += 1,
         }
     }
@@ -508,6 +612,10 @@ pub fn advance_beat(
         setup_text: beat.setup.clone(),
         outcome_text: outcome.text.clone(),
         goal_event: outcome.score_event,
+        goals_for_before,
+        goals_against_before,
+        success_event: choice.success.score_event,
+        failure_event: choice.failure.score_event,
     });
 
     ms.headspace

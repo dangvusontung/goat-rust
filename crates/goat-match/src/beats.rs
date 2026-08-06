@@ -37,6 +37,9 @@ pub enum DisciplineEvent {
 pub enum ScoreEvent {
     /// The PC's team scores. May or may not be credited directly to the player.
     GoalFor,
+    /// The PC sets up a goal that a teammate finishes — counts as a PC assist,
+    /// and still adds to the PC's team's score.
+    AssistFor,
     /// The opposition scores — bad positioning or lost contest.
     GoalAgainst,
 }
