@@ -28,7 +28,7 @@ pub use academy::{apply_academy_investment, decay_academy_boost, run_academy_inv
 pub use calendar::{
     format_match_date, format_week_header, is_break_week, match_date, rest_weeks_after_round,
     round_to_week, week_day_offset, week_ends_after_round, week_to_rounds, BASE_CAREER_YEAR,
-    SEASON_CALENDAR_WEEKS, WEEK_MATCH_COUNTS,
+    PRE_SEASON_WEEKS, SEASON_CALENDAR_WEEKS, WEEK_MATCH_COUNTS,
 };
 pub use continental::{
     continental_slots_for_nation, nation_ranks, qualify_clubs, simulate_continental,

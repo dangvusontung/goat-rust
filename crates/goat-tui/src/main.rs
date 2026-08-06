@@ -56,7 +56,7 @@ use goat_world::{
     },
     round_fixtures, round_to_week, sim_team_match,
     world::{NationId, WorldGenesis},
-    Table, CLUBS_PER_DIV, NUM_NATIONS, ROUNDS_PER_SEASON, TIERS_PER_NATION,
+    Table, CLUBS_PER_DIV, NUM_NATIONS, PRE_SEASON_WEEKS, ROUNDS_PER_SEASON, TIERS_PER_NATION,
 };
 
 #[path = "orbit_fixtures.rs"]
@@ -384,6 +384,137 @@ fn run_new_game(
     }
 }
 
+/// The current grid week of the season, derived from the PC's age: the
+/// `StartSeason` back-fill pins age to START_AGE + (N−1)·52 at every season
+/// start, and every in-season week ticks exactly one age-week, so the
+/// difference IS the current grid week — pre-season weeks included.
+fn season_week(state: &WorldState) -> u32 {
+    match state.pc_player_id {
+        Some(id) => {
+            let start = goat_core::tuning::START_AGE_WEEKS + (state.season_number - 1) * 52;
+            state.players.get_age_weeks(id).saturating_sub(start)
+        }
+        None => 0,
+    }
+}
+
+/// True during the 7-week pre-season lead (before the first league round's week).
+fn in_pre_season(state: &WorldState) -> bool {
+    state.season_number > 0
+        && state.season_round == 0
+        && season_week(state) < PRE_SEASON_WEEKS as u32
+}
+
+/// A pre-season friendly: an ad-hoc beat match against a deterministic
+/// same-nation opponent (the same-table-slot club of a sibling tier, rotating
+/// by week). NOT a calendar fixture — no `Fixture` entity, nothing scheduled —
+/// and by design it never touches the league table, season stats, or
+/// discipline: only development flows through `ApplyMatchResult`
+/// (familiarity XP + energy cost), exactly like a played league match.
+fn run_friendly(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+    mut state: WorldState,
+    play_interactive: bool,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+    world: &WorldGenesis,
+) -> WorldState {
+    let pc_id = state.pc_player_id.unwrap();
+    let pc_club_id = state.pc_club_idx as usize;
+    let week = season_week(&state);
+
+    let pc_league_id = state.pc_div_idx as usize;
+    let nation = world.leagues[pc_league_id].nation;
+    let mut tiers: Vec<usize> = world
+        .leagues
+        .iter()
+        .filter(|l| l.nation == nation)
+        .map(|l| l.id)
+        .collect();
+    tiers.sort_by_key(|&id| world.leagues[id].tier as usize);
+    let pos = tiers.iter().position(|&id| id == pc_league_id).unwrap_or(0);
+    let sibling_tiers: Vec<usize> = (0..tiers.len()).filter(|&i| i != pos).collect();
+    let opp_league = tiers[sibling_tiers[week as usize % sibling_tiers.len()]];
+    let slot = world.club_league_pos(pc_club_id);
+    let opp_id = world.leagues[opp_league].clubs[slot % CLUBS_PER_DIV];
+    let opp = &world.clubs[opp_id];
+
+    writeln!(
+        out,
+        "\n--- FRIENDLY (pre-season) · {} vs {} ---",
+        state.pc_club, opp.name
+    )
+    .unwrap();
+
+    let view = state.players.snapshot(pc_id);
+    let match_seed =
+        state.world_seed ^ ((state.season_number as u64) << 32) ^ (week as u64) ^ 0xF21E_5A17;
+    let mut match_rng = GoatRng::new(match_seed);
+    let ref_personality = {
+        let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+        RefPersonality::from_rng(&mut rp_rng)
+    };
+    let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
+        player_role: best_role_for_position(state.pc_position),
+        player_attrs: view.current,
+        player_familiarity: view.familiarity,
+        own_strength: world.clubs[pc_club_id].strength,
+        opp_strength: opp.strength,
+        opp_name: opp.name.clone(),
+        form: state.pc_form,
+        player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+            .to_int()
+            .clamp(1, 99) as u8,
+        ref_personality,
+        dirty_rep: state.pc_discipline_rep,
+        player_traits: pc_traits,
+    };
+
+    let result = if play_interactive {
+        let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
+        while !ms.is_complete {
+            render_beat(out, &ms);
+            if ms.final_result.is_some() {
+                break;
+            }
+            let choice_idx = read_choice(
+                lines,
+                out,
+                ms.current_beat().map(|b| b.choices.len()).unwrap_or(1),
+            );
+            ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
+        }
+        ms.final_result.unwrap_or_else(|| {
+            auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
+        })
+    } else {
+        auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
+    };
+
+    render_match_result(out, &result, &opp.name);
+    if result.red_card || result.yellow_cards > 0 {
+        writeln!(
+            out,
+            "  (cards in a friendly don't count toward suspensions)"
+        )
+        .unwrap();
+    }
+
+    // Development only: familiarity XP + energy cost. No ApplyRoundResult (no
+    // table/stats), no ApplyCardResult (no suspensions from a friendly).
+    state = reduce(
+        state,
+        Intent::ApplyMatchResult {
+            familiarity_xp: result.familiarity_xp,
+            energy_cost: Fixed::from_int(25),
+            injury_weeks: None,
+        },
+        &mut GoatRng::new(0),
+    );
+    state
+}
+
 // ── Main game loop ────────────────────────────────────────────────────────────
 
 /// A3.3: resolve promotion/relegation for the PC's nation at a season boundary.
@@ -708,6 +839,16 @@ fn run_game_loop(
 
         let has_season = state.season_number > 0;
         if has_season {
+            if in_pre_season(&state) {
+                writeln!(
+                    out,
+                    "  (Pre-season week {}/{} — training and friendlies only; the league starts in week {})",
+                    season_week(&state) + 1,
+                    PRE_SEASON_WEEKS,
+                    PRE_SEASON_WEEKS + 1,
+                )
+                .unwrap();
+            }
             writeln!(
                 out,
                 "\n  [C] Continue  [W] Train  [F] Fast-fwd  [S] Routine  [P] Play match  [K] Skip match"
@@ -740,6 +881,60 @@ fn run_game_loop(
                     // flashpoint. Break weeks never surface here: ApplyRoundResult
                     // already elapses them as rest weeks, so the menu week always has a
                     // match due; the only auto-step is this week's training.
+                    if in_pre_season(&state) {
+                        // Pre-season week (Jul-1 anchor, 7-week lead): a real,
+                        // ticked week — train (or not) and optionally play a
+                        // friendly. `AdvanceWeeks` deliberately, not `AdvanceWeek`:
+                        // each pre-season week is a fresh week, and the per-week
+                        // training flag only resets on round boundaries.
+                        state = reduce(
+                            state,
+                            Intent::AdvanceWeeks { n: 1 },
+                            &mut GoatRng::new(week_rng_seed),
+                        );
+                        display_events(out, &state.last_week_events);
+                        display_flashpoints(out, &state.last_week_flashpoints);
+                        state = dispatch_national_flashpoints(
+                            out,
+                            state,
+                            &world,
+                            beat_lib,
+                            pc_traits,
+                            &mut pc_qualifying,
+                            &mut pc_tournament,
+                        );
+                        if !state.last_week_events.is_empty() {
+                            continue;
+                        }
+                        if in_pre_season(&state) {
+                            writeln!(
+                                out,
+                                "  Pre-season week {}/{} done — [P] Play friendly  (anything else: back to menu)",
+                                season_week(&state),
+                                PRE_SEASON_WEEKS
+                            )
+                            .unwrap();
+                            write!(out, "  > ").unwrap();
+                            out.flush().unwrap();
+                            if let Some(Ok(l)) = lines.next() {
+                                if l.trim().eq_ignore_ascii_case("P") {
+                                    state = run_friendly(
+                                        lines, out, state, true, beat_lib, pc_traits, &world,
+                                    );
+                                }
+                            }
+                        } else {
+                            // Crossing into the first competition week: it opens
+                            // fresh, so round 1's week is still trainable.
+                            state.pc_week_training_done = false;
+                            writeln!(
+                                out,
+                                "  Pre-season complete — the league campaign opens this week."
+                            )
+                            .unwrap();
+                        }
+                        continue;
+                    }
                     if !state.pc_week_training_done {
                         state =
                             reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(week_rng_seed));
@@ -811,6 +1006,31 @@ fn run_game_loop(
                     }
                 }
                 "W" => {
+                    if in_pre_season(&state) {
+                        // Pre-season week: one fresh training week each press
+                        // (AdvanceWeeks — see the [C] branch for why not AdvanceWeek).
+                        state = reduce(
+                            state,
+                            Intent::AdvanceWeeks { n: 1 },
+                            &mut GoatRng::new(week_rng_seed),
+                        );
+                        display_events(out, &state.last_week_events);
+                        display_flashpoints(out, &state.last_week_flashpoints);
+                        state = dispatch_national_flashpoints(
+                            out,
+                            state,
+                            &world,
+                            beat_lib,
+                            pc_traits,
+                            &mut pc_qualifying,
+                            &mut pc_tournament,
+                        );
+                        if !in_pre_season(&state) {
+                            // The first competition week opens fresh.
+                            state.pc_week_training_done = false;
+                        }
+                        continue;
+                    }
                     // The reducer no-ops a second `W` in the same fixture round
                     // (`pc_week_training_done` gate) — snapshot the flag first so we
                     // can tell the player instead of silently redrawing the same state.
@@ -862,6 +1082,18 @@ fn run_game_loop(
                     );
                 }
                 "S" => state = run_set_routine(lines, out, state),
+                "P" if has_season && in_pre_season(&state) => {
+                    state = run_friendly(lines, out, state, true, beat_lib, pc_traits, &world)
+                }
+                "K" if has_season && in_pre_season(&state) => {
+                    // Skipping a friendly just declines it — friendlies are
+                    // optional, and no league fixture exists to skip yet.
+                    writeln!(
+                        out,
+                        "  No league fixture yet — pre-season friendlies are optional ([P] plays one)."
+                    )
+                    .unwrap();
+                }
                 "P" if has_season => {
                     state = run_next_round(
                         lines,
