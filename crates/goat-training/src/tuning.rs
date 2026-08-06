@@ -25,7 +25,10 @@ pub const ENERGY_SPEND_MODERATE: Fixed = Fixed::from_int(7);
 pub const ENERGY_SPEND_HARD: Fixed = Fixed::from_int(12);
 
 /// Per-day energy recovered on a pure rest day (no training, no match).
-pub const ENERGY_RECOVER_REST: Fixed = Fixed::from_int(9);
+/// Placeholder shape: one weekly rest day roughly offsets a Moderate training
+/// week (5 × 7 = 35 spent vs 40 recovered — a slow upward pull so an
+// overtrained player climbs back over a few weeks) — Hard weeks force rotation.
+pub const ENERGY_RECOVER_REST: Fixed = Fixed::from_int(40);
 
 /// Growth multiplier at zero energy — tired players still gain something, but
 /// much less. Linear ramp to 1.0 at full energy (same shape as the legacy week
