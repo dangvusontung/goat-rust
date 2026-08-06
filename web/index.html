@@ -62,6 +62,23 @@
       <button id="save">Save</button>
       <button id="load">Load</button>
     </div>
+    <div>
+      <label for="ffn">Fast-forward</label>
+      <input id="ffn" type="number" min="1" max="52" value="4" style="width:4rem" />
+      <button id="ff">Advance N weeks</button>
+    </div>
+    <details>
+      <summary>Training routine (set once, auto-applies every week)</summary>
+      <label>Focus attributes (max 4)</label>
+      <select id="routine-attrs" multiple size="8"></select>
+      <label>Intensity</label>
+      <select id="routine-intensity">
+        <option value="0">Low</option>
+        <option value="1" selected>Medium</option>
+        <option value="2">High</option>
+      </select>
+      <p><button id="set-routine">Set routine</button></p>
+    </details>
     <div id="match" class="hidden">
       <pre id="beat"></pre>
       <div class="choices" id="choices"></div>
