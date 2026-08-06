@@ -116,12 +116,16 @@ for (const row of st.table.slice(0, 3)) {
   );
 }
 
-// ── Fast-forward (in-season): 2 weeks auto-trained with the set routine ─────
+// ── Auto-advance (in-season): ticks week-by-week in Rust until a match is due
 {
-  const ff = parse(goat.advance_weeks(2), 'advance_weeks (in-season)');
-  check('advance_weeks ticks 2 weeks', ff.text.startsWith('Advanced 2 week(s)'));
-  check('fast-forward does not play rounds', ff.state.season_round === 1);
-  console.log(`  ${ff.text.split('\n')[0]}`);
+  const aa = parse(goat.auto_advance(), 'auto_advance');
+  check('auto-advance stops at a due match', aa.stop_reason === 'match_due');
+  check(
+    'auto-advance reports the next round',
+    aa.text.includes('match due: Round 2/38'),
+  );
+  check('auto-advance does not play the round', aa.state.season_round === 1);
+  console.log(`  ${aa.text.split('\n')[0]}`);
 }
 
 // ── Rest of the season: train() + skip_match() per round ────────────────────

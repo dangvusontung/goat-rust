@@ -1012,6 +1012,108 @@ pub fn set_routine(attr_ids: Vec<u8>, intensity: u8) -> String {
     serde_json::json!({ "text": text, "state": snap }).to_string()
 }
 
+/// Auto-advance (Tùng's refinement of the fast-forward port): tick one week at
+/// a time inside Rust — never a JS-side loop — and stop at the first real
+/// reason to:
+/// - `match_due`: the PC's club has a league fixture this week (the round is
+///   offered via the normal Play/Skip Match UI),
+/// - `event`: a noteworthy development event or calendar flashpoint fired this
+///   week (never skip past one),
+/// - `season_over`: the season is done (Season End UI takes over),
+/// - `cap`: a hang-guard only (CAP_WEEKS), not a UX limit.
+///
+/// Each tick is the existing `Intent::AdvanceWeeks{1}` (which itself stops at
+/// the first noteworthy event) — no formula changes, no core changes.
+#[wasm_bindgen]
+pub fn auto_advance() -> String {
+    /// Hang-guard only: stops a pathological no-event loop. A match week is at
+    /// most 2 ticks away in the real grid, so hitting this means something
+    /// structural broke — surface it, don't loop forever.
+    const CAP_WEEKS: u32 = 60;
+
+    let mut state = match take_state() {
+        Ok(s) => s,
+        Err(e) => return err_json(e),
+    };
+    if in_pre_season(&state) {
+        let snap = build_snapshot(&state);
+        set_state(state);
+        return serde_json::json!({
+            "text": "Pre-season weeks tick one at a time — use Train / Rest / Play Friendly.",
+            "state": snap,
+            "stop_reason": "pre_season",
+        })
+        .to_string();
+    }
+
+    let mut weeks = 0u32;
+    let mut lines: Vec<String> = Vec::new();
+    let stop_reason = loop {
+        if state.season_round >= ROUNDS_PER_SEASON as u32 {
+            break "season_over";
+        }
+        // A league fixture is due once the grid week reaches the next round's
+        // week (age-derived — see season_week).
+        if season_week(&state) >= round_to_week(state.season_round as usize) as u32 {
+            break "match_due";
+        }
+        if weeks >= CAP_WEEKS {
+            break "cap";
+        }
+
+        let pc_id = state.pc_player_id.unwrap_or(0);
+        let seed = {
+            let view = state.players.snapshot(pc_id);
+            (view.age_weeks as u64).wrapping_mul(6364136223846793005)
+        };
+        state = reduce(
+            state,
+            Intent::AdvanceWeeks { n: 1 },
+            &mut GoatRng::new(seed),
+        );
+        weeks += 1;
+
+        lines.extend(week_events_text(&state));
+        {
+            use goat_calendar::WindowKind;
+            for f in &state.last_week_flashpoints {
+                let (icon, label) = match f.window {
+                    WindowKind::TransferSummer => ("⇄", "The summer transfer window is open."),
+                    WindowKind::TransferWinter => ("⇄", "The winter transfer window is open."),
+                    WindowKind::InternationalBreak => {
+                        ("✈", "International break — call-ups announced.")
+                    }
+                    WindowKind::OffSeason => ("☼", "The off-season has begun."),
+                };
+                lines.push(format!("{icon}  CALENDAR: {label}"));
+            }
+        }
+        // Eventful week — stop right here, don't skip past it.
+        if !state.last_week_events.is_empty() || !state.last_week_flashpoints.is_empty() {
+            break "event";
+        }
+    };
+
+    let head = match stop_reason {
+        "match_due" => format!(
+            "Auto-advanced {weeks} week(s) — match due: Round {}/{}.",
+            state.season_round + 1,
+            ROUNDS_PER_SEASON
+        ),
+        "season_over" => "The season is over — Season End is next.".to_string(),
+        "event" => format!("Auto-advanced {weeks} week(s) — stopped for an event."),
+        _ => format!("Auto-advanced {weeks} week(s) — safety cap hit (this should not happen)."),
+    };
+    let text = if lines.is_empty() {
+        head
+    } else {
+        format!("{head}\n{}", lines.join("\n"))
+    };
+    let snap = build_snapshot(&state);
+    set_state(state);
+    serde_json::json!({ "text": text, "state": snap, "stop_reason": stop_reason }).to_string()
+}
+
 /// Fast-forward N weeks (ports the TUI's [F]): each week auto-applies the
 /// standing routine; the loop stops early at the first noteworthy development
 /// event; all events/flashpoints across the skipped weeks are accumulated and
