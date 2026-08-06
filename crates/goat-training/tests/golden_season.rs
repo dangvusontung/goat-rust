@@ -1,8 +1,11 @@
 //! Golden-seed + determinism tests for the training subsystem (appendix Step 3).
 //!
-//! The scripted season: 266 days (38 weeks) — train Mon–Fri (days % 7 in 0..=4,
+//! The scripted year: 365 days (one full in-game year, including the off-season).
+//! Days 0–265 are the 38-week competition grid: train Mon–Fri (days % 7 in 0..=4,
 //! Moderate routine on ShortPassing), match on day % 7 == 5 (38 orbit fixtures),
-//! rest on day % 7 == 6 (routine None). Deterministic in (seed, script).
+//! rest on day % 7 == 6 (routine None) — plus a two-week Hard overtraining
+//! stretch at days 140–153. Days 266–364 are the off-season: no fixtures, Light
+//! training three days a week (close-season camp), rest the rest.
 
 use goat_calendar::subsystem::{DayContext, DayReport, StopClass, Subsystem};
 use goat_core::attrs::{AttrId, NUM_ATTRS};
@@ -10,7 +13,9 @@ use goat_fixed::Fixed;
 use goat_training::{Intensity, Training, TrainingRoutine};
 
 const SEED: u64 = 42;
-const DAYS: u32 = 266;
+const DAYS: u32 = 365;
+/// First off-season day (the 38-week grid is 266 days).
+const OFF_SEASON_START: u32 = 266;
 
 fn fresh_training() -> Training {
     let mut current = [Fixed::from_int(50); NUM_ATTRS];
@@ -41,7 +46,9 @@ fn ctx_for(day: u32) -> DayContext {
     DayContext {
         epoch_day: day,
         season_id: 1,
-        todays_fixtures: if day % 7 == 5 {
+        // The 38 league fixtures sit at day % 7 == 5 inside the 266-day grid;
+        // the off-season has none.
+        todays_fixtures: if day % 7 == 5 && day < OFF_SEASON_START {
             vec![fixture(day)]
         } else {
             vec![]
@@ -52,7 +59,7 @@ fn ctx_for(day: u32) -> DayContext {
     }
 }
 
-/// Run the scripted season directly against `on_day`, returning per-day reports
+/// Run the scripted year directly against `on_day`, returning per-day reports
 /// and the final subsystem state.
 fn drive_direct() -> (Vec<DayReport>, Training) {
     let mut t = fresh_training();
@@ -62,35 +69,42 @@ fn drive_direct() -> (Vec<DayReport>, Training) {
         // Scripted week: rest day is %7 == 6 — EXCEPT the two-week Hard
         // overtraining stretch (days 140..=153, no rest day), which exists to
         // drive energy below the Overtrained threshold deterministically.
+        // Off-season (day 266+): Light training Mon/Wed/Fri, rest otherwise.
         let hard_stretch = (140..=153).contains(&day);
-        if day % 7 == 6 && !hard_stretch {
-            t.set_routine(None);
+        let routine = if day >= OFF_SEASON_START {
+            if matches!(day % 7, 0 | 2 | 4) {
+                Some(Intensity::Light)
+            } else {
+                None
+            }
+        } else if hard_stretch {
+            Some(Intensity::Hard)
+        } else if day % 7 == 6 {
+            None
         } else {
-            t.set_routine(Some(TrainingRoutine {
-                target: goat_training::AttrTarget::Single(AttrId::ShortPassing),
-                intensity: if hard_stretch {
-                    Intensity::Hard
-                } else {
-                    Intensity::Moderate
-                },
-            }));
-        }
+            Some(Intensity::Moderate)
+        };
+        t.set_routine(routine.map(|intensity| TrainingRoutine {
+            target: goat_training::AttrTarget::Single(AttrId::ShortPassing),
+            intensity,
+        }));
         reports.push(t.on_day(&ctx_for(day), &mut sink));
     }
     (reports, t)
 }
 
-// ── Frozen golden values (captured 2026-08-06; FROZEN once Tùng approves) ────
+// ── Frozen golden values (365-day script; captured 2026-08-06, replacing the
+// 266-day draft — FROZEN once Tùng approves) ──────────────────────────────────
 // Any change to these means the training math moved — never update to make a
 // failing run pass.
 
-const GOLDEN_FINAL_ATTR_RAW: i32 = 69_184; // ShortPassing: 60.000 -> 69.184
-const GOLDEN_FINAL_ENERGY_RAW: i32 = 100_000; // recovered to full by season end
-const GOLDEN_FINAL_AGE_DAYS: u32 = 6_471; // 17*365 + 266
-const GOLDEN_SOFT_DAYS: [u32; 14] = [
-    129, 148, 149, 150, 151, 153, 154, 155, 156, 157, 158, 164, 165, 172,
+const GOLDEN_FINAL_ATTR_RAW: i32 = 70_010; // ShortPassing: 60.000 -> 70.010
+const GOLDEN_FINAL_ENERGY_RAW: i32 = 96_000; // 96.000 at year end
+const GOLDEN_FINAL_AGE_DAYS: u32 = 6_570; // 17*365 + 365
+const GOLDEN_SOFT_DAYS: [u32; 15] = [
+    129, 148, 149, 150, 151, 153, 154, 155, 156, 157, 158, 164, 165, 172, 364,
 ];
-const GOLDEN_BREAKTHROUGH_DAYS: [u32; 1] = [129];
+const GOLDEN_BREAKTHROUGH_DAYS: [u32; 2] = [129, 364];
 
 /// Golden-seed test (training test #1, appendix Step 3): exact final attribute
 /// value, exact final energy, and the exact set of soft-flashpoint days for the
@@ -134,6 +148,10 @@ fn golden_training_season() {
     assert_eq!(
         reports[129].payload.as_deref(),
         Some("Breakthrough! Short Pass reaches 65.")
+    );
+    assert_eq!(
+        reports[364].payload.as_deref(),
+        Some("Breakthrough! Short Pass reaches 70.")
     );
     assert_eq!(
         reports[148].payload.as_deref(),
@@ -238,3 +256,4 @@ fn engine_tick_matches_direct_drive() {
                 .is_some_and(|p| p.starts_with("Overtrained"))
     }));
 }
+
