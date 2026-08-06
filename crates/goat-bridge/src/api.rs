@@ -35,7 +35,7 @@ use goat_world::{
     promotion::{apply_season_end_for_nation, effective_league_clubs, sim_league_season},
     round_to_week, week_to_rounds,
     world::WorldGenesis,
-    Table, BASE_CAREER_YEAR, ROUNDS_PER_SEASON, SEASON_CALENDAR_WEEKS,
+    Table, ROUNDS_PER_SEASON, SEASON_CALENDAR_WEEKS,
 };
 
 /// Current membership of `league_id` in the live pipeline (A3.3): the persisted
@@ -497,7 +497,7 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
     } else {
         0
     };
-    let season_year = BASE_CAREER_YEAR + s.season_number.saturating_sub(1);
+    let season_year = s.career_base_year + s.season_number.saturating_sub(1);
     let cal_week_label = if s.season_number > 0 {
         format_week_header(season_year, cal_week)
     } else {
@@ -719,10 +719,30 @@ pub fn new_game(
         Intent::StartSeason { fixtures: vec![] },
         &mut GoatRng::new(0),
     );
+    // Career epoch: read wall-clock HERE (the bridge is the outer layer for the
+    // Flutter client) exactly once at new-game — never inside the core (§9).
+    // Persisted in the save (v19+). Not a new FFI param: the existing signature
+    // stays frb-compatible.
+    state.career_base_year = current_year();
 
     let snapshot = build_game_state(&state);
     set_state(state);
     snapshot
+}
+
+/// Current real-world year from wall-clock — bridge-layer only (§9 bans
+/// wall-clock inside the core). Exact civil-from-days conversion (Howard
+/// Hinnant's algorithm), integer-only, no chrono. Mirrors goat-tui's helper.
+fn current_year() -> u32 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    (yoe + era * 400) as u32
 }
 
 fn build_peers(world_seed: u64, nationality: &str) -> Vec<PeerState> {
@@ -1142,7 +1162,7 @@ pub fn get_full_season_fixtures() -> Vec<WeekFixtureDto> {
         }
         let div_idx = s.pc_div_idx as usize;
         let pc_club_id = s.pc_club_idx as usize;
-        let season_year = BASE_CAREER_YEAR + s.season_number.saturating_sub(1);
+        let season_year = s.career_base_year + s.season_number.saturating_sub(1);
         let world = get_world(s.world_seed);
         let div_clubs = &live_league_clubs(&world, s, div_idx);
 

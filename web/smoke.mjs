@@ -35,7 +35,7 @@ check('get_clubs returns 20 clubs', clubs.length === 20);
 console.log(`  club[0]: ${clubs[0].name} (strength ${clubs[0].strength})`);
 
 // ── New game (seed 42, ST, first nation, first league, first club) ──────────
-let st = parse(goat.new_game(SEED, 'Smoke Test', 0, 0, 0, 0), 'new_game');
+let st = parse(goat.new_game(SEED, 'Smoke Test', 0, 0, 0, 0, 2026), 'new_game');
 check('new_game starts season 1 round 0', st.season_number === 1 && st.season_round === 0);
 console.log(`  ${st.player_name} @ ${st.club_name} — ${st.league_name} (${st.nation_name})`);
 

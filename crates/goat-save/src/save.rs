@@ -60,7 +60,11 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// nation's 3 leagues × 20 club ids, flattened in tier order, as a length-prefixed
 /// `Vec<u32>`. Path-dependent (driven by real played results), so it must persist;
 /// pre-18 saves default to empty, which every reader treats as genesis-static.
-pub const VERSION: u32 = 18;
+/// v19+: adds `career_base_year` — the real-world year the career started, read
+/// from wall-clock once by the outer layer at new-game. One trailing u32;
+/// pre-19 saves default to 2025 (the old hardcoded BASE_CAREER_YEAR), keeping
+/// their displayed dates byte-identical.
+pub const VERSION: u32 = 19;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -186,6 +190,10 @@ pub struct SaveData {
     /// PC's nation's current league membership: 3 leagues × 20 club ids,
     /// flattened in tier order. Empty = genesis-static (pre-18 saves).
     pub pc_nation_membership: Vec<u32>,
+    // ── Career epoch (v19+) ───────────────────────────────────────────────────
+    /// Real-world year the career started (wall-clock, captured by the outer
+    /// layer at new-game). Pre-19 saves default to 2025.
+    pub career_base_year: u32,
 }
 
 #[derive(Debug)]
@@ -308,6 +316,7 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_season_clutch_index: state.pc_season_clutch_index,
         pc_career_clutch_index: state.pc_career_clutch_index,
         pc_nation_membership: state.pc_nation_membership.clone(),
+        career_base_year: state.career_base_year,
     }
 }
 
@@ -674,6 +683,7 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.pc_season_clutch_index = data.pc_season_clutch_index;
     state.pc_career_clutch_index = data.pc_career_clutch_index;
     state.pc_nation_membership = data.pc_nation_membership.clone();
+    state.career_base_year = data.career_base_year;
 
     state
 }
@@ -812,6 +822,8 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
     for &id in &d.pc_nation_membership {
         push_u32(&mut v, id);
     }
+    // v19+ — career base year (one trailing u32).
+    push_u32(&mut v, d.career_base_year);
     v
 }
 
@@ -1020,6 +1032,9 @@ pub fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     for _ in 0..pc_nation_membership_len {
         pc_nation_membership.push(read_u32(b, &mut cur).unwrap_or(0));
     }
+    // Career base year (v19+; default 2025 for older saves — the old hardcoded
+    // BASE_CAREER_YEAR, so pre-v19 saves keep their displayed dates).
+    let career_base_year = read_u32(b, &mut cur).unwrap_or(2025);
 
     Ok(SaveData {
         world_seed,
@@ -1097,6 +1112,7 @@ pub fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_season_clutch_index,
         pc_career_clutch_index,
         pc_nation_membership,
+        career_base_year,
     })
 }
 

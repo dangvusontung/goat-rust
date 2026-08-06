@@ -11,6 +11,11 @@ use crate::fixtures::ROUNDS_PER_SEASON;
 pub const SEASON_CALENDAR_WEEKS: usize = 38;
 
 /// Career base year — season 1 starts in this year.
+///
+/// Fallback/harness default only (v19+): the live game reads the real year from
+/// wall-clock ONCE at new-game (TUI/bridge/web outer layers) and persists it as
+/// `WorldState::career_base_year`. This const remains the default for pre-v19
+/// saves and for deterministic dev harnesses (career_sim).
 pub const BASE_CAREER_YEAR: u32 = 2025;
 
 /// Number of league matches per calendar week (0 = break / rest).
