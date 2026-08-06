@@ -80,7 +80,11 @@ async function main() {
   await init();
 
   // ── Setup screen ──────────────────────────────────────────────────────────
-  const seed = () => BigInt($('seed').value || '42');
+  // Seed is never player-facing: rolled randomly per page load. `?seed=` is a
+  // dev-only override for reproducible testing, not surfaced in the UI.
+  const devSeed = new URLSearchParams(location.search).get('seed');
+  $('seed').value = devSeed || BigInt(Math.floor(Math.random() * 2 ** 32)).toString();
+  const seed = () => BigInt($('seed').value);
   const nations = parse(goat.get_nations());
   const nationSel = $('nation');
   nationSel.innerHTML = '';
@@ -116,7 +120,6 @@ async function main() {
   }
   nationSel.onchange = fillLeagues;
   $('league').onchange = fillClubs;
-  $('seed').onchange = () => fillLeagues();
   fillLeagues();
 
   $('start').onclick = () => {
