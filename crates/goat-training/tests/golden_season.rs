@@ -256,4 +256,3 @@ fn engine_tick_matches_direct_drive() {
                 .is_some_and(|p| p.starts_with("Overtrained"))
     }));
 }
-
