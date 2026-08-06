@@ -610,3 +610,81 @@ fn continue_break_week_elapses_without_a_keypress() {
         "the break week must elapse silently — 5 skipped rounds + 1 auto-train = 6 weeks:\n{stdout}"
     );
 }
+
+// ── Live promotion/relegation (A3.3) ─────────────────────────────────────────
+//
+// Season-end [Y] resolves promotion/relegation for the PC's nation: bottom-3 of
+// a tier drop, top-3 of the tier below rise, edges no-op. The PC's league uses
+// the real played table; sibling leagues are batch-simmed. The section must
+// print exactly once per boundary even with read-only [G] side trips in between
+// (the d77170b idempotency bug class).
+
+/// Skip a full season: 38 rounds of [K], then N ("Stay") at the transfer-window
+/// prompt, landing at the season-end [Y/G/Z/Q] menu.
+fn play_full_season_skipped() -> String {
+    let mut s = String::new();
+    for _ in 0..38 {
+        s.push_str("K\n");
+    }
+    s.push_str("N\n");
+    s
+}
+
+#[test]
+fn promotion_relegation_fires_at_season_boundary_and_applies_once() {
+    let script = format!(
+        "{}{}G\nG\nY\nQ\n",
+        new_game_reaching_menu(),
+        play_full_season_skipped()
+    );
+    let stdout = run_scripted(&script).expect("process should exit cleanly");
+    assert!(
+        stdout.contains("--- PROMOTION & RELEGATION ---"),
+        "the season boundary must show the promotion/relegation resolution:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("relegated to England Division Two"),
+        "bottom-3 of the Premier League must drop:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("promoted to England Premier League"),
+        "top-3 of Division Two must rise:\n{stdout}"
+    );
+    assert_eq!(
+        stdout.matches("--- PROMOTION & RELEGATION ---").count(),
+        1,
+        "viewing [G] Legacy twice must not re-run the resolution (idempotent):\n{stdout}"
+    );
+    assert!(
+        stdout.contains("S2 Round 1/38"),
+        "the new season must start after the resolution:\n{stdout}"
+    );
+}
+
+#[test]
+fn promoted_clubs_appear_in_next_season_table() {
+    let script = format!(
+        "{}{}Y\nT\nQ\n",
+        new_game_reaching_menu(),
+        play_full_season_skipped()
+    );
+    let stdout = run_scripted(&script).expect("process should exit cleanly");
+    // Deterministic for this seed: these three Division Two clubs come up.
+    assert!(
+        stdout.contains("Greymarsh Wanderers promoted to England Premier League"),
+        "the promoted clubs must be named at the boundary:\n{stdout}"
+    );
+    // And the new season's table shows the refreshed composition (Round 0, all
+    // zero — the promoted clubs are now Premier League members).
+    let table_pos = stdout
+        .find("England Premier League — Round 0")
+        .expect("the next season's table must render after [Y]:\n{stdout}");
+    assert!(
+        stdout[table_pos..].contains("Greymarsh Wanderers"),
+        "the promoted club must appear in the new season's top-tier table:\n{stdout}"
+    );
+    assert!(
+        !stdout[table_pos..].contains("Ashford City"),
+        "the relegated club must be gone from the new top-tier table:\n{stdout}"
+    );
+}

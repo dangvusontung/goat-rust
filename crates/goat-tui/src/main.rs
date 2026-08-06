@@ -50,6 +50,10 @@ use goat_world::{
     fixture_for_round, format_week_header,
     national_tournament::national_team_strength,
     population::Population,
+    promotion::{
+        apply_season_end_for_nation, overlay_nation_membership, sim_league_season,
+        PromoRelegationEvent, TransitionType,
+    },
     round_fixtures, round_to_week, sim_team_match,
     world::{NationId, WorldGenesis},
     Table, BASE_CAREER_YEAR, CLUBS_PER_DIV, NUM_NATIONS, ROUNDS_PER_SEASON, TIERS_PER_NATION,
@@ -119,8 +123,19 @@ fn main() {
                                 match load_from_file(slot_path(SAVE_DIR, slot)) {
                                     Ok(data) => {
                                         writeln!(out, "  Save loaded.").unwrap();
-                                        let world = WorldGenesis::generate(data.world_seed);
+                                        let mut world = WorldGenesis::generate(data.world_seed);
                                         let mut state = to_world_state(&data, &world);
+                                        // A3.3: restore the promotion-advanced
+                                        // membership — the save's pc_nation_membership
+                                        // overlays genesis-static league composition
+                                        // (empty for pre-v18 saves = static already).
+                                        let loaded_nation =
+                                            world.leagues[state.pc_div_idx as usize].nation;
+                                        overlay_nation_membership(
+                                            &mut world,
+                                            loaded_nation,
+                                            &state.pc_nation_membership,
+                                        );
                                         // pc_season_fixtures is "generated but
                                         // consistent" (like WorldGenesis itself) — not
                                         // persisted in the save, rebuilt here from the
@@ -138,7 +153,7 @@ fn main() {
                                             state,
                                             &beat_lib,
                                             PlayerTraits::default(),
-                                            &world,
+                                            world,
                                         );
                                     }
                                     Err(e) => writeln!(out, "  Load failed: {e}").unwrap(),
@@ -347,7 +362,7 @@ fn run_new_game(
                         Intent::StartSeason { fixtures },
                         &mut GoatRng::new(0),
                     );
-                    run_game_loop(lines, out, state, beat_lib, pc_traits, &world);
+                    run_game_loop(lines, out, state, beat_lib, pc_traits, world);
                     return;
                 }
                 "R" | "REROLL" | "RE-ROLL" => {
@@ -367,13 +382,69 @@ fn run_new_game(
 
 // ── Main game loop ────────────────────────────────────────────────────────────
 
+/// A3.3: resolve promotion/relegation for the PC's nation at a season boundary.
+/// The PC's league uses the REAL played table (`state.table_raw`); the nation's
+/// two sibling leagues are batch-simmed from static club strengths. Mutates the
+/// session `world`'s league membership, persists the flattened membership into
+/// `state.pc_nation_membership`, and updates `state.pc_div_idx` if the PC's club
+/// moved tiers. Returns the events (for display).
+fn resolve_pc_nation_promotion(
+    world: &mut WorldGenesis,
+    state: &mut WorldState,
+    season: u32,
+) -> Vec<PromoRelegationEvent> {
+    let pc_league_id = state.pc_div_idx as usize;
+    let nation = world.leagues[pc_league_id].nation;
+    let mut nation_leagues: Vec<usize> = world
+        .leagues
+        .iter()
+        .filter(|l| l.nation == nation)
+        .map(|l| l.id)
+        .collect();
+    nation_leagues.sort_by_key(|&id| world.leagues[id].tier as usize);
+
+    // Tables for the nation's leagues: real for the PC's, batch-simmed for the
+    // two siblings. Other entries are placeholders — apply_season_end_for_nation
+    // never reads outside the nation.
+    let mut tables: Vec<Table> = world.leagues.iter().map(|l| Table::new(&l.clubs)).collect();
+    for &id in &nation_leagues {
+        tables[id] = if id == pc_league_id {
+            Table::from_raw(&state.table_raw, &world.leagues[id].clubs)
+        } else {
+            sim_league_season(
+                world,
+                id,
+                &world.leagues[id].clubs,
+                state.world_seed,
+                season,
+            )
+        };
+    }
+
+    let mut membership = world.static_league_clubs();
+    let events = apply_season_end_for_nation(world, &mut membership, nation, season, &tables);
+
+    // Write back: overlay the nation's leagues in the session world, persist the
+    // flattened membership, and re-resolve the PC's own league assignment.
+    for &id in &nation_leagues {
+        world.leagues[id].clubs = membership[id].clone();
+    }
+    state.pc_nation_membership = nation_leagues
+        .iter()
+        .flat_map(|&id| membership[id].iter().map(|&c| c as u32))
+        .collect();
+    state.pc_div_idx = world.club_league(state.pc_club_idx as usize) as u8;
+
+    events
+}
+
 fn run_game_loop(
     lines: &mut impl Iterator<Item = io::Result<String>>,
     out: &mut impl Write,
     mut state: WorldState,
     beat_lib: &BeatLibrary,
     pc_traits: PlayerTraits,
-    world: &WorldGenesis,
+    mut world: WorldGenesis,
 ) {
     // Season number for which the season-end pipeline (wage collection, awards,
     // legacy accrual, peer batch-tick, transfer window, contract renewal, retirement
@@ -433,13 +504,13 @@ fn run_game_loop(
             // double-credit career legacy stats.
             if season_end_done_for != Some(state.season_number) {
                 let view = state.players.snapshot(pc_id);
-                render_season_review(out, &state, &view, world);
+                render_season_review(out, &state, &view, &world);
 
                 // Collect annual wage.
                 state = reduce(state, Intent::CollectWage, &mut GoatRng::new(0));
 
                 // Awards night + pundit reactions + legacy update.
-                state = run_awards_and_pundits(out, state, &view, world);
+                state = run_awards_and_pundits(out, state, &view, &world);
 
                 // Phase 9: batch-tick peers and check rival crystallisation.
                 let season = state.season_number;
@@ -469,7 +540,7 @@ fn run_game_loop(
                 }
 
                 // Phase 8: transfer window and contract renewal.
-                state = run_transfer_window(lines, out, state, &view, world);
+                state = run_transfer_window(lines, out, state, &view, &world);
                 if state.pc_contract_seasons_left == 0 {
                     state = run_contract_negotiation(lines, out, state);
                 }
@@ -519,7 +590,7 @@ fn run_game_loop(
                         let league = &world.leagues[next_div_idx];
                         let final_table = Table::from_raw(&state.table_raw, &league.clubs);
                         pc_continental = qualified_tier(
-                            world,
+                            &world,
                             league.nation,
                             league.tier,
                             &final_table,
@@ -533,7 +604,7 @@ fn run_game_loop(
                             )
                             .unwrap();
                             ContinentalRun::start(
-                                world,
+                                &world,
                                 state.world_seed,
                                 state.season_number + 1,
                                 next_club_id,
@@ -541,11 +612,49 @@ fn run_game_loop(
                             )
                         });
 
+                        // A3.3: promotion/relegation for the PC's nation — resolved
+                        // at the [Y] boundary, NOT in the gated pipeline block: a
+                        // save made at the post-pipeline menu reloads into the gated
+                        // block re-running (pre-existing behavior), which would
+                        // double-apply membership changes. At [Y] the computation is
+                        // idempotent by construction — it reads the concluded
+                        // season's table_raw + deterministic batch sims, and the
+                        // resulting membership is persisted.
+                        let concluded_season = state.season_number;
+                        let promo_events =
+                            resolve_pc_nation_promotion(&mut world, &mut state, concluded_season);
+                        if !promo_events.is_empty() {
+                            writeln!(out, "\n  --- PROMOTION & RELEGATION ---").unwrap();
+                            for e in &promo_events {
+                                let verb = match e.transition {
+                                    TransitionType::DirectPromotion => "promoted to",
+                                    TransitionType::DirectRelegation => "relegated to",
+                                };
+                                let marker = if e.club == next_club_id {
+                                    "   *** YOUR CLUB ***"
+                                } else {
+                                    ""
+                                };
+                                writeln!(
+                                    out,
+                                    "  {} {} {}{}",
+                                    world.clubs[e.club].name,
+                                    verb,
+                                    world.leagues[e.to_league].name,
+                                    marker
+                                )
+                                .unwrap();
+                            }
+                        }
+
+                        // Fixtures for the NEW season come from the post-promotion
+                        // membership and the PC's (possibly new) league.
+                        let new_div_idx = state.pc_div_idx as usize;
                         let fixtures = build_season_orbit_fixtures(
                             state.world_seed,
                             state.season_number + 1,
-                            next_div_idx,
-                            &world.leagues[next_div_idx].clubs,
+                            new_div_idx,
+                            &world.leagues[new_div_idx].clubs,
                             next_club_id,
                         );
                         state = reduce(
@@ -565,7 +674,7 @@ fn run_game_loop(
                         state = dispatch_national_flashpoints(
                             out,
                             state,
-                            world,
+                            &world,
                             beat_lib,
                             pc_traits,
                             &mut pc_qualifying,
@@ -635,7 +744,7 @@ fn run_game_loop(
                         state = dispatch_national_flashpoints(
                             out,
                             state,
-                            world,
+                            &world,
                             beat_lib,
                             pc_traits,
                             &mut pc_qualifying,
@@ -670,7 +779,7 @@ fn run_game_loop(
                                     true,
                                     beat_lib,
                                     pc_traits,
-                                    world,
+                                    &world,
                                     &mut pc_cup_alive,
                                     &mut pc_continental,
                                     &mut pc_qualifying,
@@ -685,7 +794,7 @@ fn run_game_loop(
                                     false,
                                     beat_lib,
                                     pc_traits,
-                                    world,
+                                    &world,
                                     &mut pc_cup_alive,
                                     &mut pc_continental,
                                     &mut pc_qualifying,
@@ -715,7 +824,7 @@ fn run_game_loop(
                         state = dispatch_national_flashpoints(
                             out,
                             state,
-                            world,
+                            &world,
                             beat_lib,
                             pc_traits,
                             &mut pc_qualifying,
@@ -741,7 +850,7 @@ fn run_game_loop(
                     state = dispatch_national_flashpoints(
                         out,
                         state,
-                        world,
+                        &world,
                         beat_lib,
                         pc_traits,
                         &mut pc_qualifying,
@@ -757,7 +866,7 @@ fn run_game_loop(
                         true,
                         beat_lib,
                         pc_traits,
-                        world,
+                        &world,
                         &mut pc_cup_alive,
                         &mut pc_continental,
                         &mut pc_qualifying,
@@ -772,15 +881,15 @@ fn run_game_loop(
                         false,
                         beat_lib,
                         pc_traits,
-                        world,
+                        &world,
                         &mut pc_cup_alive,
                         &mut pc_continental,
                         &mut pc_qualifying,
                         &mut pc_tournament,
                     )
                 }
-                "T" if has_season => render_table(out, &state, world),
-                "U" => render_world_screen(out, &state, world),
+                "T" if has_season => render_table(out, &state, &world),
+                "U" => render_world_screen(out, &state, &world),
                 "G" if has_season => {
                     let ev = build_legacy_evidence(&state);
                     render_legacy_screen(out, &ev, &state);

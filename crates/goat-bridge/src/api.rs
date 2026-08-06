@@ -31,9 +31,21 @@ use goat_meta::{
 use goat_rng::{GoatRng, RngSource};
 use goat_traits::PlayerTraits;
 use goat_world::{
-    format_match_date, format_week_header, is_break_week, round_to_week, week_to_rounds,
-    world::WorldGenesis, Table, BASE_CAREER_YEAR, ROUNDS_PER_SEASON, SEASON_CALENDAR_WEEKS,
+    format_match_date, format_week_header, is_break_week,
+    promotion::{apply_season_end_for_nation, effective_league_clubs, sim_league_season},
+    round_to_week, week_to_rounds,
+    world::WorldGenesis,
+    Table, BASE_CAREER_YEAR, ROUNDS_PER_SEASON, SEASON_CALENDAR_WEEKS,
 };
+
+/// Current membership of `league_id` in the live pipeline (A3.3): the persisted
+/// promotion-advanced membership for the PC's nation's leagues, genesis-static
+/// otherwise. The bridge's shared `Arc<WorldGenesis>` is never mutated — drift
+/// lives only in `WorldState::pc_nation_membership`.
+fn live_league_clubs(world: &WorldGenesis, state: &WorldState, league_id: usize) -> Vec<usize> {
+    let pc_nation = world.leagues[state.pc_div_idx as usize].nation;
+    effective_league_clubs(world, pc_nation, &state.pc_nation_membership, league_id)
+}
 
 // ── Global singleton ──────────────────────────────────────────────────────────
 
@@ -499,7 +511,7 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
     if s.season_number > 0 {
         let div_idx = s.pc_div_idx as usize;
         let pc_club_id = s.pc_club_idx as usize;
-        let div_clubs = &world.leagues[div_idx].clubs;
+        let div_clubs = &live_league_clubs(&world, s, div_idx);
         for (slot, round_idx) in week_rounds.clone().enumerate() {
             let fixture = goat_world::fixture_for_round(
                 s.world_seed,
@@ -875,7 +887,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
     let pc_club_id = state.pc_club_idx as usize;
     let world_seed = state.world_seed;
     let world = get_world(world_seed);
-    let div_clubs = world.leagues[div_idx].clubs.clone();
+    let div_clubs = live_league_clubs(&world, &state, div_idx);
 
     let match_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
     let mut match_rng = GoatRng::new(match_seed);
@@ -1132,7 +1144,7 @@ pub fn get_full_season_fixtures() -> Vec<WeekFixtureDto> {
         let pc_club_id = s.pc_club_idx as usize;
         let season_year = BASE_CAREER_YEAR + s.season_number.saturating_sub(1);
         let world = get_world(s.world_seed);
-        let div_clubs = &world.leagues[div_idx].clubs;
+        let div_clubs = &live_league_clubs(&world, s, div_idx);
 
         goat_world::fixtures_for_club(
             s.world_seed,
@@ -1171,7 +1183,7 @@ pub fn get_table() -> Vec<TableRowDto> {
         }
         let div_idx = s.pc_div_idx as usize;
         let world = get_world(s.world_seed);
-        let div_clubs = &world.leagues[div_idx].clubs;
+        let div_clubs = &live_league_clubs(&world, s, div_idx);
         let table = Table::from_raw(&s.table_raw, div_clubs);
         let sorted = table.sorted();
         sorted
@@ -1403,7 +1415,7 @@ pub fn apply_season_end() -> GoatGameState {
 
     let div_idx = state.pc_div_idx as usize;
     let world = get_world(state.world_seed);
-    let div_clubs = &world.leagues[div_idx].clubs;
+    let div_clubs = &live_league_clubs(&world, &state, div_idx);
     let table = Table::from_raw(&state.table_raw, div_clubs);
     let finish_pos = table.position_of(state.pc_club_idx as usize) as u32;
     let won_title = finish_pos == 1;
@@ -1505,7 +1517,73 @@ pub fn apply_season_end() -> GoatGameState {
 
 /// Start the next season.
 pub fn start_next_season() -> GoatGameState {
-    let state = take_state();
+    let mut state = take_state();
+
+    // A3.3: promotion/relegation for the PC's nation at the season boundary —
+    // the PC's league from the REAL played table (table_raw), the two sibling
+    // leagues batch-simmed from static strengths. The bridge's shared Arc world
+    // is never mutated: drift lives only in the persisted pc_nation_membership,
+    // read back via `live_league_clubs` at every league-clubs read site (the
+    // same rule the TUI applies to its session-owned world). Surfacing the
+    // event list to the Flutter client is a DTO follow-up — the client can
+    // already observe the new league composition directly.
+    {
+        let world = get_world(state.world_seed);
+        let pc_league_id = state.pc_div_idx as usize;
+        let nation = world.leagues[pc_league_id].nation;
+        let mut nation_leagues: Vec<usize> = world
+            .leagues
+            .iter()
+            .filter(|l| l.nation == nation)
+            .map(|l| l.id)
+            .collect();
+        nation_leagues.sort_by_key(|&id| world.leagues[id].tier as usize);
+
+        let mut membership: Vec<Vec<usize>> = world
+            .leagues
+            .iter()
+            .map(|l| live_league_clubs(&world, &state, l.id))
+            .collect();
+        let mut tables: Vec<Table> = world
+            .leagues
+            .iter()
+            .map(|l| Table::new(&membership[l.id]))
+            .collect();
+        for &id in &nation_leagues {
+            tables[id] = if id == pc_league_id {
+                Table::from_raw(&state.table_raw, &membership[id])
+            } else {
+                sim_league_season(
+                    &world,
+                    id,
+                    &membership[id],
+                    state.world_seed,
+                    state.season_number,
+                )
+            };
+        }
+        let _events = apply_season_end_for_nation(
+            &world,
+            &mut membership,
+            nation,
+            state.season_number,
+            &tables,
+        );
+
+        state.pc_nation_membership = nation_leagues
+            .iter()
+            .flat_map(|&id| membership[id].iter().map(|&c| c as u32))
+            .collect();
+        // The PC's club may have moved tiers — re-resolve its league.
+        let pc_club = state.pc_club_idx as usize;
+        if let Some(&new_league) = nation_leagues
+            .iter()
+            .find(|&&id| membership[id].contains(&pc_club))
+        {
+            state.pc_div_idx = new_league as u8;
+        }
+    }
+
     let state = reduce(
         state,
         Intent::StartSeason { fixtures: vec![] },
@@ -1574,7 +1652,7 @@ pub fn get_transfer_offers() -> Vec<TransferOfferDto> {
         for _ in 0..n {
             let target_div = ((s.pc_div_idx as u64 + 1 + rng.next_range_u64(0, num_leagues - 2))
                 % num_leagues) as usize;
-            let league_clubs = &world.leagues[target_div].clubs;
+            let league_clubs = &live_league_clubs(&world, s, target_div);
             let club_pos = rng.next_range_u64(0, league_clubs.len() as u64 - 1) as usize;
             let club_id = league_clubs[club_pos];
             if club_id == s.pc_club_idx as usize {
@@ -1677,7 +1755,7 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
         let world_seed = s.world_seed;
         let season = s.season_number;
         let world = get_world(world_seed);
-        let div_clubs = &world.leagues[div_idx].clubs;
+        let div_clubs = &live_league_clubs(&world, s, div_idx);
 
         let pc_fixture = goat_world::fixture_for_round(
             world_seed, season, div_idx, div_clubs, pc_club_id, round,
@@ -1846,11 +1924,10 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
         let season = session.season;
         let world_seed = session.world_seed;
         let world = get_world(world_seed);
-        let div_clubs = world.leagues[div_idx].clubs.clone();
-
         // Apply results to world state.
         let gs = {
             let state = take_state();
+            let div_clubs = live_league_clubs(&world, &state, div_idx);
             let old_cal_week = round_to_week(round.min(ROUNDS_PER_SEASON - 1));
             let all_fixtures =
                 goat_world::round_fixtures(world_seed, season, div_idx, &div_clubs, round);

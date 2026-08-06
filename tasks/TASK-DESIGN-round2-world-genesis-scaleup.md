@@ -219,6 +219,11 @@ to reuse `CLUBS_PER_DIV` unchanged; Tùng explicitly overrode this). Reworked nu
 tiers per nation × 20 clubs per tier = 60 clubs/nation × 20 nations = 1,200 clubs → 30,000
 players** — top edge of the bible's 20-30k band, still inside it.
 
+**Reality check (measured 2026-08-04):** the actual generated population is **26,835
+players**, not 30,000 — the 30k figure assumed a uniform 25/club, but Design round 3
+replaced `SQUAD_SIZE` with per-club `squad_size` 18–30 weighted by strength (avg ≈ 22.4).
+Still comfortably inside the bible's 20-30k band; the "top edge" phrasing above is stale.
+
 Because `CLUBS_PER_DIV` is changing from 16 to 20 anyway, this slice is **not** the
 zero-touch "just add more instances of the same fixed-size division" case the first pass
 described — `CLUBS_PER_DIV = 16` (`world.rs:63`) itself needs to become 20, which ripples into
@@ -395,6 +400,14 @@ division's champion resolution is already independent — `history.rs:118-129`'s
 that would be a **new dependency**, which the existing "no new dependencies" ground rule
 (`TASK-DESIGN-round1-pantheon-saves.md`'s Definition of Done) would need an explicit
 exception for — don't add it preemptively, only if the benchmark says it's needed).
+
+**Benchmarked 2026-08-04** (`cargo run -p goat-world --release --example bench_genesis`,
+seed 42, this machine): world genesis 0.78ms (1,200 clubs/20 nations/60 leagues) +
+population genesis 0.84ms (26,835 players) + history backfill 0.13ms (30 seasons) =
+**~1.75ms total** — orders of magnitude under the feared 10-60s; no trimming, no rayon.
+Promotion/relegation replay (A3.1's flagged cost): **~65ms/season**, linear in career
+length (20 seasons = 1.3s total; each season transition pays only one incremental ~65ms).
+Continental-qualification table build ~10.6ms; national-tournament cycle ~2.1ms.
 
 **Regenerate-from-seed vs persist:** following bible §9's "the seed is the universe" /
 "recompute the rest" principle, and mirroring `History` (never persisted, always
@@ -602,6 +615,27 @@ identical event list, applied exactly once — not recomputed-and-reapplied on t
   finishes bottom-3 (or a tracked rival does) → season-end screen reflects relegation → next
   season's fixture list/table shows the club in its new tier, opponents changed accordingly.
 
+**Implemented 2026-08-04 (A3.3, with two deliberate design adjustments vs the text above):**
+
+1. **Wired at the `[Y]` next-season boundary, not the gated pipeline block.** The gated
+   block re-runs after a save made at the post-pipeline menu is loaded (pre-existing:
+   `season_end_done_for` is session-local, not persisted), so a membership mutation there
+   would double-apply on reload. At `[Y]` the resolution is idempotent by construction: it
+   reads the concluded season's `table_raw` + deterministic batch sims, and the resulting
+   membership is persisted immediately. The [G]-twice idempotency requirement is covered by
+   a scripted-stdin test.
+2. **Scope is the PC's nation only, driven by real results, persisted — not replayed.** The
+   PC's league promotion uses the REAL played table (`table_raw`); the two sibling leagues
+   are batch-simmed (`promotion.rs::sim_league_season`, static-strength idiom). Pure replay
+   from seed is impossible here: the PC league's real results aren't persisted per-season,
+   so membership after the first real season is path-dependent — hence save format **v18**
+   (`pc_nation_membership`, 3 leagues × 20 club ids, tier-ordered; empty = genesis-static
+   for pre-18 saves, backward-compat tested). Other nations don't drift in the live
+   pipeline (that remains `ReplayCache`'s domain in the harnesses). The TUI overlays the
+   membership onto its session-owned `WorldGenesis`; the bridge (shared `Arc` world) reads
+   it via `promotion.rs::effective_league_clubs`. `pc_div_idx` re-resolves when the PC's
+   club moves tiers. Surfacing the event list to Flutter is a DTO follow-up.
+
 **Size: large, risk: high** — not from the promotion/relegation *rule* itself (bottom-N/top-N
 is simple), but from A3.1's architecture fork (replay vs. persist) needing to be settled
 first, and from the idempotency interaction with an already-once-buggy pipeline. Strongly
@@ -757,7 +791,9 @@ Open question for a real design pass: does this purely-flavor feed feed back int
 it pure flavor with zero mechanical effect — Tùng did not specify this either way yet.
 
 **BL7 — Hidden per-player injury-proneness/durability trait — raised by Tùng, 2026-07-22, not
-yet designed.**
+yet designed.** *(Status update 2026-08-04: designed in `tasks/TASK-DESIGN-round9-injury-proneness.md`
+and SHIPPED — commits `2c22315`/`1bb6798`; `durability_x10` is live in `goat-core`'s
+`injury_prob`. This entry is kept for history; the "not yet designed" framing is stale.)*
 
 Verified: `injury_prob()` (`crates/goat-core/src/week.rs:326-348`) already multiplies fatigue
 (`energy`, a real accumulating value that drains from training/matches and recovers with rest —
@@ -791,7 +827,10 @@ every Flashy player. Session then branched into two adjacent findings before par
 below) — BL5 itself is still open, not superseded.
 
 **BL5.1 — Goal/Assist split (spun out of a BL5 stats-by-position tangent, 2026-07-28) — scoped,
-not yet designed/confirmed.**
+not yet designed/confirmed.** *(Status update 2026-08-04: designed in
+`tasks/TASK-DESIGN-BL5.1-goal-assist-split.md` and SHIPPED — commit `d63d92f`;
+`ScoreEvent::AssistFor`, `pc_season_assists`/`pc_career_assists`, save v15 all live. Stale
+framing kept for history.)*
 
 Tùng asked whether BL5's position stats should include goals/assists/passes, which surfaced a
 real gap: only `goals` is tracked anywhere (`pc_season_goals`/`pc_career_goals` in `state.rs`);
@@ -813,6 +852,10 @@ counts similarly), add `pc_season_assists`/`pc_career_assists` to `state.rs` mir
 principle, not locked.
 
 **BL5.2 — `decisive_moments` is a dead stub — discovered 2026-07-28, not yet designed.**
+*(Status update 2026-08-04: designed in `tasks/TASK-BL5.2-decisive-moments.md` and SHIPPED —
+commits `16fa538` (v1 dynamic detection) and `d0fe445` (v2 table-tension), plus the clutch-index
+follow-up `b29379a`; `pc_decisive_moments` is now populated from real gameplay. Stale framing
+kept for history.)*
 
 While discussing a "clutch vs. clown" idea (PC either scores in decisive moments or chokes and
 gets roasted by fans — ties BL5.1's shoot/pass choice into consequence), found that
