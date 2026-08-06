@@ -34,7 +34,7 @@ use goat_world::{
     promotion::{apply_season_end_for_nation, effective_league_clubs, sim_league_season},
     round_to_week,
     world::WorldGenesis,
-    Table, BASE_CAREER_YEAR, ROUNDS_PER_SEASON,
+    Table, ROUNDS_PER_SEASON,
 };
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -272,7 +272,7 @@ fn build_snapshot(s: &WorldState) -> StateSnapshot {
         (String::new(), String::new())
     };
 
-    let season_year = BASE_CAREER_YEAR + s.season_number.saturating_sub(1);
+    let season_year = s.career_base_year + s.season_number.saturating_sub(1);
     let cal_week = if s.season_number > 0 {
         round_to_week(s.season_round.min(ROUNDS_PER_SEASON as u32 - 1) as usize)
     } else {
@@ -604,6 +604,7 @@ pub fn new_game(
     nation_idx: usize,
     league_idx: usize,
     club_idx: usize,
+    base_year: u32,
 ) -> String {
     let world = get_world(seed);
     if nation_idx >= world.nations.len() {
@@ -663,6 +664,9 @@ pub fn new_game(
         Intent::StartSeason { fixtures: vec![] },
         &mut GoatRng::new(0),
     );
+    // Career epoch: the real-world year, supplied by the page (new Date().getFullYear())
+    // — wall-clock lives in JS, never in the core (§9).
+    state.career_base_year = base_year;
 
     set_traits(roll_traits(seed));
     *ACTIVE_MATCH.lock().expect("match lock poisoned") = None;

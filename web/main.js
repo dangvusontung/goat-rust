@@ -131,6 +131,7 @@ async function main() {
         Number(nationSel.value),
         $('league').selectedIndex,
         Number($('club').value),
+        new Date().getFullYear(),
       ));
       $('setup').classList.add('hidden');
       $('game').classList.remove('hidden');

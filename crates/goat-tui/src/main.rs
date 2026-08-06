@@ -56,7 +56,7 @@ use goat_world::{
     },
     round_fixtures, round_to_week, sim_team_match,
     world::{NationId, WorldGenesis},
-    Table, BASE_CAREER_YEAR, CLUBS_PER_DIV, NUM_NATIONS, ROUNDS_PER_SEASON, TIERS_PER_NATION,
+    Table, CLUBS_PER_DIV, NUM_NATIONS, ROUNDS_PER_SEASON, TIERS_PER_NATION,
 };
 
 #[path = "orbit_fixtures.rs"]
@@ -362,6 +362,10 @@ fn run_new_game(
                         Intent::StartSeason { fixtures },
                         &mut GoatRng::new(0),
                     );
+                    // Career epoch: the real-world year, read from wall-clock HERE
+                    // (renderer layer) exactly once at new-game — never inside the
+                    // core (§9 determinism). Persisted in the save (v19+).
+                    state.career_base_year = current_year();
                     run_game_loop(lines, out, state, beat_lib, pc_traits, world);
                     return;
                 }
@@ -946,7 +950,7 @@ fn run_next_round(
     let world_seed = state.world_seed;
     let div_clubs = world.leagues[div_idx].clubs.clone();
 
-    let week_label = format_week_header(BASE_CAREER_YEAR + season - 1, round_to_week(round));
+    let week_label = format_week_header(state.career_base_year + season - 1, round_to_week(round));
     writeln!(
         out,
         "\n--- ROUND {} / {} · {} ---",
@@ -3591,6 +3595,22 @@ fn render_match_result(out: &mut impl Write, result: &MatchResult, opp: &str) {
 }
 
 // ── Utilities ─────────────────────────────────────────────────────────────────
+
+/// Current real-world year from wall-clock — renderer-layer only (§9 bans
+/// wall-clock inside the core; the year is captured once at new-game and then
+/// persisted in the save). Exact civil-from-days conversion (Howard Hinnant's
+/// algorithm), integer-only, no chrono.
+fn current_year() -> u32 {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let z = (secs / 86_400) as i64 + 719_468; // days since epoch -> civil day number
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    (yoe + era * 400) as u32
+}
 
 /// Read one line of input, distinguishing a genuine blank Enter (`Some(String::new())`)
 /// from stdin EOF (`None`) — the two must never be conflated, or a closed pipe

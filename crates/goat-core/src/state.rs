@@ -231,6 +231,12 @@ pub struct WorldState {
     /// Live calendar position (epoch days since career start). Advanced 7/week by the
     /// week loop, which drives the CalendarEngine. Persisted in the save (v6+).
     pub pc_epoch_day: u32,
+    /// Real-world year the career started in — read from wall-clock ONCE by the
+    /// outer layer at new-game time (TUI/bridge/web), never inside the core
+    /// (§9 determinism: no `now()` below the renderer). Display-only (season
+    /// year labels, match dates); persisted so a save shows the same dates on
+    /// every load. Pre-v19 saves default to `goat_world`'s BASE_CAREER_YEAR.
+    pub career_base_year: u32,
     /// PC's nation's current league membership (A3.3): the nation's 3 leagues ×
     /// 20 club ids, flattened in tier order (top → third), advanced by
     /// promotion/relegation each season end. Empty = genesis-static membership
@@ -367,6 +373,10 @@ impl WorldState {
             pc_current_calendar_week: 0,
             pc_week_training_done: false,
             pc_epoch_day: 0,
+            // Placeholder until the outer layer sets the real wall-clock year at
+            // new-game; 2025 matches the pre-v19 constant so old saves keep
+            // their dates exactly.
+            career_base_year: 2025,
             pc_nation_membership: Vec::new(),
             last_week_flashpoints: Vec::new(),
             pc_season_fixtures: Vec::new(),

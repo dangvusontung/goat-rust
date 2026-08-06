@@ -519,7 +519,7 @@ fn old_v11_save_without_club_budgets_defaults_to_empty() {
     // count, then club_manager's and free_agents' empty-list 4-byte length prefixes,
     // then v15's two assist u32s (BL5.1), v16's decisive-moments u32 (BL5.2), and
     // v17's two clutch-index u32s (BL5.3).
-    let v11_len = bytes.len() - (4 + 3 * 8) - 4 - (4 + 4 + 4 + 4) - 2 * 4 - 4 - 2 * 4 - 4;
+    let v11_len = bytes.len() - (4 + 3 * 8) - 4 - (4 + 4 + 4 + 4) - 2 * 4 - 4 - 2 * 4 - 4 - 4;
     bytes.truncate(v11_len);
 
     let v11_path = std::env::temp_dir().join(format!(
@@ -596,7 +596,7 @@ fn old_v12_save_without_academy_boosts_defaults_to_empty() {
     // 4-byte inner manager count, then club_manager's and free_agents' empty-list 4-byte
     // length prefixes, then v15's two assist u32s (BL5.1) and v16's decisive-moments
     // u32 (BL5.2), and v17's two clutch-index u32s (BL5.3).
-    let v12_len = bytes.len() - (4 + 3) - (4 + 4 + 4 + 4) - 2 * 4 - 4 - 2 * 4 - 4;
+    let v12_len = bytes.len() - (4 + 3) - (4 + 4 + 4 + 4) - 2 * 4 - 4 - 2 * 4 - 4 - 4;
     bytes.truncate(v12_len);
 
     let v12_path = std::env::temp_dir().join(format!(
@@ -667,7 +667,7 @@ fn old_v13_save_without_managers_defaults_to_empty() {
     // empty-list 4-byte length prefix, then v15's two assist u32s (BL5.1) and v16's
     // decisive-moments u32 (BL5.2), and v17's two clutch-index u32s (BL5.3).
     let manager_blob_len = data.manager_blob.len();
-    let v13_len = bytes.len() - (4 + manager_blob_len) - (4 + 4) - 4 - 2 * 4 - 4 - 2 * 4 - 4;
+    let v13_len = bytes.len() - (4 + manager_blob_len) - (4 + 4) - 4 - 2 * 4 - 4 - 2 * 4 - 4 - 4;
     bytes.truncate(v13_len);
 
     let v13_path = std::env::temp_dir().join(format!(
@@ -847,7 +847,7 @@ fn old_v14_save_without_assists_defaults_to_zero() {
 
     // Trailing encoding: pc_season_assists + pc_career_assists (2 × 4-byte u32),
     // then v16's pc_season_decisive_moments (4-byte u32).
-    let v14_len = bytes.len() - 2 * 4 - 4 - 2 * 4 - 4;
+    let v14_len = bytes.len() - 2 * 4 - 4 - 2 * 4 - 4 - 4;
     bytes.truncate(v14_len);
 
     let v14_path = std::env::temp_dir().join(format!(
@@ -910,7 +910,7 @@ fn old_v15_save_without_decisive_moments_defaults_to_zero() {
 
     // Trailing encoding: pc_season_decisive_moments (1 × 4-byte u32), then v17's
     // two clutch-index u32s (BL5.3).
-    let v15_len = bytes.len() - 4 - 2 * 4 - 4;
+    let v15_len = bytes.len() - 4 - 2 * 4 - 4 - 4;
     bytes.truncate(v15_len);
 
     let v15_path = std::env::temp_dir().join(format!(
@@ -971,7 +971,7 @@ fn old_v16_save_without_clutch_index_defaults_to_zero() {
     std::fs::remove_file(&full_path).ok();
 
     // Trailing encoding: pc_season_clutch_index + pc_career_clutch_index (2 × 4-byte).
-    let v16_len = bytes.len() - 2 * 4 - 4;
+    let v16_len = bytes.len() - 2 * 4 - 4 - 4;
     bytes.truncate(v16_len);
 
     let v16_path = std::env::temp_dir().join(format!(
@@ -1037,7 +1037,7 @@ fn old_v17_save_without_membership_defaults_to_genesis_static() {
     std::fs::remove_file(&full_path).ok();
 
     // Trailing encoding: 4-byte count + 60 entries × 4 bytes.
-    let v17_len = bytes.len() - 4 - 60 * 4;
+    let v17_len = bytes.len() - 4 - 60 * 4 - 4;
     bytes.truncate(v17_len);
 
     let v17_path = std::env::temp_dir().join(format!(
@@ -1054,4 +1054,61 @@ fn old_v17_save_without_membership_defaults_to_genesis_static() {
     );
     let restored = to_world_state(&loaded, &test_world());
     assert!(restored.pc_nation_membership.is_empty());
+}
+
+// ── Career base year (v19) ───────────────────────────────────────────────────
+
+#[test]
+fn save_load_restores_career_base_year_through_bytes() {
+    // v19+: the wall-clock year captured at new-game must round-trip so a save
+    // shows identical dates on every load.
+    let mut state = setup_state();
+    state.career_base_year = 2031;
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join(format!(
+        "goat_save_base_year_roundtrip_{}.gsav",
+        std::process::id()
+    ));
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap(), &test_world());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(restored.career_base_year, 2031);
+}
+
+#[test]
+fn old_v18_save_without_career_base_year_defaults_to_2025() {
+    // A pre-v19 binary never wrote the trailing year u32 — truncate it off a
+    // real v19 buffer and confirm the default keeps old saves' dates identical
+    // (2025 = the hardcoded BASE_CAREER_YEAR they were created with).
+    let mut state = setup_state();
+    state.career_base_year = 2031;
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let full_path =
+        std::env::temp_dir().join(format!("goat_save_v19_full_{}.gsav", std::process::id()));
+    save_to_file(&data, &full_path).unwrap();
+    let mut bytes = std::fs::read(&full_path).unwrap();
+    std::fs::remove_file(&full_path).ok();
+
+    // Trailing encoding: career_base_year (1 × 4-byte u32).
+    let v18_len = bytes.len() - 4;
+    bytes.truncate(v18_len);
+
+    let v18_path = std::env::temp_dir().join(format!(
+        "goat_save_v18_truncated_{}.gsav",
+        std::process::id()
+    ));
+    std::fs::write(&v18_path, &bytes).unwrap();
+    let loaded = load_from_file(&v18_path).unwrap();
+    std::fs::remove_file(&v18_path).ok();
+
+    assert_eq!(loaded.career_base_year, 2025);
+    let restored = to_world_state(&loaded, &test_world());
+    assert_eq!(restored.career_base_year, 2025);
 }
