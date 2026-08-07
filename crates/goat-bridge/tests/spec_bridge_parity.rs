@@ -265,6 +265,33 @@ fn assert_bridge_matches_direct(snap: &api::GoatGameState, direct: &WorldState, 
     );
     assert_eq!(snap.savings, direct.pc_savings, "{ctx}: savings");
     assert_eq!(snap.injury_weeks, view.injury_weeks, "{ctx}: injury_weeks");
+    // Phase-10 economy/life fields (B.1).
+    assert_eq!(
+        snap.business_value, direct.pc_business_value,
+        "{ctx}: business_value"
+    );
+    assert_eq!(snap.bankrupt, direct.pc_bankrupt, "{ctx}: bankrupt");
+    assert_eq!(
+        snap.dev_invest_level, direct.pc_dev_invest_level,
+        "{ctx}: dev_invest_level"
+    );
+    assert_eq!(
+        snap.marketability, direct.pc_marketability,
+        "{ctx}: marketability"
+    );
+    assert_eq!(
+        snap.sponsor_tier, direct.pc_sponsor_tier,
+        "{ctx}: sponsor_tier"
+    );
+    assert_eq!(
+        snap.relationships,
+        direct.pc_relationships.to_vec(),
+        "{ctx}: relationships"
+    );
+    assert_eq!(
+        snap.character_rep, direct.pc_character_rep,
+        "{ctx}: character_rep"
+    );
 }
 
 #[test]
@@ -296,6 +323,85 @@ fn bridge_path_matches_direct_reduce() {
         direct = direct_advance_week(direct);
         assert_bridge_matches_direct(&bridge_snap, &direct, &format!("after week {week}"));
     }
+}
+
+// ── 3b. Phase-10 economy/life actions (B.1) ──────────────────────────────────
+
+/// Every B.1 action fn driven through the bridge must produce the same state as
+/// the same intents applied via direct reduce — determinism survives the FFI
+/// boundary for the new surface too.
+#[test]
+fn bridge_phase10_actions_match_direct_reduce() {
+    let _g = serial();
+
+    let bridge_snap = api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    let mut direct = direct_new_game(SEED, CLUB_ID as usize);
+    assert_bridge_matches_direct(&bridge_snap, &direct, "after new_game");
+
+    // Dev investment + marketability + sponsor (eligible at 80).
+    let snap = api::set_dev_investment(2);
+    direct = reduce(
+        direct,
+        Intent::SetDevInvestment { level: 2 },
+        &mut GoatRng::new(0),
+    );
+    assert_bridge_matches_direct(&snap, &direct, "set_dev_investment");
+
+    let snap = api::set_marketability(80);
+    direct = reduce(
+        direct,
+        Intent::SetMarketability { value: 80 },
+        &mut GoatRng::new(0),
+    );
+    assert_bridge_matches_direct(&snap, &direct, "set_marketability");
+
+    let snap = api::sign_sponsor(2);
+    direct = reduce(
+        direct,
+        Intent::SignSponsor { tier: 2 },
+        &mut GoatRng::new(0),
+    );
+    assert_bridge_matches_direct(&snap, &direct, "sign_sponsor");
+
+    // Economy: settle a season bonus, then invest part of it into the business.
+    let snap = api::settle_season_economy(1_000);
+    direct = reduce(
+        direct,
+        Intent::SettleSeasonEconomy {
+            season_bonus: 1_000,
+        },
+        &mut GoatRng::new(0),
+    );
+    assert_bridge_matches_direct(&snap, &direct, "settle_season_economy");
+
+    let snap = api::invest_in_business(400);
+    direct = reduce(
+        direct,
+        Intent::InvestInBusiness { amount: 400 },
+        &mut GoatRng::new(0),
+    );
+    assert_bridge_matches_direct(&snap, &direct, "invest_in_business");
+
+    // Life event deep into rupture territory (triggers the scandal branch),
+    // then a contrite media response.
+    let snap = api::apply_life_event(1, -80);
+    direct = reduce(
+        direct,
+        Intent::ApplyLifeEvent {
+            thread: 1,
+            delta: -80,
+        },
+        &mut GoatRng::new(0),
+    );
+    assert_bridge_matches_direct(&snap, &direct, "apply_life_event");
+
+    let snap = api::respond_to_media(true);
+    direct = reduce(
+        direct,
+        Intent::RespondToMedia { contrite: true },
+        &mut GoatRng::new(0),
+    );
+    assert_bridge_matches_direct(&snap, &direct, "respond_to_media");
 }
 
 // ── 4. Full season + season-end lifecycle ────────────────────────────────────

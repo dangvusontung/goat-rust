@@ -94,6 +94,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   List<PeerDto> dco_decode_list_peer_dto(dynamic raw);
 
   @protected
+  Int32List dco_decode_list_prim_i_32_strict(dynamic raw);
+
+  @protected
   List<int> dco_decode_list_prim_u_8_loose(dynamic raw);
 
   @protected
@@ -134,7 +137,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   (GoatGameState, MatchResultDto)
-  dco_decode_record_goat_game_state_match_result_dto(dynamic raw);
+      dco_decode_record_goat_game_state_match_result_dto(dynamic raw);
 
   @protected
   RoleDto dco_decode_role_dto(dynamic raw);
@@ -186,23 +189,19 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   ActiveBeatDto sse_decode_box_autoadd_active_beat_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   BeatOutcomeDto sse_decode_box_autoadd_beat_outcome_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   GoatGameState sse_decode_box_autoadd_goat_game_state(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   MatchResultDto sse_decode_box_autoadd_match_result_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   ClubDto sse_decode_club_dto(SseDeserializer deserializer);
@@ -236,19 +235,20 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<BeatChoiceDto> sse_decode_list_beat_choice_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   List<ClubDto> sse_decode_list_club_dto(SseDeserializer deserializer);
 
   @protected
   List<LegacyAxisDto> sse_decode_list_legacy_axis_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   List<PeerDto> sse_decode_list_peer_dto(SseDeserializer deserializer);
+
+  @protected
+  Int32List sse_decode_list_prim_i_32_strict(SseDeserializer deserializer);
 
   @protected
   List<int> sse_decode_list_prim_u_8_loose(SseDeserializer deserializer);
@@ -261,53 +261,45 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<SchoolRankingDto> sse_decode_list_school_ranking_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   List<TableRowDto> sse_decode_list_table_row_dto(SseDeserializer deserializer);
 
   @protected
   List<TransferOfferDto> sse_decode_list_transfer_offer_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   List<WeekFixtureDto> sse_decode_list_week_fixture_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   MatchResultDto sse_decode_match_result_dto(SseDeserializer deserializer);
 
   @protected
   ActiveBeatDto? sse_decode_opt_box_autoadd_active_beat_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   BeatOutcomeDto? sse_decode_opt_box_autoadd_beat_outcome_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   GoatGameState? sse_decode_opt_box_autoadd_goat_game_state(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   MatchResultDto? sse_decode_opt_box_autoadd_match_result_dto(
-    SseDeserializer deserializer,
-  );
+      SseDeserializer deserializer);
 
   @protected
   PeerDto sse_decode_peer_dto(SseDeserializer deserializer);
 
   @protected
   (GoatGameState, MatchResultDto)
-  sse_decode_record_goat_game_state_match_result_dto(
-    SseDeserializer deserializer,
-  );
+      sse_decode_record_goat_game_state_match_result_dto(
+          SseDeserializer deserializer);
 
   @protected
   RoleDto sse_decode_role_dto(SseDeserializer deserializer);
@@ -353,36 +345,26 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_beat_outcome_dto(
-    BeatOutcomeDto self,
-    SseSerializer serializer,
-  );
+      BeatOutcomeDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_bool(bool self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_active_beat_dto(
-    ActiveBeatDto self,
-    SseSerializer serializer,
-  );
+      ActiveBeatDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_beat_outcome_dto(
-    BeatOutcomeDto self,
-    SseSerializer serializer,
-  );
+      BeatOutcomeDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_goat_game_state(
-    GoatGameState self,
-    SseSerializer serializer,
-  );
+      GoatGameState self, SseSerializer serializer);
 
   @protected
   void sse_encode_box_autoadd_match_result_dto(
-    MatchResultDto self,
-    SseSerializer serializer,
-  );
+      MatchResultDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_club_dto(ClubDto self, SseSerializer serializer);
@@ -416,114 +398,88 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_beat_choice_dto(
-    List<BeatChoiceDto> self,
-    SseSerializer serializer,
-  );
+      List<BeatChoiceDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_club_dto(List<ClubDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_legacy_axis_dto(
-    List<LegacyAxisDto> self,
-    SseSerializer serializer,
-  );
+      List<LegacyAxisDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_peer_dto(List<PeerDto> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_prim_i_32_strict(
+      Int32List self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_8_loose(List<int> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_prim_u_8_strict(
-    Uint8List self,
-    SseSerializer serializer,
-  );
+      Uint8List self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_role_dto(List<RoleDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_school_ranking_dto(
-    List<SchoolRankingDto> self,
-    SseSerializer serializer,
-  );
+      List<SchoolRankingDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_table_row_dto(
-    List<TableRowDto> self,
-    SseSerializer serializer,
-  );
+      List<TableRowDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_transfer_offer_dto(
-    List<TransferOfferDto> self,
-    SseSerializer serializer,
-  );
+      List<TransferOfferDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_week_fixture_dto(
-    List<WeekFixtureDto> self,
-    SseSerializer serializer,
-  );
+      List<WeekFixtureDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_match_result_dto(
-    MatchResultDto self,
-    SseSerializer serializer,
-  );
+      MatchResultDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_active_beat_dto(
-    ActiveBeatDto? self,
-    SseSerializer serializer,
-  );
+      ActiveBeatDto? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_beat_outcome_dto(
-    BeatOutcomeDto? self,
-    SseSerializer serializer,
-  );
+      BeatOutcomeDto? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_goat_game_state(
-    GoatGameState? self,
-    SseSerializer serializer,
-  );
+      GoatGameState? self, SseSerializer serializer);
 
   @protected
   void sse_encode_opt_box_autoadd_match_result_dto(
-    MatchResultDto? self,
-    SseSerializer serializer,
-  );
+      MatchResultDto? self, SseSerializer serializer);
 
   @protected
   void sse_encode_peer_dto(PeerDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_record_goat_game_state_match_result_dto(
-    (GoatGameState, MatchResultDto) self,
-    SseSerializer serializer,
-  );
+      (GoatGameState, MatchResultDto) self, SseSerializer serializer);
 
   @protected
   void sse_encode_role_dto(RoleDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_school_ranking_dto(
-    SchoolRankingDto self,
-    SseSerializer serializer,
-  );
+      SchoolRankingDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_table_row_dto(TableRowDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_transfer_offer_dto(
-    TransferOfferDto self,
-    SseSerializer serializer,
-  );
+      TransferOfferDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_u_32(int self, SseSerializer serializer);
@@ -539,9 +495,7 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_week_fixture_dto(
-    WeekFixtureDto self,
-    SseSerializer serializer,
-  );
+      WeekFixtureDto self, SseSerializer serializer);
 }
 
 // Section: wire_class
@@ -552,9 +506,9 @@ class RustLibWire implements BaseWire {
 
   /// Holds the symbol lookup function.
   final ffi.Pointer<T> Function<T extends ffi.NativeType>(String symbolName)
-  _lookup;
+      _lookup;
 
   /// The symbols are looked up in [dynamicLibrary].
   RustLibWire(ffi.DynamicLibrary dynamicLibrary)
-    : _lookup = dynamicLibrary.lookup;
+      : _lookup = dynamicLibrary.lookup;
 }

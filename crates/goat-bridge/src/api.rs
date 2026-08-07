@@ -169,6 +169,14 @@ pub struct GoatGameState {
     pub wage_annual: i64,
     pub savings: i64,
     pub power_ladder: u8,
+    // Phase-10 economy + life (B.1)
+    pub business_value: i64,
+    pub bankrupt: bool,
+    pub dev_invest_level: u8,
+    pub marketability: i32,
+    pub sponsor_tier: u8,
+    /// The three relationship threads' current scores.
+    pub relationships: Vec<i32>,
 
     // Discipline
     pub yellow_cards_season: u32,
@@ -184,7 +192,7 @@ pub struct GoatGameState {
     // Reputation
     pub sporting_rep: i32,
     pub club_fan_rep: i32,
-    pub character_rep: i32, // inverse of discipline_rep
+    pub character_rep: i32, // the Phase-10 character scalar (pc_character_rep)
 
     // Lifestyle (0=Professional 1=Balanced 2=Flashy)
     pub lifestyle: u8,
@@ -418,6 +426,12 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
                 wage_annual: s.pc_wage_annual,
                 savings: s.pc_savings,
                 power_ladder: s.pc_power_ladder,
+                business_value: s.pc_business_value,
+                bankrupt: s.pc_bankrupt,
+                dev_invest_level: s.pc_dev_invest_level,
+                marketability: s.pc_marketability,
+                sponsor_tier: s.pc_sponsor_tier,
+                relationships: s.pc_relationships.to_vec(),
                 yellow_cards_season: s.pc_yellow_cards_season,
                 discipline_rep: s.pc_discipline_rep,
                 career_goals: s.pc_career_goals,
@@ -427,7 +441,7 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
                 player_of_year_wins: s.pc_player_of_year_wins,
                 sporting_rep: s.pc_sporting_rep,
                 club_fan_rep: s.pc_club_fan_rep,
-                character_rep: 100 - s.pc_discipline_rep,
+                character_rep: s.pc_character_rep,
                 lifestyle: s.pc_lifestyle,
                 is_retired: s.pc_retired,
                 has_rival: s.pc_rival_idx.is_some(),
@@ -559,6 +573,12 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
         wage_annual: s.pc_wage_annual,
         savings: s.pc_savings,
         power_ladder: s.pc_power_ladder,
+        business_value: s.pc_business_value,
+        bankrupt: s.pc_bankrupt,
+        dev_invest_level: s.pc_dev_invest_level,
+        marketability: s.pc_marketability,
+        sponsor_tier: s.pc_sponsor_tier,
+        relationships: s.pc_relationships.to_vec(),
         yellow_cards_season: s.pc_yellow_cards_season,
         discipline_rep: s.pc_discipline_rep,
         career_goals: s.pc_career_goals,
@@ -568,7 +588,7 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
         player_of_year_wins: s.pc_player_of_year_wins,
         sporting_rep: s.pc_sporting_rep,
         club_fan_rep: s.pc_club_fan_rep,
-        character_rep: 100 - s.pc_discipline_rep,
+        character_rep: s.pc_character_rep,
         lifestyle: s.pc_lifestyle,
         is_retired: s.pc_retired,
         has_rival: s.pc_rival_idx.is_some(),
@@ -873,6 +893,99 @@ pub fn set_routine(attr_ids: Vec<u8>, intensity: u8) -> GoatGameState {
     };
     let state = take_state();
     let state = reduce(state, Intent::SetRoutine { routine }, &mut GoatRng::new(0));
+    let snap = build_game_state(&state);
+    set_state(state);
+    snap
+}
+
+// ── Phase 10 economy + life actions (B.1) ────────────────────────────────────
+// One thin wrapper per existing intent — no logic here, just take/reduce/set.
+
+/// Set the development-investment level (0..=3).
+pub fn set_dev_investment(level: u8) -> GoatGameState {
+    let state = take_state();
+    let state = reduce(
+        state,
+        Intent::SetDevInvestment { level },
+        &mut GoatRng::new(0),
+    );
+    let snap = build_game_state(&state);
+    set_state(state);
+    snap
+}
+
+/// Invest `amount` (£k) into the player's business.
+pub fn invest_in_business(amount: i64) -> GoatGameState {
+    let state = take_state();
+    let state = reduce(
+        state,
+        Intent::InvestInBusiness { amount },
+        &mut GoatRng::new(0),
+    );
+    let snap = build_game_state(&state);
+    set_state(state);
+    snap
+}
+
+/// Settle the season's economy (wage/bonus plus business swing), called at
+/// season end. `season_bonus` is computed by the caller from the season's
+/// outcome.
+pub fn settle_season_economy(season_bonus: i64) -> GoatGameState {
+    let state = take_state();
+    let state = reduce(
+        state,
+        Intent::SettleSeasonEconomy { season_bonus },
+        &mut GoatRng::new(0),
+    );
+    let snap = build_game_state(&state);
+    set_state(state);
+    snap
+}
+
+/// Set marketability (0–100) — gates which sponsor tiers are reachable.
+pub fn set_marketability(value: i32) -> GoatGameState {
+    let state = take_state();
+    let state = reduce(
+        state,
+        Intent::SetMarketability { value },
+        &mut GoatRng::new(0),
+    );
+    let snap = build_game_state(&state);
+    set_state(state);
+    snap
+}
+
+/// Sign a sponsor at `tier` (eligibility gated by marketability in the reducer).
+pub fn sign_sponsor(tier: u8) -> GoatGameState {
+    let state = take_state();
+    let state = reduce(state, Intent::SignSponsor { tier }, &mut GoatRng::new(0));
+    let snap = build_game_state(&state);
+    set_state(state);
+    snap
+}
+
+/// Apply a life event to one relationship thread (0..=2) with the given delta.
+pub fn apply_life_event(thread: u8, delta: i32) -> GoatGameState {
+    let state = take_state();
+    let state = reduce(
+        state,
+        Intent::ApplyLifeEvent { thread, delta },
+        &mut GoatRng::new(0),
+    );
+    let snap = build_game_state(&state);
+    set_state(state);
+    snap
+}
+
+/// Respond to a media flashpoint; `contrite` picks the tone (Character impact
+/// lives in the reducer).
+pub fn respond_to_media(contrite: bool) -> GoatGameState {
+    let state = take_state();
+    let state = reduce(
+        state,
+        Intent::RespondToMedia { contrite },
+        &mut GoatRng::new(0),
+    );
     let snap = build_game_state(&state);
     set_state(state);
     snap
