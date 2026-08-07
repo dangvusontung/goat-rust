@@ -40,9 +40,14 @@ pub enum PunditContext {
     AwardLost { award: &'static str, winner: String },
 }
 
-pub const NUM_PUNDITS: usize = 4;
+/// Slice 1 (Design round 6, revised 2026-08-07): 3 pundits per school × 4
+/// schools. `school_idx` is many:1 — ranking sentiment is per-school, so
+/// schoolmates always agree on direction; they differ in voice and (via
+/// `tier_for`, Slice 2) credibility.
+pub const NUM_PUNDITS: usize = 12;
 
 pub const PUNDITS: [Pundit; NUM_PUNDITS] = [
+    // ── Trophy Cabinet (school 0) ────────────────────────────────────────────
     Pundit {
         name: "Marco Torres",
         role: "ex-striker, pundit",
@@ -54,6 +59,27 @@ pub const PUNDITS: [Pundit; NUM_PUNDITS] = [
         season_reaction: "{name} — {goals} goals, position {pos} in the table. The {pos}! We need titles, not mid-table finishes. I want to believe, I do.",
     },
     Pundit {
+        name: "Dana Whitmore",
+        role: "ex-captain, TV co-commentator",
+        personality: "pragmatist",
+        school_idx: 0, // Trophy Cabinet
+        praise: "I've counted medals my whole career, and {name} is collecting the right kind of seasons. {goals} goals and a real run at it — that's how cabinets get filled.",
+        neutral: "Solid season from {name}, no question. But my medal count test is simple: show me the honours list in May. Until then it's promise, not proof.",
+        doubt: "I keep hearing about potential with {name}. Potential doesn't weigh anything around your neck. This sport remembers winners, and this season isn't one.",
+        season_reaction: "{goals} goals and position {pos}. Decent numbers for {name} — but I judge careers in May, when the medals come out.",
+    },
+    Pundit {
+        name: "Ricky Davenport",
+        role: "shock-jock radio host",
+        personality: "bombastic",
+        school_idx: 0, // Trophy Cabinet
+        praise: "FINALLY! {name} gets it — {goals} goals and a title charge! THAT is what I'm talking about! This kid wants to WIN things!",
+        neutral: "{name} had moments, sure. But MOMENTS don't fill trophy rooms, people! Call me when there's silverware on the table!",
+        doubt: "I'm tired of the hype machine around {name}. No trophies, no legacy, END of conversation. Next caller!",
+        season_reaction: "{goals} goals, position {pos} — and ZERO guarantees in May! Wake me when {name} actually WINS something!",
+    },
+    // ── Eye-Test Romantics (school 1) ────────────────────────────────────────
+    Pundit {
         name: "Alice Brennan",
         role: "sports journalist, The Athletic",
         personality: "romantic",
@@ -63,6 +89,27 @@ pub const PUNDITS: [Pundit; NUM_PUNDITS] = [
         doubt: "I watch every game, and I'll be honest: {name} hasn't given me *the* moment yet. Good footballer? Sure. But to be remembered? You need to make people stop breathing for three seconds.",
         season_reaction: "{avg_output} average, {goals} goals this season. The decisive moments — were they there? I need more of those late-match sparks from {name}.",
     },
+    Pundit {
+        name: "Tomás Reyes",
+        role: "freelance football writer",
+        personality: "poet",
+        school_idx: 1, // Eye-Test Romantics
+        praise: "Some seasons are statistics; this one was a verse. {name} played like the pitch was a page and every touch a line worth rereading.",
+        neutral: "There are flashes of poetry in {name}'s game — a turn here, a pass there. I'm waiting for the full stanza.",
+        doubt: "I keep my notebook open for {name}, and the page stays blank too often. Talent without theatre is just administration.",
+        season_reaction: "{goals} goals this season, and a few of them worth framing. {name} is writing something — I just can't tell yet if it's a sonnet or a shopping list.",
+    },
+    Pundit {
+        name: "June Okafor",
+        role: "documentary filmmaker",
+        personality: "sentimental",
+        school_idx: 1, // Eye-Test Romantics
+        praise: "I've filmed footballers for twenty years, and I know the ones the camera loves. {name} plays like they know the lens is on them — in the best possible way.",
+        neutral: "The footage on {name} is good. Not great. The story is still missing its scene — every legend has one.",
+        doubt: "I keep waiting for the frame that defines {name}, and it hasn't come. You can't build a documentary around almost.",
+        season_reaction: "{goals} goals, position {pos}. {name}'s season had chapters, but I'm still waiting for the scene that makes the film.",
+    },
+    // ── Stats Purists (school 2) ─────────────────────────────────────────────
     Pundit {
         name: "Kwame Asante",
         role: "data analyst, The Numbers Don't Lie podcast",
@@ -74,6 +121,27 @@ pub const PUNDITS: [Pundit; NUM_PUNDITS] = [
         season_reaction: "Season {season}: {goals} goals, {matches} appearances, {avg_output}/100 average. The baseline is building. The career arc is what matters — single seasons tell you very little.",
     },
     Pundit {
+        name: "Ingrid Solberg",
+        role: "analytics columnist",
+        personality: "methodical",
+        school_idx: 2, // Stats Purists
+        praise: "Adjusted for minutes and opposition strength, {name}'s output curve is exactly what an elite trajectory looks like. No narrative needed — the trendline speaks.",
+        neutral: "{name}'s underlying numbers are stable, not spectacular. I want another season of data before I move them up a tier in my model.",
+        doubt: "Strip away the highlight reels and {name}'s season regresses to the mean. My model doesn't see a case here yet.",
+        season_reaction: "Season {season} for {name}: {matches} matches, {avg_output}/100 average output, {goals} goals. Logged. The model updates weekly, not emotionally.",
+    },
+    Pundit {
+        name: "Dev Kaminski",
+        role: "former quant trader, model-builder",
+        personality: "skeptic",
+        school_idx: 2, // Stats Purists
+        praise: "I short hype for a living, so believe me when I say: {name}'s numbers are genuinely underpriced. This is real production, not variance.",
+        neutral: "{name}'s season is within one standard deviation of fine. I'm not buying or selling yet.",
+        doubt: "Everyone loves a story stock. {name}'s fundamentals — {goals} goals, {avg_output} average — don't support the valuation.",
+        season_reaction: "Season {season}: {goals} goals in {matches} matches, {avg_output}/100. I've seen worse numbers get hyped harder. Show me consistency over volume, {name}.",
+    },
+    // ── Loyalty Traditionalists (school 3) ───────────────────────────────────
+    Pundit {
         name: "Pavel Straka",
         role: "ex-defender, club historian",
         personality: "traditionalist",
@@ -82,6 +150,26 @@ pub const PUNDITS: [Pundit; NUM_PUNDITS] = [
         neutral: "{name} is a good player. But I look at the loyalty question. How many clubs? A legend is forged over years at one place. I want to see that commitment before I make my judgement.",
         doubt: "{name} moves around too much for my taste. I don't care how many goals you score — if you leave the moment a bigger offer comes in, you're not a legend. You're a hired gun.",
         season_reaction: "{name} at {club} this season — {goals} goals. The connection with the fans, the consistency, the staying power. That's what the game used to be about.",
+    },
+    Pundit {
+        name: "Maggie Calloway",
+        role: "supporters' club elder",
+        personality: "faithful",
+        school_idx: 3, // Loyalty Traditionalists
+        praise: "Forty years I've stood on that terrace, and I can tell you: {name} is one of ours. Scores, stays, never looks at the door. That's family.",
+        neutral: "{name} seems a good sort, but talk to me in five years. Loyalty isn't a season — it's a habit.",
+        doubt: "I've seen a hundred like {name} — here today, agent's phone call tomorrow. We remember the ones who stayed.",
+        season_reaction: "{goals} goals for {club} this season. The fans see {name} giving everything. Whether they're one of us — that takes longer to prove.",
+    },
+    Pundit {
+        name: "Viktor Ashby",
+        role: "ex-manager, tactics historian",
+        personality: "stalwart",
+        school_idx: 3, // Loyalty Traditionalists
+        praise: "In my day you built a side around players like {name} — because they were THERE, year after year. Continuity wins more than chequebooks do.",
+        neutral: "{name} has quality, but a career is a long conversation with one club. I haven't seen that commitment yet.",
+        doubt: "Talent is common. Staying power is rare. {name} hasn't shown me the second, and without it the first fades.",
+        season_reaction: "{name}, {goals} goals at {club} this season. Ask me again when they've given the club a decade, not a season.",
     },
 ];
 
@@ -141,4 +229,60 @@ pub fn pundit_comment(
         .replace("{club}", pc_club)
         .replace("{award}", award)
         .replace("{winner}", winner)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pantheon::NUM_SCHOOLS;
+
+    #[test]
+    fn pundit_count_is_twelve() {
+        assert_eq!(NUM_PUNDITS, 12);
+        assert_eq!(PUNDITS.len(), NUM_PUNDITS);
+        assert_eq!(NUM_SCHOOLS, 4);
+    }
+
+    #[test]
+    fn every_school_has_exactly_three_pundits() {
+        for school in 0..NUM_SCHOOLS {
+            let count = PUNDITS.iter().filter(|p| p.school_idx == school).count();
+            assert_eq!(count, 3, "school {school} must have exactly 3 pundits");
+        }
+    }
+
+    #[test]
+    fn every_pundit_school_idx_in_range() {
+        assert!(PUNDITS.iter().all(|p| p.school_idx < NUM_SCHOOLS));
+    }
+
+    #[test]
+    fn no_two_schoolmates_share_a_personality_string() {
+        for school in 0..NUM_SCHOOLS {
+            let mut personalities: Vec<&str> = PUNDITS
+                .iter()
+                .filter(|p| p.school_idx == school)
+                .map(|p| p.personality)
+                .collect();
+            personalities.sort_unstable();
+            personalities.dedup();
+            assert_eq!(
+                personalities.len(),
+                3,
+                "school {school} has copy-paste personalities"
+            );
+        }
+    }
+
+    #[test]
+    fn every_pundit_has_nonempty_content_fields() {
+        for p in PUNDITS.iter() {
+            assert!(!p.name.is_empty());
+            assert!(!p.role.is_empty());
+            assert!(!p.praise.is_empty());
+            assert!(!p.neutral.is_empty());
+            assert!(!p.doubt.is_empty());
+            assert!(!p.season_reaction.is_empty());
+        }
+    }
 }
