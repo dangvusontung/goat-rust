@@ -25,11 +25,13 @@ that changed since.
 
 ## Ground rules for this doc
 
-- **No new pundit personalities, no new Pantheon schools.** `NUM_PUNDITS = 4`, `NUM_SCHOOLS =
-  4` (`pundits.rs:43`, `pantheon.rs:69`), and the existing 1:1 `Pundit.school_idx` mapping to
-  `SCHOOLS` (Trophy Cabinet / Eye-Test Romantics / Stats Purists / Loyalty Traditionalists) are
-  untouched. Confirmed explicitly by Tùng this round, after an initial "more pundits" framing
-  turned out to mean "more credibility depth per pundit," not a bigger roster.
+- **No new Pantheon schools — but new pundit personalities ARE in scope (revised 2026-08-07).**
+  `NUM_SCHOOLS = 4` stays fixed (`pantheon.rs:69`, Trophy Cabinet / Eye-Test Romantics / Stats
+  Purists / Loyalty Traditionalists), and no new ranking formula is added. `NUM_PUNDITS`
+  changes from 4 to **12** (3 pundits per school, `Pundit.school_idx` now many:1 instead of
+  1:1) — Tùng confirmed explicitly on 2026-08-07 that "more pundits" meant more people, not
+  just more credibility depth per existing pundit (see Slice 1's revision note for the full
+  back-and-forth).
 - **No continuous 0–100 credibility score.** Credibility is a small discrete tier enum.
   Tùng: "Theo bậc đi" (go with tiers).
 - **Tier assignment is deliberately simple/near-random this round, behind one function
@@ -115,28 +117,51 @@ praise/neutral/doubt logic that already exists sits dormant, attached to a conte
 no caller. **Slice 4 reuses this exact dormant logic** rather than inventing new sentiment
 rules — see 4.1.
 
-## Slice 1 — Lock the 4-personality, 4-school shape (no code change, a guard rail)
+## Slice 1 — REVISED 2026-08-07: 3 pundits per school, 12 total, 4 schools unchanged
 
-**Decision (item 1, verbatim):** the 4 named pundits stay mapped 1:1 to the 4 existing
-Pantheon schools; this doc does not add a 5th pundit or a 5th school.
+**Superseded decision, recorded for history:** this slice originally locked `NUM_PUNDITS ==
+NUM_SCHOOLS == 4` (see git history / prior revision of this file), on the reading that Tùng's
+"more pundits" ask from 2026-07-22 meant credibility depth, not headcount. **Tùng corrected
+this explicitly on 2026-08-07: he did mean more pundits (more people), not just deeper
+credibility per pundit.** Re-confirmed in chat the same day: keep the existing 4 schools
+(no 5th school, no new ranking formula), but populate each school with 3 pundits instead of
+1 — `NUM_PUNDITS = 12`, `NUM_SCHOOLS` stays `4`. "Bao nhiêu chả được" (Tùng, on the exact
+count) — 3/school was Design's pick, not a number Tùng specified himself.
 
-Nothing in `pundits.rs`/`pantheon.rs`'s existing data changes under this slice — this is
-purely a locked ground rule, stated as its own slice because it was an explicit point of
-back-and-forth with Tùng this round (he first asked for "more pundits," then clarified he
-meant credibility, not personality count) and because Slices 2–4 below are written assuming
-`NUM_PUNDITS == NUM_SCHOOLS == 4` stays true. Recorded as its own slice so a future round
-doesn't have to re-derive whether this was settled.
+**Decision (item 1, revised):** `PUNDITS: [Pundit; 12]`, `school_idx` no longer a 1:1 index —
+each of the 4 schools now has exactly 3 pundits pointing at it (`school_idx` values 0,0,0,
+1,1,1,2,2,2,3,3,3 or any grouping — order within a school doesn't matter). The 8 new pundits
+need hand-authored `name`/`role`/`personality`/`praise`/`neutral`/`doubt`/`season_reaction`
+fields in the same voice/style as the 4 existing ones (`pundits.rs:44+` — see e.g. Marco
+Torres/Alice Brennan for the template shape), 2 additional per school, each with a personality
+distinct from its school-mate(s) (e.g. Trophy Cabinet's 3 pundits shouldn't all sound like
+Marco Torres — vary age/background/tone while agreeing on the school's underlying philosophy).
+This is a content-authoring sub-task inside Slice 1, not just a data-shape change.
+
+Everything downstream (Slices 2–4) is unaffected in *shape* — `tier_for(pundit_idx, seed)`
+already takes an arbitrary index, `PunditTier`/`PunditSentiment` are per-pundit, unchanged.
+The one real ripple is Slice 4.3's aggregation formula (revised below): summing 12 pundits'
+deltas instead of 4 would triple the Reputation swing for the same underlying performance, so
+4.3 changes from a flat sum to **average-within-school, then sum the 4 school-averages** —
+this keeps the total swing magnitude the same as the original 4-pundit design regardless of
+how many pundits populate each school.
 
 ### TDD anchor
 
-- `pundit_count_locked_at_four`: `assert_eq!(NUM_PUNDITS, 4)` and `assert_eq!(NUM_SCHOOLS,
-  4)` in `pundits.rs`/`pantheon.rs` test modules (neither file has any tests today — this is
-  the first for both). A regression guard, not a functional test: if a future change bumps
-  either count without a new design pass, this fails loudly instead of silently drifting.
+- `pundit_count_is_twelve`: `assert_eq!(NUM_PUNDITS, 12)` and `assert_eq!(NUM_SCHOOLS, 4)` in
+  `pundits.rs`/`pantheon.rs` test modules (neither file has any tests today — this is the
+  first for both).
+- `every_school_has_exactly_three_pundits`: group `PUNDITS` by `school_idx`, assert each of
+  the 4 groups has length 3 — the shape Slice 4.3's per-school average depends on.
 - `every_pundit_school_idx_in_range`: `PUNDITS.iter().all(|p| p.school_idx < NUM_SCHOOLS)` —
-  cheap sanity check that the 1:1 mapping stays valid.
+  cheap sanity check that the many-to-one mapping stays valid.
+- `no_two_schoolmates_share_a_personality_string`: cheap authoring-quality guard — within each
+  school, the 3 pundits' `personality` fields are pairwise distinct (catches copy-paste
+  placeholder content, not a deep uniqueness check).
 
-**Size: trivial, risk: none.** A documentation/guard-rail slice, no behavior change.
+**Size: small (was trivial), risk: low.** No longer a pure guard-rail — it's now 8 new
+hand-authored character entries plus a data-shape change from 1:1 to many:1, but still no
+ripple into the ranking math itself (`pantheon.rs`'s `SCHOOLS`/`weights` untouched).
 
 ---
 
@@ -219,7 +244,7 @@ playtested (same convention Doc A/round-3 already apply to their own placeholder
 ### TDD anchor
 
 - `tier_for_is_deterministic_per_seed`: same `(pundit_idx, world_seed)` twice → identical tier.
-- `tier_for_varies_across_pundits_and_seeds`: across a spread of seeds and all 4 indices, all
+- `tier_for_varies_across_pundits_and_seeds`: across a spread of seeds and all 12 indices, all
   three tiers are actually reachable (not a broken distribution that only ever rolls one
   variant) — a coarse statistical check, not an exact-frequency pin (following the codebase's
   own "assert invariants, not frozen values, for new randomized behavior" convention).
@@ -357,7 +382,7 @@ but did not specify magnitudes. These are first-pass numbers in the same spirit 
 `OUTLIER_CHANCE_PCT`/`TACTICAL_BIAS_MAX_PTS` — adopted so this slice is concretely buildable
 and testable, but explicitly needing a `TASK-TUNE` pass once playtested, not locked-in balance.
 
-### 4.3 — Which Reputation facet: Sporting, summed across all 4 pundits, applied once per season
+### 4.3 — REVISED 2026-08-07: Sporting facet, averaged within each school then summed across the 4 schools, applied once per season
 
 **A real scope decision Tùng did not specify — Design's pick, flagged:** bible §8.2 defines 4
 facets; pundit debate is "the voice of the plural pantheon" (§8.1), i.e. commentary on
@@ -371,20 +396,41 @@ nudge Marketability (pundits shape *public image*, arguably a Marketability sign
 a one-line addition once Marketability's Phase-10 stub (`reputation.rs:14,46`) is unstubbed —
 not designed here since that stub is explicitly out of this doc's scope.
 
-The four pundits' individual deltas (4.2) are summed into one total and applied once, at the
-same season-end moment they're already computed:
+**Revised for 12 pundits (was: sum all 4 individual deltas directly).** Summing 12 deltas
+instead of 4 would triple the Reputation swing for the same underlying season performance —
+not what "more voices, same-size opinion" should mean. Instead: compute each school's average
+delta across its 3 pundits, then sum the 4 school-level averages. This keeps the total swing
+in the same magnitude range as the original 4-pundit design, regardless of how many pundits
+populate a school:
 
 ```rust
-let total_pundit_rep_delta: i32 = PUNDITS
-    .iter()
-    .enumerate()
-    .map(|(idx, _)| {
-        let (_, rank, _) = rankings[PUNDITS[idx].school_idx];
-        let tier = tier_for(idx, state.world_seed);
-        pundit_reputation_delta(sentiment_from_rank(rank), tier)
+let total_pundit_rep_delta: i32 = (0..NUM_SCHOOLS)
+    .map(|school_idx| {
+        let (_, rank, _) = rankings[school_idx];
+        let sentiment = sentiment_from_rank(rank); // same rank for every pundit in this school
+        let school_pundits: Vec<usize> = PUNDITS
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.school_idx == school_idx)
+            .map(|(idx, _)| idx)
+            .collect();
+        let school_sum: i32 = school_pundits
+            .iter()
+            .map(|&idx| {
+                let tier = tier_for(idx, state.world_seed);
+                pundit_reputation_delta(sentiment, tier)
+            })
+            .sum();
+        school_sum / school_pundits.len() as i32 // average within the school
     })
-    .sum();
+    .sum(); // sum the 4 school-level averages
 ```
+
+Note: every pundit in a school shares the same `rank`/`sentiment` (rank is a per-school
+value, from `all_rankings`) — only `tier` varies per pundit within a school, so the averaging
+step is really "average of 3 tier-scaled deltas for the same sentiment," not an average across
+differing opinions. A Legend-heavy school (by chance of the seed) pulls its school-average up
+even though all 3 pundits agree on direction.
 
 ### 4.4 — Wiring into `reduce`: a new `Intent`, applied after `ApplySeasonEndLegacy`
 
@@ -477,8 +523,10 @@ codebase.
 
 ## Out of scope (do not fold into this doc)
 
-- **More pundit personalities or more Pantheon schools.** Explicitly ruled out by Tùng this
-  round (Slice 1). `NUM_PUNDITS`/`NUM_SCHOOLS` stay at 4.
+- **More Pantheon schools, or a new ranking formula.** `NUM_SCHOOLS` stays at 4, `SCHOOLS`'s
+  weights/raw-signal logic (`pantheon.rs`) untouched. (More pundit *personalities* within the
+  existing 4 schools is now in scope — see Slice 1's 2026-08-07 revision — only new schools
+  are ruled out.)
 - **Real prediction-accuracy tracking / tenure-based credibility growth.** This is the
   eventual intended behavior behind `tier_for` (2.3), explicitly named by Tùng as the "real"
   mechanic he wants, but the exact formula (what counts as "proven right," how tenure accrues,
@@ -521,6 +569,11 @@ codebase.
 5. **Slice 4**: routing the impact into the **Sporting** facet only, excluding Marketability/
    Character/Club-Fan — Design's pick given the existing facet-to-system mapping, flagged as
    an open question re: Marketability specifically (4.3).
+6. **Slice 1 (2026-08-07 revision)**: 3 pundits per school (12 total) — Tùng explicitly said
+   the exact count didn't matter ("Bao nhiêu chả được"), Design picked 3.
+7. **Slice 4.3 (2026-08-07 revision)**: average-within-school-then-sum-across-schools, not a
+   flat sum of all 12 — confirmed with Tùng as the way to keep the original 4-pundit design's
+   swing magnitude, rather than tripling it by adding more voices.
 
 ## Definition of done (once Dev implements)
 
@@ -533,8 +586,8 @@ codebase.
 4. No `SaveData::VERSION` bump — tier is recomputed on demand, never persisted, per Slice 2's
    ground rule.
 5. `Pundit`'s existing `#[derive(Copy)]` and `PUNDITS: [Pundit; NUM_PUNDITS]`'s `const`-ness
-   are both unchanged — no repeat of Doc A's `Club` `Copy`→`Clone` migration cost, since
-   credibility tier is deliberately never stored on the struct (2.2).
+   are both unchanged (now `NUM_PUNDITS = 12`) — no repeat of Doc A's `Club` `Copy`→`Clone`
+   migration cost, since credibility tier is deliberately never stored on the struct (2.2).
 6. Playable gate: `cargo run -p goat-tui` → across at least one season where a pundit's
    sentiment is non-neutral, observe `pc_sporting_rep` move by the pundit-driven delta on top
    of the performance-driven update, in the same season-end render.
