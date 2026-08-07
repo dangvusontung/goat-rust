@@ -33,8 +33,12 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
 
   /// Initialize flutter_rust_bridge in mock mode.
   /// No libraries for FFI are loaded.
-  static void initMock({required RustLibApi api}) {
-    instance.initMockImpl(api: api);
+  static void initMock({
+    required RustLibApi api,
+  }) {
+    instance.initMockImpl(
+      api: api,
+    );
   }
 
   /// Dispose flutter_rust_bridge
@@ -62,28 +66,28 @@ class RustLib extends BaseEntrypoint<RustLibApi, RustLibApiImpl, RustLibWire> {
   String get codegenVersion => '2.9.0';
 
   @override
-  int get rustContentHash => -288706209;
+  int get rustContentHash => -1326156888;
 
   static const kDefaultExternalLibraryLoaderConfig =
       ExternalLibraryLoaderConfig(
-        stem: 'goat_bridge',
-        ioDirectory: '../crates/goat-bridge/target/release/',
-        webPrefix: 'pkg/',
-      );
+    stem: 'goat_bridge',
+    ioDirectory: '../crates/goat-bridge/target/release/',
+    webPrefix: 'pkg/',
+  );
 }
 
 abstract class RustLibApi extends BaseApi {
-  Future<GoatGameState> crateApiAcceptTransfer({
-    required int clubId,
-    required PlatformInt64 wage,
-    required int length,
-  });
+  Future<GoatGameState> crateApiAcceptTransfer(
+      {required int clubId, required PlatformInt64 wage, required int length});
 
   Future<GoatGameState> crateApiAdvanceWeek();
 
   Future<GoatGameState> crateApiAdvanceWeeks({required int n});
 
   Future<GoatGameState> crateApiAgitateForTransfer();
+
+  Future<GoatGameState> crateApiApplyLifeEvent(
+      {required int thread, required int delta});
 
   Future<GoatGameState> crateApiApplySeasonEnd();
 
@@ -109,6 +113,9 @@ abstract class RustLibApi extends BaseApi {
 
   Future<bool> crateApiHasActiveGame();
 
+  Future<GoatGameState> crateApiInvestInBusiness(
+      {required PlatformInt64 amount});
+
   Future<List<ClubDto>> crateApiListClubs();
 
   Future<bool> crateApiLoadBeatLibrary({required String json});
@@ -117,26 +124,33 @@ abstract class RustLibApi extends BaseApi {
 
   Future<BeatOutcomeDto?> crateApiMakeBeatChoice({required int choiceIdx});
 
-  Future<GoatGameState> crateApiNewGame({
-    required String playerName,
-    required int position,
-    required int clubId,
-    required BigInt seed,
-    required int lifestyle,
-  });
+  Future<GoatGameState> crateApiNewGame(
+      {required String playerName,
+      required int position,
+      required int clubId,
+      required BigInt seed,
+      required int lifestyle});
 
-  Future<(GoatGameState, MatchResultDto)> crateApiPlayRound({
-    required bool interactive,
-  });
+  Future<(GoatGameState, MatchResultDto)> crateApiPlayRound(
+      {required bool interactive});
+
+  Future<GoatGameState> crateApiRespondToMedia({required bool contrite});
 
   Future<GoatGameState> crateApiRetire();
 
   Future<bool> crateApiSaveGame({required String path});
 
-  Future<GoatGameState> crateApiSetRoutine({
-    required List<int> attrIds,
-    required int intensity,
-  });
+  Future<GoatGameState> crateApiSetDevInvestment({required int level});
+
+  Future<GoatGameState> crateApiSetMarketability({required int value});
+
+  Future<GoatGameState> crateApiSetRoutine(
+      {required List<int> attrIds, required int intensity});
+
+  Future<GoatGameState> crateApiSettleSeasonEconomy(
+      {required PlatformInt64 seasonBonus});
+
+  Future<GoatGameState> crateApiSignSponsor({required int tier});
 
   Future<ActiveBeatDto?> crateApiStartInteractiveMatch();
 
@@ -152,772 +166,824 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   });
 
   @override
-  Future<GoatGameState> crateApiAcceptTransfer({
-    required int clubId,
-    required PlatformInt64 wage,
-    required int length,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_u_32(clubId, serializer);
-          sse_encode_i_64(wage, serializer);
-          sse_encode_u_32(length, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 1,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiAcceptTransferConstMeta,
-        argValues: [clubId, wage, length],
-        apiImpl: this,
+  Future<GoatGameState> crateApiAcceptTransfer(
+      {required int clubId, required PlatformInt64 wage, required int length}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_u_32(clubId, serializer);
+        sse_encode_i_64(wage, serializer);
+        sse_encode_u_32(length, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 1, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiAcceptTransferConstMeta,
+      argValues: [clubId, wage, length],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiAcceptTransferConstMeta => const TaskConstMeta(
-    debugName: "accept_transfer",
-    argNames: ["clubId", "wage", "length"],
-  );
+        debugName: "accept_transfer",
+        argNames: ["clubId", "wage", "length"],
+      );
 
   @override
   Future<GoatGameState> crateApiAdvanceWeek() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 2,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiAdvanceWeekConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 2, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiAdvanceWeekConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiAdvanceWeekConstMeta =>
-      const TaskConstMeta(debugName: "advance_week", argNames: []);
+  TaskConstMeta get kCrateApiAdvanceWeekConstMeta => const TaskConstMeta(
+        debugName: "advance_week",
+        argNames: [],
+      );
 
   @override
   Future<GoatGameState> crateApiAdvanceWeeks({required int n}) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_u_32(n, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 3,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiAdvanceWeeksConstMeta,
-        argValues: [n],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_u_32(n, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 3, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiAdvanceWeeksConstMeta,
+      argValues: [n],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiAdvanceWeeksConstMeta =>
-      const TaskConstMeta(debugName: "advance_weeks", argNames: ["n"]);
+  TaskConstMeta get kCrateApiAdvanceWeeksConstMeta => const TaskConstMeta(
+        debugName: "advance_weeks",
+        argNames: ["n"],
+      );
 
   @override
   Future<GoatGameState> crateApiAgitateForTransfer() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 4,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiAgitateForTransferConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 4, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiAgitateForTransferConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiAgitateForTransferConstMeta =>
-      const TaskConstMeta(debugName: "agitate_for_transfer", argNames: []);
+  TaskConstMeta get kCrateApiAgitateForTransferConstMeta => const TaskConstMeta(
+        debugName: "agitate_for_transfer",
+        argNames: [],
+      );
+
+  @override
+  Future<GoatGameState> crateApiApplyLifeEvent(
+      {required int thread, required int delta}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_u_8(thread, serializer);
+        sse_encode_i_32(delta, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 5, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiApplyLifeEventConstMeta,
+      argValues: [thread, delta],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiApplyLifeEventConstMeta => const TaskConstMeta(
+        debugName: "apply_life_event",
+        argNames: ["thread", "delta"],
+      );
 
   @override
   Future<GoatGameState> crateApiApplySeasonEnd() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 5,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiApplySeasonEndConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 6, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiApplySeasonEndConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiApplySeasonEndConstMeta =>
-      const TaskConstMeta(debugName: "apply_season_end", argNames: []);
+  TaskConstMeta get kCrateApiApplySeasonEndConstMeta => const TaskConstMeta(
+        debugName: "apply_season_end",
+        argNames: [],
+      );
 
   @override
   Future<List<AttrDto>> crateApiGetAttributes() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 6,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_attr_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGetAttributesConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 7, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_attr_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiGetAttributesConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiGetAttributesConstMeta =>
-      const TaskConstMeta(debugName: "get_attributes", argNames: []);
+  TaskConstMeta get kCrateApiGetAttributesConstMeta => const TaskConstMeta(
+        debugName: "get_attributes",
+        argNames: [],
+      );
 
   @override
   Future<FamilyDto> crateApiGetFamilies() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 7,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_family_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGetFamiliesConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 8, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_family_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiGetFamiliesConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiGetFamiliesConstMeta =>
-      const TaskConstMeta(debugName: "get_families", argNames: []);
+  TaskConstMeta get kCrateApiGetFamiliesConstMeta => const TaskConstMeta(
+        debugName: "get_families",
+        argNames: [],
+      );
 
   @override
   Future<List<WeekFixtureDto>> crateApiGetFullSeasonFixtures() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 8,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_week_fixture_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGetFullSeasonFixturesConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 9, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_week_fixture_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiGetFullSeasonFixturesConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiGetFullSeasonFixturesConstMeta =>
-      const TaskConstMeta(debugName: "get_full_season_fixtures", argNames: []);
+      const TaskConstMeta(
+        debugName: "get_full_season_fixtures",
+        argNames: [],
+      );
 
   @override
   Future<LegacyDto> crateApiGetLegacy() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 9,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_legacy_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGetLegacyConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 10, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_legacy_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiGetLegacyConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiGetLegacyConstMeta =>
-      const TaskConstMeta(debugName: "get_legacy", argNames: []);
+  TaskConstMeta get kCrateApiGetLegacyConstMeta => const TaskConstMeta(
+        debugName: "get_legacy",
+        argNames: [],
+      );
 
   @override
   Future<List<PeerDto>> crateApiGetPeers() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 10,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_peer_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGetPeersConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 11, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_peer_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiGetPeersConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiGetPeersConstMeta =>
-      const TaskConstMeta(debugName: "get_peers", argNames: []);
+  TaskConstMeta get kCrateApiGetPeersConstMeta => const TaskConstMeta(
+        debugName: "get_peers",
+        argNames: [],
+      );
 
   @override
   Future<List<RoleDto>> crateApiGetRoles() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 11,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_role_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGetRolesConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 12, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_role_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiGetRolesConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiGetRolesConstMeta =>
-      const TaskConstMeta(debugName: "get_roles", argNames: []);
+  TaskConstMeta get kCrateApiGetRolesConstMeta => const TaskConstMeta(
+        debugName: "get_roles",
+        argNames: [],
+      );
 
   @override
   Future<List<AwardDto>> crateApiGetSeasonAwards() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 12,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_award_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGetSeasonAwardsConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 13, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_award_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiGetSeasonAwardsConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiGetSeasonAwardsConstMeta =>
-      const TaskConstMeta(debugName: "get_season_awards", argNames: []);
+  TaskConstMeta get kCrateApiGetSeasonAwardsConstMeta => const TaskConstMeta(
+        debugName: "get_season_awards",
+        argNames: [],
+      );
 
   @override
   Future<GoatGameState?> crateApiGetState() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 13,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGetStateConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 14, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiGetStateConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiGetStateConstMeta =>
-      const TaskConstMeta(debugName: "get_state", argNames: []);
+  TaskConstMeta get kCrateApiGetStateConstMeta => const TaskConstMeta(
+        debugName: "get_state",
+        argNames: [],
+      );
 
   @override
   Future<List<TableRowDto>> crateApiGetTable() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 14,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_table_row_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGetTableConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 15, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_table_row_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiGetTableConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiGetTableConstMeta =>
-      const TaskConstMeta(debugName: "get_table", argNames: []);
+  TaskConstMeta get kCrateApiGetTableConstMeta => const TaskConstMeta(
+        debugName: "get_table",
+        argNames: [],
+      );
 
   @override
   Future<List<TransferOfferDto>> crateApiGetTransferOffers() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 15,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_transfer_offer_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiGetTransferOffersConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 16, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_transfer_offer_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiGetTransferOffersConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiGetTransferOffersConstMeta =>
-      const TaskConstMeta(debugName: "get_transfer_offers", argNames: []);
+  TaskConstMeta get kCrateApiGetTransferOffersConstMeta => const TaskConstMeta(
+        debugName: "get_transfer_offers",
+        argNames: [],
+      );
 
   @override
   Future<bool> crateApiHasActiveGame() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 16,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_bool,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiHasActiveGameConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 17, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiHasActiveGameConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiHasActiveGameConstMeta =>
-      const TaskConstMeta(debugName: "has_active_game", argNames: []);
+  TaskConstMeta get kCrateApiHasActiveGameConstMeta => const TaskConstMeta(
+        debugName: "has_active_game",
+        argNames: [],
+      );
+
+  @override
+  Future<GoatGameState> crateApiInvestInBusiness(
+      {required PlatformInt64 amount}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_i_64(amount, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 18, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiInvestInBusinessConstMeta,
+      argValues: [amount],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiInvestInBusinessConstMeta => const TaskConstMeta(
+        debugName: "invest_in_business",
+        argNames: ["amount"],
+      );
 
   @override
   Future<List<ClubDto>> crateApiListClubs() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 17,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_list_club_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiListClubsConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 19, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_list_club_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiListClubsConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiListClubsConstMeta =>
-      const TaskConstMeta(debugName: "list_clubs", argNames: []);
+  TaskConstMeta get kCrateApiListClubsConstMeta => const TaskConstMeta(
+        debugName: "list_clubs",
+        argNames: [],
+      );
 
   @override
   Future<bool> crateApiLoadBeatLibrary({required String json}) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(json, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 18,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_bool,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiLoadBeatLibraryConstMeta,
-        argValues: [json],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(json, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 20, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiLoadBeatLibraryConstMeta,
+      argValues: [json],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiLoadBeatLibraryConstMeta =>
-      const TaskConstMeta(debugName: "load_beat_library", argNames: ["json"]);
+  TaskConstMeta get kCrateApiLoadBeatLibraryConstMeta => const TaskConstMeta(
+        debugName: "load_beat_library",
+        argNames: ["json"],
+      );
 
   @override
   Future<GoatGameState?> crateApiLoadGame({required String path}) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(path, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 19,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiLoadGameConstMeta,
-        argValues: [path],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(path, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 21, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiLoadGameConstMeta,
+      argValues: [path],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiLoadGameConstMeta =>
-      const TaskConstMeta(debugName: "load_game", argNames: ["path"]);
+  TaskConstMeta get kCrateApiLoadGameConstMeta => const TaskConstMeta(
+        debugName: "load_game",
+        argNames: ["path"],
+      );
 
   @override
   Future<BeatOutcomeDto?> crateApiMakeBeatChoice({required int choiceIdx}) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_u_8(choiceIdx, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 20,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_beat_outcome_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiMakeBeatChoiceConstMeta,
-        argValues: [choiceIdx],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_u_8(choiceIdx, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 22, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_beat_outcome_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiMakeBeatChoiceConstMeta,
+      argValues: [choiceIdx],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiMakeBeatChoiceConstMeta => const TaskConstMeta(
-    debugName: "make_beat_choice",
-    argNames: ["choiceIdx"],
-  );
+        debugName: "make_beat_choice",
+        argNames: ["choiceIdx"],
+      );
 
   @override
-  Future<GoatGameState> crateApiNewGame({
-    required String playerName,
-    required int position,
-    required int clubId,
-    required BigInt seed,
-    required int lifestyle,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(playerName, serializer);
-          sse_encode_u_8(position, serializer);
-          sse_encode_u_32(clubId, serializer);
-          sse_encode_u_64(seed, serializer);
-          sse_encode_u_8(lifestyle, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 21,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiNewGameConstMeta,
-        argValues: [playerName, position, clubId, seed, lifestyle],
-        apiImpl: this,
+  Future<GoatGameState> crateApiNewGame(
+      {required String playerName,
+      required int position,
+      required int clubId,
+      required BigInt seed,
+      required int lifestyle}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(playerName, serializer);
+        sse_encode_u_8(position, serializer);
+        sse_encode_u_32(clubId, serializer);
+        sse_encode_u_64(seed, serializer);
+        sse_encode_u_8(lifestyle, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 23, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiNewGameConstMeta,
+      argValues: [playerName, position, clubId, seed, lifestyle],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiNewGameConstMeta => const TaskConstMeta(
-    debugName: "new_game",
-    argNames: ["playerName", "position", "clubId", "seed", "lifestyle"],
-  );
+        debugName: "new_game",
+        argNames: ["playerName", "position", "clubId", "seed", "lifestyle"],
+      );
 
   @override
-  Future<(GoatGameState, MatchResultDto)> crateApiPlayRound({
-    required bool interactive,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_bool(interactive, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 22,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_record_goat_game_state_match_result_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiPlayRoundConstMeta,
-        argValues: [interactive],
-        apiImpl: this,
+  Future<(GoatGameState, MatchResultDto)> crateApiPlayRound(
+      {required bool interactive}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_bool(interactive, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 24, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_record_goat_game_state_match_result_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiPlayRoundConstMeta,
+      argValues: [interactive],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiPlayRoundConstMeta =>
-      const TaskConstMeta(debugName: "play_round", argNames: ["interactive"]);
+  TaskConstMeta get kCrateApiPlayRoundConstMeta => const TaskConstMeta(
+        debugName: "play_round",
+        argNames: ["interactive"],
+      );
+
+  @override
+  Future<GoatGameState> crateApiRespondToMedia({required bool contrite}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_bool(contrite, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 25, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiRespondToMediaConstMeta,
+      argValues: [contrite],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiRespondToMediaConstMeta => const TaskConstMeta(
+        debugName: "respond_to_media",
+        argNames: ["contrite"],
+      );
 
   @override
   Future<GoatGameState> crateApiRetire() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 23,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiRetireConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 26, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiRetireConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiRetireConstMeta =>
-      const TaskConstMeta(debugName: "retire", argNames: []);
+  TaskConstMeta get kCrateApiRetireConstMeta => const TaskConstMeta(
+        debugName: "retire",
+        argNames: [],
+      );
 
   @override
   Future<bool> crateApiSaveGame({required String path}) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_String(path, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 24,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_bool,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSaveGameConstMeta,
-        argValues: [path],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_String(path, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 27, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_bool,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSaveGameConstMeta,
+      argValues: [path],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiSaveGameConstMeta =>
-      const TaskConstMeta(debugName: "save_game", argNames: ["path"]);
+  TaskConstMeta get kCrateApiSaveGameConstMeta => const TaskConstMeta(
+        debugName: "save_game",
+        argNames: ["path"],
+      );
 
   @override
-  Future<GoatGameState> crateApiSetRoutine({
-    required List<int> attrIds,
-    required int intensity,
-  }) {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          sse_encode_list_prim_u_8_loose(attrIds, serializer);
-          sse_encode_u_8(intensity, serializer);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 25,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiSetRoutineConstMeta,
-        argValues: [attrIds, intensity],
-        apiImpl: this,
+  Future<GoatGameState> crateApiSetDevInvestment({required int level}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_u_8(level, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 28, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiSetDevInvestmentConstMeta,
+      argValues: [level],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSetDevInvestmentConstMeta => const TaskConstMeta(
+        debugName: "set_dev_investment",
+        argNames: ["level"],
+      );
+
+  @override
+  Future<GoatGameState> crateApiSetMarketability({required int value}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_i_32(value, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 29, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSetMarketabilityConstMeta,
+      argValues: [value],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSetMarketabilityConstMeta => const TaskConstMeta(
+        debugName: "set_marketability",
+        argNames: ["value"],
+      );
+
+  @override
+  Future<GoatGameState> crateApiSetRoutine(
+      {required List<int> attrIds, required int intensity}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_list_prim_u_8_loose(attrIds, serializer);
+        sse_encode_u_8(intensity, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 30, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSetRoutineConstMeta,
+      argValues: [attrIds, intensity],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiSetRoutineConstMeta => const TaskConstMeta(
-    debugName: "set_routine",
-    argNames: ["attrIds", "intensity"],
-  );
+        debugName: "set_routine",
+        argNames: ["attrIds", "intensity"],
+      );
+
+  @override
+  Future<GoatGameState> crateApiSettleSeasonEconomy(
+      {required PlatformInt64 seasonBonus}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_i_64(seasonBonus, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 31, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSettleSeasonEconomyConstMeta,
+      argValues: [seasonBonus],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSettleSeasonEconomyConstMeta =>
+      const TaskConstMeta(
+        debugName: "settle_season_economy",
+        argNames: ["seasonBonus"],
+      );
+
+  @override
+  Future<GoatGameState> crateApiSignSponsor({required int tier}) {
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        sse_encode_u_8(tier, serializer);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 32, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
+      ),
+      constMeta: kCrateApiSignSponsorConstMeta,
+      argValues: [tier],
+      apiImpl: this,
+    ));
+  }
+
+  TaskConstMeta get kCrateApiSignSponsorConstMeta => const TaskConstMeta(
+        debugName: "sign_sponsor",
+        argNames: ["tier"],
+      );
 
   @override
   Future<ActiveBeatDto?> crateApiStartInteractiveMatch() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 26,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_opt_box_autoadd_active_beat_dto,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiStartInteractiveMatchConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 33, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_opt_box_autoadd_active_beat_dto,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiStartInteractiveMatchConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
   TaskConstMeta get kCrateApiStartInteractiveMatchConstMeta =>
-      const TaskConstMeta(debugName: "start_interactive_match", argNames: []);
+      const TaskConstMeta(
+        debugName: "start_interactive_match",
+        argNames: [],
+      );
 
   @override
   Future<GoatGameState> crateApiStartNextSeason() {
-    return handler.executeNormal(
-      NormalTask(
-        callFfi: (port_) {
-          final serializer = SseSerializer(generalizedFrbRustBinding);
-          pdeCallFfi(
-            generalizedFrbRustBinding,
-            serializer,
-            funcId: 27,
-            port: port_,
-          );
-        },
-        codec: SseCodec(
-          decodeSuccessData: sse_decode_goat_game_state,
-          decodeErrorData: null,
-        ),
-        constMeta: kCrateApiStartNextSeasonConstMeta,
-        argValues: [],
-        apiImpl: this,
+    return handler.executeNormal(NormalTask(
+      callFfi: (port_) {
+        final serializer = SseSerializer(generalizedFrbRustBinding);
+        pdeCallFfi(generalizedFrbRustBinding, serializer,
+            funcId: 34, port: port_);
+      },
+      codec: SseCodec(
+        decodeSuccessData: sse_decode_goat_game_state,
+        decodeErrorData: null,
       ),
-    );
+      constMeta: kCrateApiStartNextSeasonConstMeta,
+      argValues: [],
+      apiImpl: this,
+    ));
   }
 
-  TaskConstMeta get kCrateApiStartNextSeasonConstMeta =>
-      const TaskConstMeta(debugName: "start_next_season", argNames: []);
+  TaskConstMeta get kCrateApiStartNextSeasonConstMeta => const TaskConstMeta(
+        debugName: "start_next_season",
+        argNames: [],
+      );
 
   @protected
   String dco_decode_String(dynamic raw) {
@@ -1078,8 +1144,8 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   GoatGameState dco_decode_goat_game_state(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
-    if (arr.length != 45)
-      throw Exception('unexpected arr length: expect 45 but see ${arr.length}');
+    if (arr.length != 51)
+      throw Exception('unexpected arr length: expect 51 but see ${arr.length}');
     return GoatGameState(
       playerName: dco_decode_String(arr[0]),
       ageYears: dco_decode_u_32(arr[1]),
@@ -1102,30 +1168,36 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       wageAnnual: dco_decode_i_64(arr[18]),
       savings: dco_decode_i_64(arr[19]),
       powerLadder: dco_decode_u_8(arr[20]),
-      yellowCardsSeason: dco_decode_u_32(arr[21]),
-      disciplineRep: dco_decode_i_32(arr[22]),
-      careerGoals: dco_decode_u_32(arr[23]),
-      careerMatches: dco_decode_u_32(arr[24]),
-      careerSeasons: dco_decode_u_32(arr[25]),
-      leagueTitles: dco_decode_u_32(arr[26]),
-      playerOfYearWins: dco_decode_u_32(arr[27]),
-      sportingRep: dco_decode_i_32(arr[28]),
-      clubFanRep: dco_decode_i_32(arr[29]),
-      characterRep: dco_decode_i_32(arr[30]),
-      lifestyle: dco_decode_u_8(arr[31]),
-      isRetired: dco_decode_bool(arr[32]),
-      hasRival: dco_decode_bool(arr[33]),
-      rivalName: dco_decode_String(arr[34]),
-      routineIntensity: dco_decode_u_8(arr[35]),
-      routineFocusAttrNames: dco_decode_list_String(arr[36]),
-      lastEvents: dco_decode_list_String(arr[37]),
-      calendarWeek: dco_decode_u_32(arr[38]),
-      calendarWeeks: dco_decode_u_32(arr[39]),
-      calendarWeekLabel: dco_decode_String(arr[40]),
-      isBreakWeek: dco_decode_bool(arr[41]),
-      weekFixtures: dco_decode_list_week_fixture_dto(arr[42]),
-      weekFixturesPlayed: dco_decode_u_32(arr[43]),
-      weekTrainingDone: dco_decode_bool(arr[44]),
+      businessValue: dco_decode_i_64(arr[21]),
+      bankrupt: dco_decode_bool(arr[22]),
+      devInvestLevel: dco_decode_u_8(arr[23]),
+      marketability: dco_decode_i_32(arr[24]),
+      sponsorTier: dco_decode_u_8(arr[25]),
+      relationships: dco_decode_list_prim_i_32_strict(arr[26]),
+      yellowCardsSeason: dco_decode_u_32(arr[27]),
+      disciplineRep: dco_decode_i_32(arr[28]),
+      careerGoals: dco_decode_u_32(arr[29]),
+      careerMatches: dco_decode_u_32(arr[30]),
+      careerSeasons: dco_decode_u_32(arr[31]),
+      leagueTitles: dco_decode_u_32(arr[32]),
+      playerOfYearWins: dco_decode_u_32(arr[33]),
+      sportingRep: dco_decode_i_32(arr[34]),
+      clubFanRep: dco_decode_i_32(arr[35]),
+      characterRep: dco_decode_i_32(arr[36]),
+      lifestyle: dco_decode_u_8(arr[37]),
+      isRetired: dco_decode_bool(arr[38]),
+      hasRival: dco_decode_bool(arr[39]),
+      rivalName: dco_decode_String(arr[40]),
+      routineIntensity: dco_decode_u_8(arr[41]),
+      routineFocusAttrNames: dco_decode_list_String(arr[42]),
+      lastEvents: dco_decode_list_String(arr[43]),
+      calendarWeek: dco_decode_u_32(arr[44]),
+      calendarWeeks: dco_decode_u_32(arr[45]),
+      calendarWeekLabel: dco_decode_String(arr[46]),
+      isBreakWeek: dco_decode_bool(arr[47]),
+      weekFixtures: dco_decode_list_week_fixture_dto(arr[48]),
+      weekFixturesPlayed: dco_decode_u_32(arr[49]),
+      weekTrainingDone: dco_decode_bool(arr[50]),
     );
   }
 
@@ -1209,6 +1281,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   List<PeerDto> dco_decode_list_peer_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     return (raw as List<dynamic>).map(dco_decode_peer_dto).toList();
+  }
+
+  @protected
+  Int32List dco_decode_list_prim_i_32_strict(dynamic raw) {
+    // Codec=Dco (DartCObject based), see doc to use other codecs
+    return raw as Int32List;
   }
 
   @protected
@@ -1313,7 +1391,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   (GoatGameState, MatchResultDto)
-  dco_decode_record_goat_game_state_match_result_dto(dynamic raw) {
+      dco_decode_record_goat_game_state_match_result_dto(dynamic raw) {
     // Codec=Dco (DartCObject based), see doc to use other codecs
     final arr = raw as List<dynamic>;
     if (arr.length != 2) {
@@ -1452,18 +1530,17 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_totalBeats = sse_decode_u_32(deserializer);
     var var_oppName = sse_decode_String(deserializer);
     return ActiveBeatDto(
-      beatId: var_beatId,
-      setup: var_setup,
-      choices: var_choices,
-      minute: var_minute,
-      playerOutput: var_playerOutput,
-      goalsFor: var_goalsFor,
-      goalsAgainst: var_goalsAgainst,
-      stamina: var_stamina,
-      beatNumber: var_beatNumber,
-      totalBeats: var_totalBeats,
-      oppName: var_oppName,
-    );
+        beatId: var_beatId,
+        setup: var_setup,
+        choices: var_choices,
+        minute: var_minute,
+        playerOutput: var_playerOutput,
+        goalsFor: var_goalsFor,
+        goalsAgainst: var_goalsAgainst,
+        stamina: var_stamina,
+        beatNumber: var_beatNumber,
+        totalBeats: var_totalBeats,
+        oppName: var_oppName);
   }
 
   @protected
@@ -1474,11 +1551,10 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_potential = sse_decode_i_32(deserializer);
     var var_family = sse_decode_String(deserializer);
     return AttrDto(
-      name: var_name,
-      current: var_current,
-      potential: var_potential,
-      family: var_family,
-    );
+        name: var_name,
+        current: var_current,
+        potential: var_potential,
+        family: var_family);
   }
 
   @protected
@@ -1491,13 +1567,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_pcScore = sse_decode_i_32(deserializer);
     var var_winnerScore = sse_decode_i_32(deserializer);
     return AwardDto(
-      awardName: var_awardName,
-      winnerName: var_winnerName,
-      runnerUp: var_runnerUp,
-      pcWon: var_pcWon,
-      pcScore: var_pcScore,
-      winnerScore: var_winnerScore,
-    );
+        awardName: var_awardName,
+        winnerName: var_winnerName,
+        runnerUp: var_runnerUp,
+        pcWon: var_pcWon,
+        pcScore: var_pcScore,
+        winnerScore: var_winnerScore);
   }
 
   @protected
@@ -1507,10 +1582,9 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_primaryAttr = sse_decode_String(deserializer);
     var var_difficulty = sse_decode_u_8(deserializer);
     return BeatChoiceDto(
-      text: var_text,
-      primaryAttr: var_primaryAttr,
-      difficulty: var_difficulty,
-    );
+        text: var_text,
+        primaryAttr: var_primaryAttr,
+        difficulty: var_difficulty);
   }
 
   @protected
@@ -1528,28 +1602,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_goalsAgainst = sse_decode_u_32(deserializer);
     var var_isComplete = sse_decode_bool(deserializer);
     var var_nextBeat = sse_decode_opt_box_autoadd_active_beat_dto(deserializer);
-    var var_finalResult = sse_decode_opt_box_autoadd_match_result_dto(
-      deserializer,
-    );
-    var var_gameState = sse_decode_opt_box_autoadd_goat_game_state(
-      deserializer,
-    );
+    var var_finalResult =
+        sse_decode_opt_box_autoadd_match_result_dto(deserializer);
+    var var_gameState =
+        sse_decode_opt_box_autoadd_goat_game_state(deserializer);
     return BeatOutcomeDto(
-      success: var_success,
-      outcomeText: var_outcomeText,
-      outputDelta: var_outputDelta,
-      goalFor: var_goalFor,
-      goalAgainst: var_goalAgainst,
-      yellowCard: var_yellowCard,
-      redCard: var_redCard,
-      playerOutput: var_playerOutput,
-      goalsFor: var_goalsFor,
-      goalsAgainst: var_goalsAgainst,
-      isComplete: var_isComplete,
-      nextBeat: var_nextBeat,
-      finalResult: var_finalResult,
-      gameState: var_gameState,
-    );
+        success: var_success,
+        outcomeText: var_outcomeText,
+        outputDelta: var_outputDelta,
+        goalFor: var_goalFor,
+        goalAgainst: var_goalAgainst,
+        yellowCard: var_yellowCard,
+        redCard: var_redCard,
+        playerOutput: var_playerOutput,
+        goalsFor: var_goalsFor,
+        goalsAgainst: var_goalsAgainst,
+        isComplete: var_isComplete,
+        nextBeat: var_nextBeat,
+        finalResult: var_finalResult,
+        gameState: var_gameState);
   }
 
   @protected
@@ -1560,32 +1631,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   ActiveBeatDto sse_decode_box_autoadd_active_beat_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_active_beat_dto(deserializer));
   }
 
   @protected
   BeatOutcomeDto sse_decode_box_autoadd_beat_outcome_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_beat_outcome_dto(deserializer));
   }
 
   @protected
   GoatGameState sse_decode_box_autoadd_goat_game_state(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_goat_game_state(deserializer));
   }
 
   @protected
   MatchResultDto sse_decode_box_autoadd_match_result_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     return (sse_decode_match_result_dto(deserializer));
   }
@@ -1599,12 +1666,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_divName = sse_decode_String(deserializer);
     var var_divIdx = sse_decode_u_32(deserializer);
     return ClubDto(
-      clubId: var_clubId,
-      name: var_name,
-      strength: var_strength,
-      divName: var_divName,
-      divIdx: var_divIdx,
-    );
+        clubId: var_clubId,
+        name: var_name,
+        strength: var_strength,
+        divName: var_divName,
+        divIdx: var_divIdx);
   }
 
   @protected
@@ -1617,13 +1683,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_defending = sse_decode_i_32(deserializer);
     var var_physical = sse_decode_i_32(deserializer);
     return FamilyDto(
-      pace: var_pace,
-      shooting: var_shooting,
-      passing: var_passing,
-      dribbling: var_dribbling,
-      defending: var_defending,
-      physical: var_physical,
-    );
+        pace: var_pace,
+        shooting: var_shooting,
+        passing: var_passing,
+        dribbling: var_dribbling,
+        defending: var_defending,
+        physical: var_physical);
   }
 
   @protected
@@ -1650,6 +1715,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_wageAnnual = sse_decode_i_64(deserializer);
     var var_savings = sse_decode_i_64(deserializer);
     var var_powerLadder = sse_decode_u_8(deserializer);
+    var var_businessValue = sse_decode_i_64(deserializer);
+    var var_bankrupt = sse_decode_bool(deserializer);
+    var var_devInvestLevel = sse_decode_u_8(deserializer);
+    var var_marketability = sse_decode_i_32(deserializer);
+    var var_sponsorTier = sse_decode_u_8(deserializer);
+    var var_relationships = sse_decode_list_prim_i_32_strict(deserializer);
     var var_yellowCardsSeason = sse_decode_u_32(deserializer);
     var var_disciplineRep = sse_decode_i_32(deserializer);
     var var_careerGoals = sse_decode_u_32(deserializer);
@@ -1675,52 +1746,57 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_weekFixturesPlayed = sse_decode_u_32(deserializer);
     var var_weekTrainingDone = sse_decode_bool(deserializer);
     return GoatGameState(
-      playerName: var_playerName,
-      ageYears: var_ageYears,
-      ageWeeksInYear: var_ageWeeksInYear,
-      energy: var_energy,
-      ovr: var_ovr,
-      injuryWeeks: var_injuryWeeks,
-      position: var_position,
-      clubName: var_clubName,
-      divName: var_divName,
-      nationality: var_nationality,
-      seasonNumber: var_seasonNumber,
-      seasonRound: var_seasonRound,
-      roundsPerSeason: var_roundsPerSeason,
-      form: var_form,
-      seasonGoals: var_seasonGoals,
-      seasonMatches: var_seasonMatches,
-      isSuspended: var_isSuspended,
-      contractSeasonsLeft: var_contractSeasonsLeft,
-      wageAnnual: var_wageAnnual,
-      savings: var_savings,
-      powerLadder: var_powerLadder,
-      yellowCardsSeason: var_yellowCardsSeason,
-      disciplineRep: var_disciplineRep,
-      careerGoals: var_careerGoals,
-      careerMatches: var_careerMatches,
-      careerSeasons: var_careerSeasons,
-      leagueTitles: var_leagueTitles,
-      playerOfYearWins: var_playerOfYearWins,
-      sportingRep: var_sportingRep,
-      clubFanRep: var_clubFanRep,
-      characterRep: var_characterRep,
-      lifestyle: var_lifestyle,
-      isRetired: var_isRetired,
-      hasRival: var_hasRival,
-      rivalName: var_rivalName,
-      routineIntensity: var_routineIntensity,
-      routineFocusAttrNames: var_routineFocusAttrNames,
-      lastEvents: var_lastEvents,
-      calendarWeek: var_calendarWeek,
-      calendarWeeks: var_calendarWeeks,
-      calendarWeekLabel: var_calendarWeekLabel,
-      isBreakWeek: var_isBreakWeek,
-      weekFixtures: var_weekFixtures,
-      weekFixturesPlayed: var_weekFixturesPlayed,
-      weekTrainingDone: var_weekTrainingDone,
-    );
+        playerName: var_playerName,
+        ageYears: var_ageYears,
+        ageWeeksInYear: var_ageWeeksInYear,
+        energy: var_energy,
+        ovr: var_ovr,
+        injuryWeeks: var_injuryWeeks,
+        position: var_position,
+        clubName: var_clubName,
+        divName: var_divName,
+        nationality: var_nationality,
+        seasonNumber: var_seasonNumber,
+        seasonRound: var_seasonRound,
+        roundsPerSeason: var_roundsPerSeason,
+        form: var_form,
+        seasonGoals: var_seasonGoals,
+        seasonMatches: var_seasonMatches,
+        isSuspended: var_isSuspended,
+        contractSeasonsLeft: var_contractSeasonsLeft,
+        wageAnnual: var_wageAnnual,
+        savings: var_savings,
+        powerLadder: var_powerLadder,
+        businessValue: var_businessValue,
+        bankrupt: var_bankrupt,
+        devInvestLevel: var_devInvestLevel,
+        marketability: var_marketability,
+        sponsorTier: var_sponsorTier,
+        relationships: var_relationships,
+        yellowCardsSeason: var_yellowCardsSeason,
+        disciplineRep: var_disciplineRep,
+        careerGoals: var_careerGoals,
+        careerMatches: var_careerMatches,
+        careerSeasons: var_careerSeasons,
+        leagueTitles: var_leagueTitles,
+        playerOfYearWins: var_playerOfYearWins,
+        sportingRep: var_sportingRep,
+        clubFanRep: var_clubFanRep,
+        characterRep: var_characterRep,
+        lifestyle: var_lifestyle,
+        isRetired: var_isRetired,
+        hasRival: var_hasRival,
+        rivalName: var_rivalName,
+        routineIntensity: var_routineIntensity,
+        routineFocusAttrNames: var_routineFocusAttrNames,
+        lastEvents: var_lastEvents,
+        calendarWeek: var_calendarWeek,
+        calendarWeeks: var_calendarWeeks,
+        calendarWeekLabel: var_calendarWeekLabel,
+        isBreakWeek: var_isBreakWeek,
+        weekFixtures: var_weekFixtures,
+        weekFixturesPlayed: var_weekFixturesPlayed,
+        weekTrainingDone: var_weekTrainingDone);
   }
 
   @protected
@@ -1753,13 +1829,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_characterRep = sse_decode_i_32(deserializer);
     var var_clubFanRep = sse_decode_i_32(deserializer);
     return LegacyDto(
-      axes: var_axes,
-      rankings: var_rankings,
-      reputationLabel: var_reputationLabel,
-      sportingRep: var_sportingRep,
-      characterRep: var_characterRep,
-      clubFanRep: var_clubFanRep,
-    );
+        axes: var_axes,
+        rankings: var_rankings,
+        reputationLabel: var_reputationLabel,
+        sportingRep: var_sportingRep,
+        characterRep: var_characterRep,
+        clubFanRep: var_clubFanRep);
   }
 
   @protected
@@ -1800,8 +1875,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   List<BeatChoiceDto> sse_decode_list_beat_choice_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -1826,8 +1900,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   List<LegacyAxisDto> sse_decode_list_legacy_axis_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -1848,6 +1921,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
       ans_.add(sse_decode_peer_dto(deserializer));
     }
     return ans_;
+  }
+
+  @protected
+  Int32List sse_decode_list_prim_i_32_strict(SseDeserializer deserializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    var len_ = sse_decode_i_32(deserializer);
+    return deserializer.buffer.getInt32List(len_);
   }
 
   @protected
@@ -1878,8 +1958,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   List<SchoolRankingDto> sse_decode_list_school_ranking_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -1892,8 +1971,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   List<TableRowDto> sse_decode_list_table_row_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -1906,8 +1984,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   List<TransferOfferDto> sse_decode_list_transfer_offer_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -1920,8 +1997,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   List<WeekFixtureDto> sse_decode_list_week_fixture_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     var len_ = sse_decode_i_32(deserializer);
@@ -1943,20 +2019,18 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_yellowCards = sse_decode_u_32(deserializer);
     var var_redCard = sse_decode_bool(deserializer);
     return MatchResultDto(
-      playerOutput: var_playerOutput,
-      goalsFor: var_goalsFor,
-      goalsAgainst: var_goalsAgainst,
-      ratingLabel: var_ratingLabel,
-      moments: var_moments,
-      yellowCards: var_yellowCards,
-      redCard: var_redCard,
-    );
+        playerOutput: var_playerOutput,
+        goalsFor: var_goalsFor,
+        goalsAgainst: var_goalsAgainst,
+        ratingLabel: var_ratingLabel,
+        moments: var_moments,
+        yellowCards: var_yellowCards,
+        redCard: var_redCard);
   }
 
   @protected
   ActiveBeatDto? sse_decode_opt_box_autoadd_active_beat_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
@@ -1968,8 +2042,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   BeatOutcomeDto? sse_decode_opt_box_autoadd_beat_outcome_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
@@ -1981,8 +2054,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   GoatGameState? sse_decode_opt_box_autoadd_goat_game_state(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
@@ -1994,8 +2066,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   MatchResultDto? sse_decode_opt_box_autoadd_match_result_dto(
-    SseDeserializer deserializer,
-  ) {
+      SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     if (sse_decode_bool(deserializer)) {
@@ -2016,21 +2087,19 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_titles = sse_decode_u_32(deserializer);
     var var_isRival = sse_decode_bool(deserializer);
     return PeerDto(
-      name: var_name,
-      nationality: var_nationality,
-      careerGoals: var_careerGoals,
-      careerMatches: var_careerMatches,
-      avgOutput: var_avgOutput,
-      titles: var_titles,
-      isRival: var_isRival,
-    );
+        name: var_name,
+        nationality: var_nationality,
+        careerGoals: var_careerGoals,
+        careerMatches: var_careerMatches,
+        avgOutput: var_avgOutput,
+        titles: var_titles,
+        isRival: var_isRival);
   }
 
   @protected
   (GoatGameState, MatchResultDto)
-  sse_decode_record_goat_game_state_match_result_dto(
-    SseDeserializer deserializer,
-  ) {
+      sse_decode_record_goat_game_state_match_result_dto(
+          SseDeserializer deserializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     var var_field0 = sse_decode_goat_game_state(deserializer);
     var var_field1 = sse_decode_match_result_dto(deserializer);
@@ -2044,10 +2113,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_rating = sse_decode_i_32(deserializer);
     var var_familiarity = sse_decode_String(deserializer);
     return RoleDto(
-      name: var_name,
-      rating: var_rating,
-      familiarity: var_familiarity,
-    );
+        name: var_name, rating: var_rating, familiarity: var_familiarity);
   }
 
   @protected
@@ -2059,12 +2125,11 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_rank = sse_decode_u_32(deserializer);
     var var_total = sse_decode_u_32(deserializer);
     return SchoolRankingDto(
-      schoolName: var_schoolName,
-      schoolTagline: var_schoolTagline,
-      score: var_score,
-      rank: var_rank,
-      total: var_total,
-    );
+        schoolName: var_schoolName,
+        schoolTagline: var_schoolTagline,
+        score: var_score,
+        rank: var_rank,
+        total: var_total);
   }
 
   @protected
@@ -2081,17 +2146,16 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_points = sse_decode_u_32(deserializer);
     var var_isPlayerClub = sse_decode_bool(deserializer);
     return TableRowDto(
-      position: var_position,
-      clubName: var_clubName,
-      played: var_played,
-      won: var_won,
-      drawn: var_drawn,
-      lost: var_lost,
-      goalsFor: var_goalsFor,
-      goalsAgainst: var_goalsAgainst,
-      points: var_points,
-      isPlayerClub: var_isPlayerClub,
-    );
+        position: var_position,
+        clubName: var_clubName,
+        played: var_played,
+        won: var_won,
+        drawn: var_drawn,
+        lost: var_lost,
+        goalsFor: var_goalsFor,
+        goalsAgainst: var_goalsAgainst,
+        points: var_points,
+        isPlayerClub: var_isPlayerClub);
   }
 
   @protected
@@ -2104,13 +2168,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_length = sse_decode_u_32(deserializer);
     var var_strength = sse_decode_u_8(deserializer);
     return TransferOfferDto(
-      clubId: var_clubId,
-      clubName: var_clubName,
-      divName: var_divName,
-      wage: var_wage,
-      length: var_length,
-      strength: var_strength,
-    );
+        clubId: var_clubId,
+        clubName: var_clubName,
+        divName: var_divName,
+        wage: var_wage,
+        length: var_length,
+        strength: var_strength);
   }
 
   @protected
@@ -2147,14 +2210,13 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     var var_played = sse_decode_bool(deserializer);
     var var_date = sse_decode_String(deserializer);
     return WeekFixtureDto(
-      round: var_round,
-      calendarWeek: var_calendarWeek,
-      opponent: var_opponent,
-      oppStrength: var_oppStrength,
-      isHome: var_isHome,
-      played: var_played,
-      date: var_date,
-    );
+        round: var_round,
+        calendarWeek: var_calendarWeek,
+        opponent: var_opponent,
+        oppStrength: var_oppStrength,
+        isHome: var_isHome,
+        played: var_played,
+        date: var_date);
   }
 
   @protected
@@ -2165,9 +2227,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_active_beat_dto(
-    ActiveBeatDto self,
-    SseSerializer serializer,
-  ) {
+      ActiveBeatDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_32(self.beatId, serializer);
     sse_encode_String(self.setup, serializer);
@@ -2204,9 +2264,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_beat_choice_dto(
-    BeatChoiceDto self,
-    SseSerializer serializer,
-  ) {
+      BeatChoiceDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.text, serializer);
     sse_encode_String(self.primaryAttr, serializer);
@@ -2215,9 +2273,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_beat_outcome_dto(
-    BeatOutcomeDto self,
-    SseSerializer serializer,
-  ) {
+      BeatOutcomeDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_bool(self.success, serializer);
     sse_encode_String(self.outcomeText, serializer);
@@ -2243,36 +2299,28 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_box_autoadd_active_beat_dto(
-    ActiveBeatDto self,
-    SseSerializer serializer,
-  ) {
+      ActiveBeatDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_active_beat_dto(self, serializer);
   }
 
   @protected
   void sse_encode_box_autoadd_beat_outcome_dto(
-    BeatOutcomeDto self,
-    SseSerializer serializer,
-  ) {
+      BeatOutcomeDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_beat_outcome_dto(self, serializer);
   }
 
   @protected
   void sse_encode_box_autoadd_goat_game_state(
-    GoatGameState self,
-    SseSerializer serializer,
-  ) {
+      GoatGameState self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_goat_game_state(self, serializer);
   }
 
   @protected
   void sse_encode_box_autoadd_match_result_dto(
-    MatchResultDto self,
-    SseSerializer serializer,
-  ) {
+      MatchResultDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_match_result_dto(self, serializer);
   }
@@ -2300,9 +2348,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_goat_game_state(
-    GoatGameState self,
-    SseSerializer serializer,
-  ) {
+      GoatGameState self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.playerName, serializer);
     sse_encode_u_32(self.ageYears, serializer);
@@ -2325,6 +2371,12 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
     sse_encode_i_64(self.wageAnnual, serializer);
     sse_encode_i_64(self.savings, serializer);
     sse_encode_u_8(self.powerLadder, serializer);
+    sse_encode_i_64(self.businessValue, serializer);
+    sse_encode_bool(self.bankrupt, serializer);
+    sse_encode_u_8(self.devInvestLevel, serializer);
+    sse_encode_i_32(self.marketability, serializer);
+    sse_encode_u_8(self.sponsorTier, serializer);
+    sse_encode_list_prim_i_32_strict(self.relationships, serializer);
     sse_encode_u_32(self.yellowCardsSeason, serializer);
     sse_encode_i_32(self.disciplineRep, serializer);
     sse_encode_u_32(self.careerGoals, serializer);
@@ -2365,9 +2417,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_legacy_axis_dto(
-    LegacyAxisDto self,
-    SseSerializer serializer,
-  ) {
+      LegacyAxisDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.name, serializer);
     sse_encode_i_32(self.value, serializer);
@@ -2404,9 +2454,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_award_dto(
-    List<AwardDto> self,
-    SseSerializer serializer,
-  ) {
+      List<AwardDto> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -2416,9 +2464,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_beat_choice_dto(
-    List<BeatChoiceDto> self,
-    SseSerializer serializer,
-  ) {
+      List<BeatChoiceDto> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -2437,9 +2483,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_legacy_axis_dto(
-    List<LegacyAxisDto> self,
-    SseSerializer serializer,
-  ) {
+      List<LegacyAxisDto> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -2457,22 +2501,25 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
   }
 
   @protected
-  void sse_encode_list_prim_u_8_loose(
-    List<int> self,
-    SseSerializer serializer,
-  ) {
+  void sse_encode_list_prim_i_32_strict(
+      Int32List self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
-    serializer.buffer.putUint8List(
-      self is Uint8List ? self : Uint8List.fromList(self),
-    );
+    serializer.buffer.putInt32List(self);
+  }
+
+  @protected
+  void sse_encode_list_prim_u_8_loose(
+      List<int> self, SseSerializer serializer) {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    sse_encode_i_32(self.length, serializer);
+    serializer.buffer
+        .putUint8List(self is Uint8List ? self : Uint8List.fromList(self));
   }
 
   @protected
   void sse_encode_list_prim_u_8_strict(
-    Uint8List self,
-    SseSerializer serializer,
-  ) {
+      Uint8List self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     serializer.buffer.putUint8List(self);
@@ -2489,9 +2536,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_school_ranking_dto(
-    List<SchoolRankingDto> self,
-    SseSerializer serializer,
-  ) {
+      List<SchoolRankingDto> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -2501,9 +2546,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_table_row_dto(
-    List<TableRowDto> self,
-    SseSerializer serializer,
-  ) {
+      List<TableRowDto> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -2513,9 +2556,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_transfer_offer_dto(
-    List<TransferOfferDto> self,
-    SseSerializer serializer,
-  ) {
+      List<TransferOfferDto> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -2525,9 +2566,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_list_week_fixture_dto(
-    List<WeekFixtureDto> self,
-    SseSerializer serializer,
-  ) {
+      List<WeekFixtureDto> self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.length, serializer);
     for (final item in self) {
@@ -2537,9 +2576,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_match_result_dto(
-    MatchResultDto self,
-    SseSerializer serializer,
-  ) {
+      MatchResultDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_i_32(self.playerOutput, serializer);
     sse_encode_u_32(self.goalsFor, serializer);
@@ -2552,9 +2589,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_opt_box_autoadd_active_beat_dto(
-    ActiveBeatDto? self,
-    SseSerializer serializer,
-  ) {
+      ActiveBeatDto? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
@@ -2565,9 +2600,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_opt_box_autoadd_beat_outcome_dto(
-    BeatOutcomeDto? self,
-    SseSerializer serializer,
-  ) {
+      BeatOutcomeDto? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
@@ -2578,9 +2611,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_opt_box_autoadd_goat_game_state(
-    GoatGameState? self,
-    SseSerializer serializer,
-  ) {
+      GoatGameState? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
@@ -2591,9 +2622,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_opt_box_autoadd_match_result_dto(
-    MatchResultDto? self,
-    SseSerializer serializer,
-  ) {
+      MatchResultDto? self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
 
     sse_encode_bool(self != null, serializer);
@@ -2616,9 +2645,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_record_goat_game_state_match_result_dto(
-    (GoatGameState, MatchResultDto) self,
-    SseSerializer serializer,
-  ) {
+      (GoatGameState, MatchResultDto) self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_goat_game_state(self.$1, serializer);
     sse_encode_match_result_dto(self.$2, serializer);
@@ -2634,9 +2661,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_school_ranking_dto(
-    SchoolRankingDto self,
-    SseSerializer serializer,
-  ) {
+      SchoolRankingDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_String(self.schoolName, serializer);
     sse_encode_String(self.schoolTagline, serializer);
@@ -2662,9 +2687,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_transfer_offer_dto(
-    TransferOfferDto self,
-    SseSerializer serializer,
-  ) {
+      TransferOfferDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_32(self.clubId, serializer);
     sse_encode_String(self.clubName, serializer);
@@ -2699,9 +2722,7 @@ class RustLibApiImpl extends RustLibApiImplPlatform implements RustLibApi {
 
   @protected
   void sse_encode_week_fixture_dto(
-    WeekFixtureDto self,
-    SseSerializer serializer,
-  ) {
+      WeekFixtureDto self, SseSerializer serializer) {
     // Codec=Sse (Serialization based), see doc to use other codecs
     sse_encode_u_32(self.round, serializer);
     sse_encode_u_32(self.calendarWeek, serializer);

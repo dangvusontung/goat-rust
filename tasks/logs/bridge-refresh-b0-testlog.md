@@ -35,3 +35,33 @@ only failure: smoke_stdin 10 pre-existing (baseline unchanged)
 ```
 Changed 13 dependencies! (resolves flutter_rust_bridge 2.9.0 from pub.dev)
 ```
+
+---
+
+# B.1 economy/sponsors/life — log (2026-08-07T17:52:31+07:00)
+
+## codegen regen after DTO change (D2 loop proof)
+```text
+$ cd app && flutter_rust_bridge_codegen generate
+Done!  (frb_generated.rs + Dart bindings regenerated for the 6 new GoatGameState fields + 7 new pub fns)
+```
+
+## cargo test -p goat-bridge
+```
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test bridge_phase10_actions_match_direct_reduce ... ok
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+## workspace
+```
+suites ok: 39
+only failure: smoke_stdin 10 pre-existing (baseline unchanged)
+```
+
+## fmt/clippy
+```
+fmt clean
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
+```

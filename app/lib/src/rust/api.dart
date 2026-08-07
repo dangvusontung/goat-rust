@@ -30,19 +30,18 @@ Future<List<ClubDto>> listClubs() => RustLib.instance.api.crateApiListClubs();
 /// `frb_generated.rs` signature — it is now ignored. Lifestyle is derived (bible
 /// §8.5/§8.6) from training intensity, dev investment and sponsor choices over the
 /// career; read it back via the `lifestyle` field on `GoatGameState`.
-Future<GoatGameState> newGame({
-  required String playerName,
-  required int position,
-  required int clubId,
-  required BigInt seed,
-  required int lifestyle,
-}) => RustLib.instance.api.crateApiNewGame(
-  playerName: playerName,
-  position: position,
-  clubId: clubId,
-  seed: seed,
-  lifestyle: lifestyle,
-);
+Future<GoatGameState> newGame(
+        {required String playerName,
+        required int position,
+        required int clubId,
+        required BigInt seed,
+        required int lifestyle}) =>
+    RustLib.instance.api.crateApiNewGame(
+        playerName: playerName,
+        position: position,
+        clubId: clubId,
+        seed: seed,
+        lifestyle: lifestyle);
 
 /// Advance one training week. Returns updated state.
 Future<GoatGameState> advanceWeek() =>
@@ -62,18 +61,48 @@ Future<GoatGameState> advanceWeeks({required int n}) =>
     RustLib.instance.api.crateApiAdvanceWeeks(n: n);
 
 /// Set weekly training routine. `attr_ids` are AttrId discriminants (0..29).
-Future<GoatGameState> setRoutine({
-  required List<int> attrIds,
-  required int intensity,
-}) => RustLib.instance.api.crateApiSetRoutine(
-  attrIds: attrIds,
-  intensity: intensity,
-);
+Future<GoatGameState> setRoutine(
+        {required List<int> attrIds, required int intensity}) =>
+    RustLib.instance.api
+        .crateApiSetRoutine(attrIds: attrIds, intensity: intensity);
+
+/// Set the development-investment level (0..=3).
+Future<GoatGameState> setDevInvestment({required int level}) =>
+    RustLib.instance.api.crateApiSetDevInvestment(level: level);
+
+/// Invest `amount` (£k) into the player's business.
+Future<GoatGameState> investInBusiness({required PlatformInt64 amount}) =>
+    RustLib.instance.api.crateApiInvestInBusiness(amount: amount);
+
+/// Settle the season's economy (wage/bonus plus business swing), called at
+/// season end. `season_bonus` is computed by the caller from the season's
+/// outcome.
+Future<GoatGameState> settleSeasonEconomy(
+        {required PlatformInt64 seasonBonus}) =>
+    RustLib.instance.api.crateApiSettleSeasonEconomy(seasonBonus: seasonBonus);
+
+/// Set marketability (0–100) — gates which sponsor tiers are reachable.
+Future<GoatGameState> setMarketability({required int value}) =>
+    RustLib.instance.api.crateApiSetMarketability(value: value);
+
+/// Sign a sponsor at `tier` (eligibility gated by marketability in the reducer).
+Future<GoatGameState> signSponsor({required int tier}) =>
+    RustLib.instance.api.crateApiSignSponsor(tier: tier);
+
+/// Apply a life event to one relationship thread (0..=2) with the given delta.
+Future<GoatGameState> applyLifeEvent(
+        {required int thread, required int delta}) =>
+    RustLib.instance.api.crateApiApplyLifeEvent(thread: thread, delta: delta);
+
+/// Respond to a media flashpoint; `contrite` picks the tone (Character impact
+/// lives in the reducer).
+Future<GoatGameState> respondToMedia({required bool contrite}) =>
+    RustLib.instance.api.crateApiRespondToMedia(contrite: contrite);
 
 /// Auto-play or skip the current season round.
-Future<(GoatGameState, MatchResultDto)> playRound({
-  required bool interactive,
-}) => RustLib.instance.api.crateApiPlayRound(interactive: interactive);
+Future<(GoatGameState, MatchResultDto)> playRound(
+        {required bool interactive}) =>
+    RustLib.instance.api.crateApiPlayRound(interactive: interactive);
 
 /// Get every fixture for the player's club across the full season, not just
 /// the current calendar week. Fixture generation is deterministic and pure
@@ -112,15 +141,12 @@ Future<GoatGameState> startNextSeason() =>
     RustLib.instance.api.crateApiStartNextSeason();
 
 /// Accept a transfer offer identified by club_id.
-Future<GoatGameState> acceptTransfer({
-  required int clubId,
-  required PlatformInt64 wage,
-  required int length,
-}) => RustLib.instance.api.crateApiAcceptTransfer(
-  clubId: clubId,
-  wage: wage,
-  length: length,
-);
+Future<GoatGameState> acceptTransfer(
+        {required int clubId,
+        required PlatformInt64 wage,
+        required int length}) =>
+    RustLib.instance.api
+        .crateApiAcceptTransfer(clubId: clubId, wage: wage, length: length);
 
 /// Agitate for a transfer (advance power ladder, burn rep).
 Future<GoatGameState> agitateForTransfer() =>
@@ -481,6 +507,14 @@ class GoatGameState {
   final PlatformInt64 wageAnnual;
   final PlatformInt64 savings;
   final int powerLadder;
+  final PlatformInt64 businessValue;
+  final bool bankrupt;
+  final int devInvestLevel;
+  final int marketability;
+  final int sponsorTier;
+
+  /// The three relationship threads' current scores.
+  final Int32List relationships;
   final int yellowCardsSeason;
   final int disciplineRep;
   final int careerGoals;
@@ -542,6 +576,12 @@ class GoatGameState {
     required this.wageAnnual,
     required this.savings,
     required this.powerLadder,
+    required this.businessValue,
+    required this.bankrupt,
+    required this.devInvestLevel,
+    required this.marketability,
+    required this.sponsorTier,
+    required this.relationships,
     required this.yellowCardsSeason,
     required this.disciplineRep,
     required this.careerGoals,
@@ -591,6 +631,12 @@ class GoatGameState {
       wageAnnual.hashCode ^
       savings.hashCode ^
       powerLadder.hashCode ^
+      businessValue.hashCode ^
+      bankrupt.hashCode ^
+      devInvestLevel.hashCode ^
+      marketability.hashCode ^
+      sponsorTier.hashCode ^
+      relationships.hashCode ^
       yellowCardsSeason.hashCode ^
       disciplineRep.hashCode ^
       careerGoals.hashCode ^
@@ -642,6 +688,12 @@ class GoatGameState {
           wageAnnual == other.wageAnnual &&
           savings == other.savings &&
           powerLadder == other.powerLadder &&
+          businessValue == other.businessValue &&
+          bankrupt == other.bankrupt &&
+          devInvestLevel == other.devInvestLevel &&
+          marketability == other.marketability &&
+          sponsorTier == other.sponsorTier &&
+          relationships == other.relationships &&
           yellowCardsSeason == other.yellowCardsSeason &&
           disciplineRep == other.disciplineRep &&
           careerGoals == other.careerGoals &&
@@ -672,7 +724,10 @@ class LegacyAxisDto {
   final String name;
   final int value;
 
-  const LegacyAxisDto({required this.name, required this.value});
+  const LegacyAxisDto({
+    required this.name,
+    required this.value,
+  });
 
   @override
   int get hashCode => name.hashCode ^ value.hashCode;
