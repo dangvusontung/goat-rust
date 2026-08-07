@@ -2815,8 +2815,16 @@ fn run_awards_and_pundits(
     let rankings = all_rankings(&ev, &axes);
 
     writeln!(out, "\n  --- THE PUNDITS ---").unwrap();
+    // Slice 4 (round 6): the season's aggregate pundit impact on Sporting
+    // reputation — per-school average of tier-scaled sentiment deltas, summed
+    // across the 4 schools. Computed from the post-legacy rankings, applied
+    // additively AFTER ApplySeasonEndLegacy (which already overwrote
+    // pc_sporting_rep with the performance-only value) via its own intent.
+    let school_ranks: Vec<usize> = rankings.iter().map(|&(_, rank, _)| rank).collect();
+    let total_pundit_delta =
+        goat_meta::pundits::season_pundit_rep_delta(&school_ranks, state.world_seed);
+
     for (pundit_idx, pundit) in PUNDITS.iter().enumerate() {
-        let (_, rank, _) = rankings[pundit.school_idx];
         // Round 6 Slice 3: the credibility tier is computed here, at the one
         // live comment call site (never stored on the const struct, never
         // persisted — Slice 2.2). Shown in the byline (Slice 3.2) and consumed
@@ -2851,7 +2859,22 @@ fn run_awards_and_pundits(
         if !line.trim().is_empty() {
             writeln!(out, "{}\"", line).unwrap();
         }
-        let _ = rank;
+    }
+
+    if total_pundit_delta != 0 {
+        writeln!(
+            out,
+            "\n  (Pundit chatter nudges your sporting reputation by {:+}.)",
+            total_pundit_delta
+        )
+        .unwrap();
+        state = reduce(
+            state,
+            Intent::ApplyPunditReputationImpact {
+                sporting_rep_delta: total_pundit_delta,
+            },
+            &mut GoatRng::new(0),
+        );
     }
 
     state

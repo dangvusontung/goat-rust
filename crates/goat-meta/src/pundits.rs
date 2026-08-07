@@ -197,6 +197,81 @@ impl PunditTier {
             PunditTier::Legend => "Legend",
         }
     }
+
+    /// Credibility-tier multiplier on Reputation impact, in permille
+    /// (1000 = ×1.0) — same permille-arithmetic idiom as tactical_identity's
+    /// tactical_nudge, integer-only. TUNABLE (Design's first pass, flagged for
+    /// TASK-TUNE — Tùng confirmed the mechanism, not the magnitudes).
+    pub fn reputation_multiplier_permille(self) -> i32 {
+        match self {
+            PunditTier::Rookie => 400, // ×0.4 — a green rookie's take barely registers
+            PunditTier::Established => 1000, // ×1.0 — baseline
+            PunditTier::Legend => 2200, // ×2.2 — a veteran's take carries real weight
+        }
+    }
+}
+
+/// Sentiment classification for a pundit's school rank (Slice 4.1) — extracted
+/// from `pundit_comment`'s Pantheon branch so the reputation-impact calc and
+/// the (dormant) template selection share one source of truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PunditSentiment {
+    Praise,
+    Neutral,
+    Doubt,
+}
+
+/// Same thresholds `pundit_comment`'s `Pantheon` arm always used — top 3
+/// praise, 4–7 neutral, beyond that doubt.
+pub fn sentiment_from_rank(rank: usize) -> PunditSentiment {
+    if rank <= 3 {
+        PunditSentiment::Praise
+    } else if rank <= 7 {
+        PunditSentiment::Neutral
+    } else {
+        PunditSentiment::Doubt
+    }
+}
+
+/// Magnitude of a single pundit's praise/doubt before tier scaling. TUNABLE
+/// (Design's first pass, flagged for TASK-TUNE).
+const PUNDIT_BASE_REP_DELTA: i32 = 3;
+
+/// One pundit's Reputation-impact contribution this season. `Neutral` always
+/// contributes 0 regardless of tier — there is nothing for a multiplier to
+/// scale. Truncating integer division keeps it float-free.
+pub fn pundit_reputation_delta(sentiment: PunditSentiment, tier: PunditTier) -> i32 {
+    let base = match sentiment {
+        PunditSentiment::Praise => PUNDIT_BASE_REP_DELTA,
+        PunditSentiment::Neutral => 0,
+        PunditSentiment::Doubt => -PUNDIT_BASE_REP_DELTA,
+    };
+    (base * tier.reputation_multiplier_permille()) / 1000
+}
+
+/// The season's aggregate pundit-commentary Reputation impact (Slice 4.3,
+/// revised 2026-08-07 for 12 pundits): average the tier-scaled deltas WITHIN
+/// each school (its 3 pundits share the school's rank/sentiment; only their
+/// tiers differ), then sum the 4 school averages — keeping the total swing in
+/// the same magnitude range as the original 4-pundit design regardless of
+/// headcount per school.
+pub fn season_pundit_rep_delta(school_ranks: &[usize], world_seed: u64) -> i32 {
+    (0..crate::pantheon::NUM_SCHOOLS)
+        .map(|school_idx| {
+            let sentiment = sentiment_from_rank(school_ranks[school_idx]);
+            let school_pundits: Vec<usize> = PUNDITS
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.school_idx == school_idx)
+                .map(|(idx, _)| idx)
+                .collect();
+            let school_sum: i32 = school_pundits
+                .iter()
+                .map(|&idx| pundit_reputation_delta(sentiment, tier_for(idx, world_seed)))
+                .sum();
+            school_sum / school_pundits.len() as i32
+        })
+        .sum()
 }
 
 /// Deliberately simple/placeholder tier assignment — a seeded roll per
@@ -239,15 +314,11 @@ pub fn pundit_comment(
 ) -> String {
     let template = match ctx {
         PunditContext::Season { .. } => pundit.season_reaction,
-        PunditContext::Pantheon { rank } => {
-            if *rank <= 3 {
-                pundit.praise
-            } else if *rank <= 7 {
-                pundit.neutral
-            } else {
-                pundit.doubt
-            }
-        }
+        PunditContext::Pantheon { rank } => match sentiment_from_rank(*rank) {
+            PunditSentiment::Praise => pundit.praise,
+            PunditSentiment::Neutral => pundit.neutral,
+            PunditSentiment::Doubt => pundit.doubt,
+        },
         PunditContext::AwardWon { .. } => pundit.praise,
         PunditContext::AwardLost { .. } => pundit.neutral,
     };
@@ -396,5 +467,100 @@ mod tests {
             (0.07..=0.23).contains(&l),
             "legend share {l:.3} vs declared 0.15"
         );
+    }
+
+    // ── Slice 4: sentiment + reputation delta ────────────────────────────────
+
+    #[test]
+    fn sentiment_from_rank_matches_existing_thresholds() {
+        for rank in 1..=3 {
+            assert_eq!(sentiment_from_rank(rank), PunditSentiment::Praise);
+        }
+        for rank in 4..=7 {
+            assert_eq!(sentiment_from_rank(rank), PunditSentiment::Neutral);
+        }
+        for rank in 8..=20 {
+            assert_eq!(sentiment_from_rank(rank), PunditSentiment::Doubt);
+        }
+    }
+
+    /// Refactor-safety guard for 4.1: the Pantheon arm must produce
+    /// byte-identical output after the sentiment_from_rank extraction.
+    #[test]
+    fn pundit_comment_pantheon_arm_unchanged_after_refactor() {
+        let axes = LegacyAxes {
+            winning: goat_fixed::Fixed::ZERO,
+            accolades: goat_fixed::Fixed::ZERO,
+            output: goat_fixed::Fixed::from_int(80),
+            longevity: goat_fixed::Fixed::ZERO,
+            decisive: goat_fixed::Fixed::ZERO,
+            loyalty: goat_fixed::Fixed::ZERO,
+            icon: goat_fixed::Fixed::ZERO,
+            head_to_head: goat_fixed::Fixed::ZERO,
+        };
+        for rank in [1usize, 3, 4, 7, 8, 12] {
+            let out = pundit_comment(
+                &PUNDITS[0],
+                &axes,
+                &PunditContext::Pantheon { rank },
+                "Test Player",
+                "Test FC",
+                1,
+            );
+            let expected_template = if rank <= 3 {
+                PUNDITS[0].praise
+            } else if rank <= 7 {
+                PUNDITS[0].neutral
+            } else {
+                PUNDITS[0].doubt
+            };
+            assert!(
+                out.contains(expected_template.split('{').next().unwrap()),
+                "rank {rank} must still pick the same template"
+            );
+        }
+    }
+
+    #[test]
+    fn pundit_reputation_delta_scales_with_tier() {
+        let rookie = pundit_reputation_delta(PunditSentiment::Praise, PunditTier::Rookie);
+        let established = pundit_reputation_delta(PunditSentiment::Praise, PunditTier::Established);
+        let legend = pundit_reputation_delta(PunditSentiment::Praise, PunditTier::Legend);
+        assert!(legend > established && established > rookie && rookie > 0);
+    }
+
+    #[test]
+    fn pundit_reputation_delta_neutral_is_always_zero() {
+        for tier in [
+            PunditTier::Rookie,
+            PunditTier::Established,
+            PunditTier::Legend,
+        ] {
+            assert_eq!(pundit_reputation_delta(PunditSentiment::Neutral, tier), 0);
+        }
+    }
+
+    #[test]
+    fn pundit_reputation_delta_sign_matches_sentiment() {
+        for tier in [
+            PunditTier::Rookie,
+            PunditTier::Established,
+            PunditTier::Legend,
+        ] {
+            assert!(pundit_reputation_delta(PunditSentiment::Praise, tier) > 0);
+            assert!(pundit_reputation_delta(PunditSentiment::Doubt, tier) < 0);
+        }
+    }
+
+    #[test]
+    fn season_pundit_rep_delta_averages_within_schools() {
+        // All-praise ranks: each school contributes the average of its 3
+        // tier-scaled praise deltas; the total is the sum of the 4 school
+        // averages (NOT 12 individual deltas).
+        let total = season_pundit_rep_delta(&[1, 1, 1, 1], 42);
+        assert!(total > 0, "all-praise season must move rep up");
+        let total = season_pundit_rep_delta(&[10, 10, 10, 10], 42);
+        assert!(total < 0, "all-doubt season must move rep down");
+        assert_eq!(season_pundit_rep_delta(&[5, 5, 5, 5], 42), 0);
     }
 }
