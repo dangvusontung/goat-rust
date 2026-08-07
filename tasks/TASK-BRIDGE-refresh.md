@@ -19,13 +19,11 @@ This task brings it current. It is a **catch-up, not a rewrite** — the pattern
 - **Gap:** zero references to economy/sponsors/life/retirement/genesis/rival/history/
   calendar. It mirrors ~Phase 8.
 
-## ⚑ Decisions to confirm (pause before Slice 1)
-- **D1 — Screen-text strategy.** Player-facing text for screens currently lives in
-  `goat-tui` render fns, not core. (a) Lift NEW Phase 9/10 strings into core as
-  template+slot as we expose them (Flutter + TUI share; true to the architecture); or
-  (b) each renderer owns its strings (faster, but duplicated). *Recommend (a) for new
-  surface; don't retro-migrate Phases 1–8 text in this task.*
-- **D2 — Codegen / Dart workflow (CORRECTED — this is a hard prerequisite).**
+## ⚑ Decisions (confirmed by Tùng 2026-08-07 — no pause needed before Slice 1)
+- **D1 — Screen-text strategy: CONFIRMED (a).** Lift NEW Phase 9/10 strings into core as
+  template+slot as we expose them (Flutter + TUI share; true to the architecture). Applies
+  only to NEW strings for this task's surface — do NOT retro-migrate Phases 1–8 text.
+- **D2 — Codegen / Dart workflow (CORRECTED — this is a hard prerequisite, not a choice).**
   `frb_generated.rs` is codegen and is **field-locked**: it constructs
   `GoatGameState { … }` field-by-field, so changing ANY DTO breaks its compilation. It can
   only be fixed by regenerating with `flutter_rust_bridge_codegen`, which (a) is **not
@@ -33,8 +31,8 @@ This task brings it current. It is a **catch-up, not a rewrite** — the pattern
   not exist**. Flutter/Dart SDKs ARE installed. So a minimal Dart target + the codegen
   toolchain must be stood up FIRST (new Slice B.0) — you cannot edit the FFI structs
   before then. Hand-editing `frb_generated.rs` is forbidden.
-- **D3 — World-data exposure granularity.** *Recommend read-only summaries* (current
-  standings/top scorers per league, pantheon canon, rival verdict, history slice) — never
+- **D3 — World-data exposure granularity: CONFIRMED read-only summaries only.** Current
+  standings/top scorers per league, pantheon canon, rival verdict, history slice — never
   the raw 20–30k population over FFI.
 
 ## TDD anchor (the load-bearing one)

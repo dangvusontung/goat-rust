@@ -1,0 +1,15 @@
+name: goat_app
+description: GOAT Flutter client — minimal Dart target for flutter_rust_bridge codegen (TASK-BRIDGE-refresh B.0). The real app scaffold is a follow-on task.
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: ^3.0.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_rust_bridge: 2.9.0
+
+flutter:
+  uses-material-design: true
