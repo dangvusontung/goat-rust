@@ -65,3 +65,25 @@ only failure: smoke_stdin 10 pre-existing (baseline unchanged)
 fmt clean
     Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.09s
 ```
+
+---
+
+# B.2–B.5 calendar/world/verdict + regen hardening — log (2026-08-07T18:10:25+07:00)
+
+## cargo test -p goat-bridge
+```
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+```
+
+## B.2 fields: epoch_day, last_flashpoints (FlashpointDto{day,window,label})
+## B.3 read-models: get_pantheon_canon / get_rival_verdict / get_world_standings / get_world_fingerprint
+## B.4: should_retire / get_final_verdict (4 school placements via all_rankings)
+## B.5: frb_generated.rs + Dart bindings regenerated; regen command documented in crates/goat-bridge/README.md
+
+## workspace
+```
+suites ok: 39
+only failure: smoke_stdin 10 pre-existing (baseline unchanged)
+```

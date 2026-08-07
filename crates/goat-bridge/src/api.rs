@@ -224,6 +224,12 @@ pub struct GoatGameState {
     pub week_fixtures_played: u32,
     /// True if the player has used their training session this calendar week.
     pub week_training_done: bool,
+
+    // Calendar engine position + this week's window flashpoints (B.2)
+    /// Days since career start (drives the CalendarEngine week ticks).
+    pub epoch_day: u32,
+    /// Window-opening flashpoints accumulated by the most recent week tick.
+    pub last_flashpoints: Vec<FlashpointDto>,
 }
 
 pub struct AttrDto {
@@ -231,6 +237,16 @@ pub struct AttrDto {
     pub current: i32,
     pub potential: i32,
     pub family: String, // "pace","shooting","passing","dribbling","defending","physical"
+}
+
+/// A calendar-window opening surfaced during a week tick (B.2) — the UI shows
+/// these as the week's interruptions. `window` is the WindowKind discriminant:
+/// 0=TransferSummer 1=TransferWinter 2=InternationalBreak 3=OffSeason.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FlashpointDto {
+    pub day: u32,
+    pub window: u8,
+    pub label: String,
 }
 
 pub struct FamilyDto {
@@ -400,6 +416,30 @@ fn match_role_for_position(pc_position: u8) -> RoleId {
     }
 }
 
+/// Map the state's accumulated window flashpoints to DTOs (B.2). `WindowKind`
+/// is matched by discriminant (its declaration order in goat-calendar is the
+/// ladder: TransferSummer/TransferWinter/InternationalBreak/OffSeason) — the
+/// bridge doesn't depend on goat-calendar directly.
+fn flashpoint_dtos(s: &WorldState) -> Vec<FlashpointDto> {
+    const LABELS: [&str; 4] = [
+        "The summer transfer window is open.",
+        "The winter transfer window is open.",
+        "International break — call-ups announced.",
+        "The off-season has begun.",
+    ];
+    s.last_week_flashpoints
+        .iter()
+        .map(|f| {
+            let window = f.window as u8;
+            FlashpointDto {
+                day: f.day,
+                window,
+                label: LABELS[window as usize].to_string(),
+            }
+        })
+        .collect()
+}
+
 fn build_game_state(s: &WorldState) -> GoatGameState {
     let pc_id = match s.pc_player_id {
         Some(id) => id,
@@ -461,6 +501,8 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
                 week_fixtures: Vec::new(),
                 week_fixtures_played: 0,
                 week_training_done: false,
+                epoch_day: s.pc_epoch_day,
+                last_flashpoints: flashpoint_dtos(s),
             };
         }
     };
@@ -608,6 +650,8 @@ fn build_game_state(s: &WorldState) -> GoatGameState {
         week_fixtures,
         week_fixtures_played,
         week_training_done: s.pc_week_training_done,
+        epoch_day: s.pc_epoch_day,
+        last_flashpoints: flashpoint_dtos(s),
     }
 }
 
@@ -989,6 +1033,226 @@ pub fn respond_to_media(contrite: bool) -> GoatGameState {
     let snap = build_game_state(&state);
     set_state(state);
     snap
+}
+
+// ── Phase 9 world read-models (B.3) ──────────────────────────────────────────
+// Read-only summaries per D3 — never the raw 20–30k population over FFI.
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PantheonEntryDto {
+    pub name: String,
+    pub nation_name: String,
+    pub debut_year: u32,
+    pub final_year: u32,
+    pub peak_ovr: u8,
+    pub ballon_dors: u32,
+}
+
+/// The backfilled historic canon, Ballon d'Or count first.
+pub fn get_pantheon_canon() -> Vec<PantheonEntryDto> {
+    let seed = GAME
+        .lock()
+        .expect("state lock poisoned")
+        .as_ref()
+        .map(|s| s.world_seed)
+        .unwrap_or(0);
+    let world = get_world(seed);
+    let hist = goat_world::history::backfill_history(seed, 30, &world);
+    let mut greats = hist.greats;
+    greats.sort_by_key(|g| std::cmp::Reverse(g.ballon_dors));
+    greats
+        .into_iter()
+        .map(|g| PantheonEntryDto {
+            name: g.name,
+            nation_name: world.nation_name(g.nationality as usize).to_string(),
+            debut_year: g.debut_year,
+            final_year: g.final_year,
+            peak_ovr: g.peak_ovr,
+            ballon_dors: g.ballon_dors,
+        })
+        .collect()
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RivalVerdictDto {
+    pub has_rival: bool,
+    pub weak_era: bool,
+    pub name: String,
+    pub peer_goals: u32,
+    pub peer_titles: u32,
+}
+
+/// The emergent-rival verdict for the PC's generation — replays the cohort's
+/// batch-tick up to the current season (same call shape the TUI's generation
+/// screen uses).
+pub fn get_rival_verdict() -> RivalVerdictDto {
+    let state = take_state();
+    let world = get_world(state.world_seed);
+    let league_clubs = world.static_league_clubs();
+    let mut pop = goat_world::population::genesis(state.world_seed, &world);
+    for s in 1..=state.season_number.max(1) {
+        goat_world::batch_tick::batch_tick_season(
+            &mut pop,
+            &world,
+            &league_clubs,
+            state.world_seed,
+            s,
+            s * 52,
+        );
+    }
+    let verdict = goat_world::rival::crystallise_rival(
+        &pop,
+        16 * 52,
+        state.pc_career_goals,
+        state.pc_league_titles,
+    );
+    set_state(state);
+    match verdict {
+        goat_world::rival::RivalVerdict::Rival {
+            name,
+            peer_goals,
+            peer_titles,
+            ..
+        } => RivalVerdictDto {
+            has_rival: true,
+            weak_era: false,
+            name,
+            peer_goals,
+            peer_titles,
+        },
+        goat_world::rival::RivalVerdict::WeakEra => RivalVerdictDto {
+            has_rival: false,
+            weak_era: true,
+            name: String::new(),
+            peer_goals: 0,
+            peer_titles: 0,
+        },
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct LeagueSummaryDto {
+    pub league_name: String,
+    pub nation_name: String,
+    pub tier: u8,
+    pub champion: String,
+    pub top_scorer: String,
+    pub top_scorer_goals: u32,
+}
+
+/// One summary line per league (champion + top scorer) for the current season
+/// — the batch-tick summary view, D3-shaped (no raw population).
+pub fn get_world_standings() -> Vec<LeagueSummaryDto> {
+    let state = take_state();
+    let world = get_world(state.world_seed);
+    let league_clubs = world.static_league_clubs();
+    let mut pop = goat_world::population::genesis(state.world_seed, &world);
+    let season = state.season_number.max(1);
+    let (results, _tables) = goat_world::batch_tick::batch_tick_season(
+        &mut pop,
+        &world,
+        &league_clubs,
+        state.world_seed,
+        season,
+        season * 52,
+    );
+    let out = results
+        .iter()
+        .map(|r| {
+            let league = &world.leagues[r.division];
+            LeagueSummaryDto {
+                league_name: league.name.clone(),
+                nation_name: world.nation_name(league.nation).to_string(),
+                tier: league.tier as u8,
+                champion: world.clubs[r.champion_club].name.clone(),
+                top_scorer: goat_world::history::name_from_seed(pop.seed[r.top_scorer_idx]),
+                top_scorer_goals: r.top_scorer_goals,
+            }
+        })
+        .collect();
+    set_state(state);
+    out
+}
+
+/// Debug fingerprint of the loaded world (B.3) — a compact identity line a UI
+/// can show in a debug corner to prove two saves share (or don't) a universe.
+pub fn get_world_fingerprint() -> String {
+    let state = take_state();
+    let seed = state.world_seed;
+    let world = get_world(seed);
+    let first_club = world
+        .clubs
+        .first()
+        .map(|c| c.name.clone())
+        .unwrap_or_default();
+    let last_club = world
+        .clubs
+        .last()
+        .map(|c| c.name.clone())
+        .unwrap_or_default();
+    let out = format!(
+        "seed {seed} · {} nations · {} leagues · {} clubs · first {} · last {}",
+        world.nations.len(),
+        world.leagues.len(),
+        world.clubs.len(),
+        first_club,
+        last_club
+    );
+    set_state(state);
+    out
+}
+
+// ── Retirement + final verdict (B.4) ─────────────────────────────────────────
+
+/// Whether the PC must retire now (the hard age rule, bible §8.6).
+pub fn should_retire() -> bool {
+    with_state(goat_core::state::should_retire)
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SchoolVerdictDto {
+    pub school: String,
+    pub score: i32,
+    /// 1-based placement against the backfilled canon (1 = GOAT).
+    pub rank: usize,
+}
+
+/// The final verdict: every school's placement of the PC against the canon —
+/// they disagree by design (bible §8.1). Built from the same LegacyEvidence +
+/// axes + all_rankings pipeline the TUI's legacy screen uses.
+pub fn get_final_verdict() -> Vec<SchoolVerdictDto> {
+    let state = take_state();
+    let ev = goat_meta::legacy::LegacyEvidence {
+        career_goals: state.pc_career_goals,
+        career_matches: state.pc_career_matches,
+        career_output_sum: state.pc_career_output_sum,
+        best_season_avg_output: state.pc_best_season_avg_output,
+        seasons_played: state.pc_seasons_played,
+        decisive_moments: state.pc_decisive_moments,
+        player_of_year_wins: state.pc_player_of_year_wins,
+        league_titles: state.pc_league_titles,
+        clubs_served: state.pc_clubs_served,
+        longest_club_tenure: state.pc_longest_club_tenure,
+        career_standout_matches: state.pc_career_standout_matches,
+        career_best_ovr: state.pc_career_best_ovr,
+        career_transfer_requests: state.pc_career_transfer_requests,
+        career_caps: state.pc_career_caps,
+        career_international_goals: state.pc_career_international_goals,
+        career_world_cups_won: state.pc_career_world_cups_won,
+        career_continental_championships_won: state.pc_career_continental_championships_won,
+    };
+    let axes = goat_meta::legacy::compute_axes(&ev);
+    let rankings = goat_meta::pantheon::all_rankings(&ev, &axes);
+    set_state(state);
+    rankings
+        .iter()
+        .enumerate()
+        .map(|(i, &(score, rank, _))| SchoolVerdictDto {
+            school: goat_meta::pantheon::SCHOOLS[i].name.to_string(),
+            score: score.to_int(),
+            rank,
+        })
+        .collect()
 }
 
 /// Auto-play or skip the current season round.

@@ -52,11 +52,15 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected FamilyDto dco_decode_family_dto(dynamic raw);
 
+@protected FlashpointDto dco_decode_flashpoint_dto(dynamic raw);
+
 @protected GoatGameState dco_decode_goat_game_state(dynamic raw);
 
 @protected int dco_decode_i_32(dynamic raw);
 
 @protected PlatformInt64 dco_decode_i_64(dynamic raw);
+
+@protected LeagueSummaryDto dco_decode_league_summary_dto(dynamic raw);
 
 @protected LegacyAxisDto dco_decode_legacy_axis_dto(dynamic raw);
 
@@ -72,7 +76,13 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected List<ClubDto> dco_decode_list_club_dto(dynamic raw);
 
+@protected List<FlashpointDto> dco_decode_list_flashpoint_dto(dynamic raw);
+
+@protected List<LeagueSummaryDto> dco_decode_list_league_summary_dto(dynamic raw);
+
 @protected List<LegacyAxisDto> dco_decode_list_legacy_axis_dto(dynamic raw);
+
+@protected List<PantheonEntryDto> dco_decode_list_pantheon_entry_dto(dynamic raw);
 
 @protected List<PeerDto> dco_decode_list_peer_dto(dynamic raw);
 
@@ -85,6 +95,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected List<RoleDto> dco_decode_list_role_dto(dynamic raw);
 
 @protected List<SchoolRankingDto> dco_decode_list_school_ranking_dto(dynamic raw);
+
+@protected List<SchoolVerdictDto> dco_decode_list_school_verdict_dto(dynamic raw);
 
 @protected List<TableRowDto> dco_decode_list_table_row_dto(dynamic raw);
 
@@ -102,13 +114,19 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected MatchResultDto? dco_decode_opt_box_autoadd_match_result_dto(dynamic raw);
 
+@protected PantheonEntryDto dco_decode_pantheon_entry_dto(dynamic raw);
+
 @protected PeerDto dco_decode_peer_dto(dynamic raw);
 
 @protected (GoatGameState,MatchResultDto) dco_decode_record_goat_game_state_match_result_dto(dynamic raw);
 
+@protected RivalVerdictDto dco_decode_rival_verdict_dto(dynamic raw);
+
 @protected RoleDto dco_decode_role_dto(dynamic raw);
 
 @protected SchoolRankingDto dco_decode_school_ranking_dto(dynamic raw);
+
+@protected SchoolVerdictDto dco_decode_school_verdict_dto(dynamic raw);
 
 @protected TableRowDto dco_decode_table_row_dto(dynamic raw);
 
@@ -121,6 +139,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected int dco_decode_u_8(dynamic raw);
 
 @protected void dco_decode_unit(dynamic raw);
+
+@protected BigInt dco_decode_usize(dynamic raw);
 
 @protected WeekFixtureDto dco_decode_week_fixture_dto(dynamic raw);
 
@@ -150,11 +170,15 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected FamilyDto sse_decode_family_dto(SseDeserializer deserializer);
 
+@protected FlashpointDto sse_decode_flashpoint_dto(SseDeserializer deserializer);
+
 @protected GoatGameState sse_decode_goat_game_state(SseDeserializer deserializer);
 
 @protected int sse_decode_i_32(SseDeserializer deserializer);
 
 @protected PlatformInt64 sse_decode_i_64(SseDeserializer deserializer);
+
+@protected LeagueSummaryDto sse_decode_league_summary_dto(SseDeserializer deserializer);
 
 @protected LegacyAxisDto sse_decode_legacy_axis_dto(SseDeserializer deserializer);
 
@@ -170,7 +194,13 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected List<ClubDto> sse_decode_list_club_dto(SseDeserializer deserializer);
 
+@protected List<FlashpointDto> sse_decode_list_flashpoint_dto(SseDeserializer deserializer);
+
+@protected List<LeagueSummaryDto> sse_decode_list_league_summary_dto(SseDeserializer deserializer);
+
 @protected List<LegacyAxisDto> sse_decode_list_legacy_axis_dto(SseDeserializer deserializer);
+
+@protected List<PantheonEntryDto> sse_decode_list_pantheon_entry_dto(SseDeserializer deserializer);
 
 @protected List<PeerDto> sse_decode_list_peer_dto(SseDeserializer deserializer);
 
@@ -183,6 +213,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected List<RoleDto> sse_decode_list_role_dto(SseDeserializer deserializer);
 
 @protected List<SchoolRankingDto> sse_decode_list_school_ranking_dto(SseDeserializer deserializer);
+
+@protected List<SchoolVerdictDto> sse_decode_list_school_verdict_dto(SseDeserializer deserializer);
 
 @protected List<TableRowDto> sse_decode_list_table_row_dto(SseDeserializer deserializer);
 
@@ -200,13 +232,19 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected MatchResultDto? sse_decode_opt_box_autoadd_match_result_dto(SseDeserializer deserializer);
 
+@protected PantheonEntryDto sse_decode_pantheon_entry_dto(SseDeserializer deserializer);
+
 @protected PeerDto sse_decode_peer_dto(SseDeserializer deserializer);
 
 @protected (GoatGameState,MatchResultDto) sse_decode_record_goat_game_state_match_result_dto(SseDeserializer deserializer);
 
+@protected RivalVerdictDto sse_decode_rival_verdict_dto(SseDeserializer deserializer);
+
 @protected RoleDto sse_decode_role_dto(SseDeserializer deserializer);
 
 @protected SchoolRankingDto sse_decode_school_ranking_dto(SseDeserializer deserializer);
+
+@protected SchoolVerdictDto sse_decode_school_verdict_dto(SseDeserializer deserializer);
 
 @protected TableRowDto sse_decode_table_row_dto(SseDeserializer deserializer);
 
@@ -219,6 +257,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected int sse_decode_u_8(SseDeserializer deserializer);
 
 @protected void sse_decode_unit(SseDeserializer deserializer);
+
+@protected BigInt sse_decode_usize(SseDeserializer deserializer);
 
 @protected WeekFixtureDto sse_decode_week_fixture_dto(SseDeserializer deserializer);
 
@@ -248,11 +288,15 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected void sse_encode_family_dto(FamilyDto self, SseSerializer serializer);
 
+@protected void sse_encode_flashpoint_dto(FlashpointDto self, SseSerializer serializer);
+
 @protected void sse_encode_goat_game_state(GoatGameState self, SseSerializer serializer);
 
 @protected void sse_encode_i_32(int self, SseSerializer serializer);
 
 @protected void sse_encode_i_64(PlatformInt64 self, SseSerializer serializer);
+
+@protected void sse_encode_league_summary_dto(LeagueSummaryDto self, SseSerializer serializer);
 
 @protected void sse_encode_legacy_axis_dto(LegacyAxisDto self, SseSerializer serializer);
 
@@ -268,7 +312,13 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected void sse_encode_list_club_dto(List<ClubDto> self, SseSerializer serializer);
 
+@protected void sse_encode_list_flashpoint_dto(List<FlashpointDto> self, SseSerializer serializer);
+
+@protected void sse_encode_list_league_summary_dto(List<LeagueSummaryDto> self, SseSerializer serializer);
+
 @protected void sse_encode_list_legacy_axis_dto(List<LegacyAxisDto> self, SseSerializer serializer);
+
+@protected void sse_encode_list_pantheon_entry_dto(List<PantheonEntryDto> self, SseSerializer serializer);
 
 @protected void sse_encode_list_peer_dto(List<PeerDto> self, SseSerializer serializer);
 
@@ -281,6 +331,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected void sse_encode_list_role_dto(List<RoleDto> self, SseSerializer serializer);
 
 @protected void sse_encode_list_school_ranking_dto(List<SchoolRankingDto> self, SseSerializer serializer);
+
+@protected void sse_encode_list_school_verdict_dto(List<SchoolVerdictDto> self, SseSerializer serializer);
 
 @protected void sse_encode_list_table_row_dto(List<TableRowDto> self, SseSerializer serializer);
 
@@ -298,13 +350,19 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected void sse_encode_opt_box_autoadd_match_result_dto(MatchResultDto? self, SseSerializer serializer);
 
+@protected void sse_encode_pantheon_entry_dto(PantheonEntryDto self, SseSerializer serializer);
+
 @protected void sse_encode_peer_dto(PeerDto self, SseSerializer serializer);
 
 @protected void sse_encode_record_goat_game_state_match_result_dto((GoatGameState,MatchResultDto) self, SseSerializer serializer);
 
+@protected void sse_encode_rival_verdict_dto(RivalVerdictDto self, SseSerializer serializer);
+
 @protected void sse_encode_role_dto(RoleDto self, SseSerializer serializer);
 
 @protected void sse_encode_school_ranking_dto(SchoolRankingDto self, SseSerializer serializer);
+
+@protected void sse_encode_school_verdict_dto(SchoolVerdictDto self, SseSerializer serializer);
 
 @protected void sse_encode_table_row_dto(TableRowDto self, SseSerializer serializer);
 
@@ -317,6 +375,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected void sse_encode_u_8(int self, SseSerializer serializer);
 
 @protected void sse_encode_unit(void self, SseSerializer serializer);
+
+@protected void sse_encode_usize(BigInt self, SseSerializer serializer);
 
 @protected void sse_encode_week_fixture_dto(WeekFixtureDto self, SseSerializer serializer);
                 }
