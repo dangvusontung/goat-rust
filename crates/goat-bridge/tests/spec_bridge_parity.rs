@@ -292,6 +292,19 @@ fn assert_bridge_matches_direct(snap: &api::GoatGameState, direct: &WorldState, 
         snap.character_rep, direct.pc_character_rep,
         "{ctx}: character_rep"
     );
+    // B.2 calendar surfacing.
+    assert_eq!(snap.epoch_day, direct.pc_epoch_day, "{ctx}: epoch_day");
+    let snap_fps: Vec<(u32, u8)> = snap
+        .last_flashpoints
+        .iter()
+        .map(|f| (f.day, f.window))
+        .collect();
+    let direct_fps: Vec<(u32, u8)> = direct
+        .last_week_flashpoints
+        .iter()
+        .map(|f| (f.day, f.window as u8))
+        .collect();
+    assert_eq!(snap_fps, direct_fps, "{ctx}: last_flashpoints");
 }
 
 #[test]
@@ -746,4 +759,42 @@ fn retire_sets_flag_via_bridge() {
         s.is_retired,
         "retire() must flip is_retired on the snapshot"
     );
+}
+
+// ── B.3/B.4 world read-models + verdict (read-only) ──────────────────────────
+
+#[test]
+fn world_read_models_return_summaries_without_mutating_state() {
+    let _g = serial();
+    let before = api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+
+    let canon = api::get_pantheon_canon();
+    assert!(!canon.is_empty(), "pantheon canon must be non-empty");
+    assert!(
+        canon
+            .windows(2)
+            .all(|w| w[0].ballon_dors >= w[1].ballon_dors),
+        "canon must be sorted by Ballon d'Or count"
+    );
+
+    let standings = api::get_world_standings();
+    assert_eq!(standings.len(), 60, "one summary per league");
+    assert!(standings.iter().all(|s| !s.champion.is_empty()));
+
+    let verdict = api::get_rival_verdict();
+    // Season 1: either a named rival or the weak-era flag — never both empty.
+    assert!(verdict.has_rival || verdict.weak_era);
+
+    let final_verdict = api::get_final_verdict();
+    assert_eq!(final_verdict.len(), 4, "one verdict per school");
+    assert!(!api::should_retire(), "a 16-year-old never force-retires");
+
+    let fingerprint = api::get_world_fingerprint();
+    assert!(fingerprint.contains("1200 clubs"), "{fingerprint}");
+
+    // Read-only guarantee: the state after all these calls is identical.
+    let after = api::get_state().unwrap();
+    assert_eq!(before.season_round, after.season_round);
+    assert_eq!(before.savings, after.savings);
+    assert_eq!(before.energy, after.energy);
 }

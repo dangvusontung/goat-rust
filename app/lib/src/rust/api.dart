@@ -6,9 +6,9 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `beat_to_dto`, `build_game_state`, `build_peers`, `current_week_has_pending_match`, `current_year`, `get_world`, `live_league_clubs`, `match_role_for_position`, `set_state`, `take_state`, `with_beat_lib`, `with_state_mut`, `with_state`
+// These functions are ignored because they are not marked as `pub`: `beat_to_dto`, `build_game_state`, `build_peers`, `current_week_has_pending_match`, `current_year`, `flashpoint_dtos`, `get_world`, `live_league_clubs`, `match_role_for_position`, `set_state`, `take_state`, `with_beat_lib`, `with_state_mut`, `with_state`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ActiveMatchSession`
-// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`
+// These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
 
 /// True if a game is currently loaded in memory.
 Future<bool> hasActiveGame() => RustLib.instance.api.crateApiHasActiveGame();
@@ -98,6 +98,35 @@ Future<GoatGameState> applyLifeEvent(
 /// lives in the reducer).
 Future<GoatGameState> respondToMedia({required bool contrite}) =>
     RustLib.instance.api.crateApiRespondToMedia(contrite: contrite);
+
+/// The backfilled historic canon, Ballon d'Or count first.
+Future<List<PantheonEntryDto>> getPantheonCanon() =>
+    RustLib.instance.api.crateApiGetPantheonCanon();
+
+/// The emergent-rival verdict for the PC's generation — replays the cohort's
+/// batch-tick up to the current season (same call shape the TUI's generation
+/// screen uses).
+Future<RivalVerdictDto> getRivalVerdict() =>
+    RustLib.instance.api.crateApiGetRivalVerdict();
+
+/// One summary line per league (champion + top scorer) for the current season
+/// — the batch-tick summary view, D3-shaped (no raw population).
+Future<List<LeagueSummaryDto>> getWorldStandings() =>
+    RustLib.instance.api.crateApiGetWorldStandings();
+
+/// Debug fingerprint of the loaded world (B.3) — a compact identity line a UI
+/// can show in a debug corner to prove two saves share (or don't) a universe.
+Future<String> getWorldFingerprint() =>
+    RustLib.instance.api.crateApiGetWorldFingerprint();
+
+/// Whether the PC must retire now (the hard age rule, bible §8.6).
+Future<bool> shouldRetire() => RustLib.instance.api.crateApiShouldRetire();
+
+/// The final verdict: every school's placement of the PC against the canon —
+/// they disagree by design (bible §8.1). Built from the same LegacyEvidence +
+/// axes + all_rankings pipeline the TUI's legacy screen uses.
+Future<List<SchoolVerdictDto>> getFinalVerdict() =>
+    RustLib.instance.api.crateApiGetFinalVerdict();
 
 /// Auto-play or skip the current season round.
 Future<(GoatGameState, MatchResultDto)> playRound(
@@ -482,6 +511,33 @@ class FamilyDto {
           physical == other.physical;
 }
 
+/// A calendar-window opening surfaced during a week tick (B.2) — the UI shows
+/// these as the week's interruptions. `window` is the WindowKind discriminant:
+/// 0=TransferSummer 1=TransferWinter 2=InternationalBreak 3=OffSeason.
+class FlashpointDto {
+  final int day;
+  final int window;
+  final String label;
+
+  const FlashpointDto({
+    required this.day,
+    required this.window,
+    required this.label,
+  });
+
+  @override
+  int get hashCode => day.hashCode ^ window.hashCode ^ label.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is FlashpointDto &&
+          runtimeType == other.runtimeType &&
+          day == other.day &&
+          window == other.window &&
+          label == other.label;
+}
+
 /// Flat snapshot of game state returned to Dart after every mutation.
 class GoatGameState {
   final String playerName;
@@ -554,6 +610,12 @@ class GoatGameState {
   /// True if the player has used their training session this calendar week.
   final bool weekTrainingDone;
 
+  /// Days since career start (drives the CalendarEngine week ticks).
+  final int epochDay;
+
+  /// Window-opening flashpoints accumulated by the most recent week tick.
+  final List<FlashpointDto> lastFlashpoints;
+
   const GoatGameState({
     required this.playerName,
     required this.ageYears,
@@ -606,6 +668,8 @@ class GoatGameState {
     required this.weekFixtures,
     required this.weekFixturesPlayed,
     required this.weekTrainingDone,
+    required this.epochDay,
+    required this.lastFlashpoints,
   });
 
   @override
@@ -660,7 +724,9 @@ class GoatGameState {
       isBreakWeek.hashCode ^
       weekFixtures.hashCode ^
       weekFixturesPlayed.hashCode ^
-      weekTrainingDone.hashCode;
+      weekTrainingDone.hashCode ^
+      epochDay.hashCode ^
+      lastFlashpoints.hashCode;
 
   @override
   bool operator ==(Object other) =>
@@ -717,7 +783,48 @@ class GoatGameState {
           isBreakWeek == other.isBreakWeek &&
           weekFixtures == other.weekFixtures &&
           weekFixturesPlayed == other.weekFixturesPlayed &&
-          weekTrainingDone == other.weekTrainingDone;
+          weekTrainingDone == other.weekTrainingDone &&
+          epochDay == other.epochDay &&
+          lastFlashpoints == other.lastFlashpoints;
+}
+
+class LeagueSummaryDto {
+  final String leagueName;
+  final String nationName;
+  final int tier;
+  final String champion;
+  final String topScorer;
+  final int topScorerGoals;
+
+  const LeagueSummaryDto({
+    required this.leagueName,
+    required this.nationName,
+    required this.tier,
+    required this.champion,
+    required this.topScorer,
+    required this.topScorerGoals,
+  });
+
+  @override
+  int get hashCode =>
+      leagueName.hashCode ^
+      nationName.hashCode ^
+      tier.hashCode ^
+      champion.hashCode ^
+      topScorer.hashCode ^
+      topScorerGoals.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is LeagueSummaryDto &&
+          runtimeType == other.runtimeType &&
+          leagueName == other.leagueName &&
+          nationName == other.nationName &&
+          tier == other.tier &&
+          champion == other.champion &&
+          topScorer == other.topScorer &&
+          topScorerGoals == other.topScorerGoals;
 }
 
 class LegacyAxisDto {
@@ -823,6 +930,45 @@ class MatchResultDto {
           redCard == other.redCard;
 }
 
+class PantheonEntryDto {
+  final String name;
+  final String nationName;
+  final int debutYear;
+  final int finalYear;
+  final int peakOvr;
+  final int ballonDors;
+
+  const PantheonEntryDto({
+    required this.name,
+    required this.nationName,
+    required this.debutYear,
+    required this.finalYear,
+    required this.peakOvr,
+    required this.ballonDors,
+  });
+
+  @override
+  int get hashCode =>
+      name.hashCode ^
+      nationName.hashCode ^
+      debutYear.hashCode ^
+      finalYear.hashCode ^
+      peakOvr.hashCode ^
+      ballonDors.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is PantheonEntryDto &&
+          runtimeType == other.runtimeType &&
+          name == other.name &&
+          nationName == other.nationName &&
+          debutYear == other.debutYear &&
+          finalYear == other.finalYear &&
+          peakOvr == other.peakOvr &&
+          ballonDors == other.ballonDors;
+}
+
 class PeerDto {
   final String name;
   final String nationality;
@@ -864,6 +1010,41 @@ class PeerDto {
           avgOutput == other.avgOutput &&
           titles == other.titles &&
           isRival == other.isRival;
+}
+
+class RivalVerdictDto {
+  final bool hasRival;
+  final bool weakEra;
+  final String name;
+  final int peerGoals;
+  final int peerTitles;
+
+  const RivalVerdictDto({
+    required this.hasRival,
+    required this.weakEra,
+    required this.name,
+    required this.peerGoals,
+    required this.peerTitles,
+  });
+
+  @override
+  int get hashCode =>
+      hasRival.hashCode ^
+      weakEra.hashCode ^
+      name.hashCode ^
+      peerGoals.hashCode ^
+      peerTitles.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is RivalVerdictDto &&
+          runtimeType == other.runtimeType &&
+          hasRival == other.hasRival &&
+          weakEra == other.weakEra &&
+          name == other.name &&
+          peerGoals == other.peerGoals &&
+          peerTitles == other.peerTitles;
 }
 
 class RoleDto {
@@ -923,6 +1104,32 @@ class SchoolRankingDto {
           score == other.score &&
           rank == other.rank &&
           total == other.total;
+}
+
+class SchoolVerdictDto {
+  final String school;
+  final int score;
+
+  /// 1-based placement against the backfilled canon (1 = GOAT).
+  final BigInt rank;
+
+  const SchoolVerdictDto({
+    required this.school,
+    required this.score,
+    required this.rank,
+  });
+
+  @override
+  int get hashCode => school.hashCode ^ score.hashCode ^ rank.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SchoolVerdictDto &&
+          runtimeType == other.runtimeType &&
+          school == other.school &&
+          score == other.score &&
+          rank == other.rank;
 }
 
 class TableRowDto {
