@@ -188,6 +188,17 @@ pub enum PunditTier {
     Legend,
 }
 
+impl PunditTier {
+    /// Display name for the byline suffix (Slice 3.2).
+    pub fn name(self) -> &'static str {
+        match self {
+            PunditTier::Rookie => "Rookie",
+            PunditTier::Established => "Established",
+            PunditTier::Legend => "Legend",
+        }
+    }
+}
+
 /// Deliberately simple/placeholder tier assignment — a seeded roll per
 /// (world_seed, pundit index), deterministic within a save, independent across
 /// saves. This is the ONE function the real "grows with tenure / proven-right
