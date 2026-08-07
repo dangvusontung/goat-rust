@@ -566,6 +566,17 @@ pub enum Intent {
     /// championships_won` fields exactly like every other season-live accumulator.
     ApplyNationalTournamentWin { is_world_cup: bool },
 
+    /// Apply the season's aggregate pundit-commentary Reputation impact (Design
+    /// round 6, item 4) — credibility-tier-weighted, computed by the caller
+    /// from each pundit's rank-derived sentiment (goat-meta::pundits), summed
+    /// to one delta, applied here as a single clamped ADDITION on top of
+    /// whatever ApplySeasonEndLegacy already set this season. Deliberately a
+    /// second, additive intent: the season-end pipeline computes the pundit
+    /// delta from rankings that only exist after ApplySeasonEndLegacy folds the
+    /// season's evidence, so folding this into that intent would invert the
+    /// required ordering.
+    ApplyPunditReputationImpact { sporting_rep_delta: i32 },
+
     // ── Phase 10 intents ──────────────────────────────────────────────────────
     // Lifestyle is no longer a settable intent (bible §8.5/§8.6) — it is derived
     // weekly from `pc_lifestyle_score`, nudged by routine intensity, dev-investment
@@ -1066,6 +1077,14 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             } else {
                 state.pc_season_continental_championships_won += 1;
             }
+            state
+        }
+
+        Intent::ApplyPunditReputationImpact { sporting_rep_delta } => {
+            // Additive by design (Design round 6 §4.4): this runs AFTER
+            // ApplySeasonEndLegacy's overwrite, stacking the pundit-driven
+            // delta on top of the performance-driven value.
+            state.pc_sporting_rep = (state.pc_sporting_rep + sporting_rep_delta).clamp(0, 100);
             state
         }
 
@@ -2018,5 +2037,66 @@ mod tests {
             s.pc_career_clutch_index, 2,
             "career index survives the reset"
         );
+    }
+
+    /// Design round 6 §4.4: the pundit-reputation intent must ADD (clamped),
+    /// never overwrite — two consecutive applications must compound.
+    #[test]
+    fn apply_pundit_reputation_impact_is_additive_not_overwriting() {
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.pc_sporting_rep = 50;
+        let s = reduce(
+            s,
+            Intent::ApplyPunditReputationImpact {
+                sporting_rep_delta: 5,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_sporting_rep, 55);
+        let s = reduce(
+            s,
+            Intent::ApplyPunditReputationImpact {
+                sporting_rep_delta: 5,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(
+            s.pc_sporting_rep, 60,
+            "the second application must compound, not clobber the first"
+        );
+        let s = reduce(
+            s,
+            Intent::ApplyPunditReputationImpact {
+                sporting_rep_delta: -12,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_sporting_rep, 48);
+    }
+
+    /// Same clamp discipline as every other reputation updater: the result
+    /// stays in [0, 100] no matter the delta.
+    #[test]
+    fn apply_pundit_reputation_impact_clamps_to_0_100() {
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 75);
+        s.pc_sporting_rep = 97;
+        let s = reduce(
+            s,
+            Intent::ApplyPunditReputationImpact {
+                sporting_rep_delta: 20,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_sporting_rep, 100);
+        let s = reduce(
+            s,
+            Intent::ApplyPunditReputationImpact {
+                sporting_rep_delta: -150,
+            },
+            &mut make_rng(),
+        );
+        assert_eq!(s.pc_sporting_rep, 0);
     }
 }
