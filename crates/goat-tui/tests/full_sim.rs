@@ -72,6 +72,7 @@ fn make_state(seed: u64, position: Position, div_idx: usize) -> WorldState {
     let choices = CreationChoices {
         name: "Test Legend".into(),
         primary_position: position.to_primary(),
+        primary_role: None,
         nationality: "England".to_string(),
         club: club.name.clone(),
     };

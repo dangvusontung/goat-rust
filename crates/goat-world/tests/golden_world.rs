@@ -144,6 +144,7 @@ fn twenty_seasons_full_career_no_panic() {
     let choices = CreationChoices {
         name: "Career GOAT".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "England".to_string(),
         club: world.clubs[pc_club_id].name.clone(),
     };
@@ -312,6 +313,7 @@ fn five_headless_seasons_no_panic() {
     let choices = CreationChoices {
         name: "Headless Hero".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "England".to_string(),
         club: world.clubs[pc_club_id].name.clone(),
     };

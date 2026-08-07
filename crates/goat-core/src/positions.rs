@@ -66,6 +66,25 @@ impl PrimaryPosition {
         }
     }
 
+    /// The default role the match engine plays this position as
+    /// (TASK-CORE-creation-role-choice §3): the specific position's own role,
+    /// not the broad-family hardcode the bridge used before (every Midfielder
+    /// played as CentralMid regardless of being a Winger/CAM/DM/...). Note W
+    /// and WM both map to Winger — the only wide role in the current 14-role
+    /// set; a distinct LM/RM role is content work for a later round.
+    pub fn default_role(self) -> crate::roles::RoleId {
+        use crate::roles::RoleId;
+        match self {
+            PrimaryPosition::ST => RoleId::CompleteForward,
+            PrimaryPosition::W | PrimaryPosition::WM => RoleId::Winger,
+            PrimaryPosition::CAM => RoleId::AttackingMid,
+            PrimaryPosition::CM => RoleId::CentralMid,
+            PrimaryPosition::DM => RoleId::DefensiveMid,
+            PrimaryPosition::FB => RoleId::FullBack,
+            PrimaryPosition::CB => RoleId::CentreBack,
+        }
+    }
+
     /// Which broad position family this specific position belongs to (bible §4/§5.3):
     /// used for generation role-DNA bias and familiarity seeding. Mirrors the convention
     /// in `roles::ROLE_POSITION_FAMILY` (e.g. `RoleId::Winger` is Midfielder family) — no

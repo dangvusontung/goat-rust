@@ -480,6 +480,7 @@ mod tests {
         let choices = CreationChoices {
             name: "Test".into(),
             primary_position,
+            primary_role: None,
             nationality: "English".to_string(),
             club: "Riverside Town".to_string(),
         };

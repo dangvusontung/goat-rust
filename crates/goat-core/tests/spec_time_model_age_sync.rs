@@ -24,6 +24,7 @@ fn new_career(seed: u64) -> WorldState {
     let choices = CreationChoices {
         name: "Clockwork".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "English".to_string(),
         club: "Local FC".to_string(),
     };

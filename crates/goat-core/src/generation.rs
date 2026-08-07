@@ -31,6 +31,12 @@ use crate::tuning::{
 pub struct CreationChoices {
     pub name: String,
     pub primary_position: PrimaryPosition,
+    /// Player-chosen primary role (TASK-CORE-creation-role-choice): one of the 14
+    /// `RoleId`s. `Some` skips the `roll_primary_role` dice and seeds Natural
+    /// familiarity for exactly this role (with its family at Competent). `None`
+    /// is byte-identical to the pre-role-choice behavior — frozen golden values
+    /// are unaffected.
+    pub primary_role: Option<RoleId>,
     /// Owned, not `&'static str` — club/nation names are generated per `world_seed`
     /// (goat-world's `WorldGenesis`), not compile-time literals.
     pub nationality: String,
@@ -92,9 +98,15 @@ pub fn generate_player_biased(
     // Step 2 — spikiness: 1=even, 2=varied, 3=spiky specialist (C.5)
     let spikiness = rng.next_range_u8(1, 3) as i32;
 
-    // Step 3 — role DNA: kept to preserve familiarity seeding for the match engine
+    // Step 3 — role DNA: kept to preserve familiarity seeding for the match engine.
+    // A player-chosen role (Some) skips the dice entirely; the roll below consumes
+    // exactly one draw and nothing downstream of it uses `rng`, so the None path
+    // stays byte-identical to the pre-role-choice generator.
     let family = choices.primary_position.family();
-    let primary_role = roll_primary_role(&mut rng, family);
+    let primary_role = match choices.primary_role {
+        Some(role) => role,
+        None => roll_primary_role(&mut rng, family),
+    };
 
     // Step 4 — per-attribute potentials (C.5: position-shaped + bounded noise)
     let primary_pos = choices.primary_position;
@@ -104,8 +116,14 @@ pub fn generate_player_biased(
     // Step 5 — starting current values
     let current = derive_starting_current(&potential);
 
-    // Step 6 — familiarity seeding
-    let familiarity = seed_familiarity(family, primary_role);
+    // Step 6 — familiarity seeding. A chosen role is Natural by definition and
+    // seeds its own family at Competent (the family is derived FROM the role via
+    // ROLE_POSITION_FAMILY, so a role outside the position's family still gets
+    // its Natural seed — the position field keeps shaping potentials).
+    let familiarity = match choices.primary_role {
+        Some(role) => seed_familiarity(ROLE_POSITION_FAMILY[role as usize], role),
+        None => seed_familiarity(family, primary_role),
+    };
 
     // Step 7 — durability/injury-proneness trait (BL7, Design round 9): independent
     // substream from `seed`, same idiom as `per_attr_noise`'s per-attribute noise —
@@ -337,6 +355,7 @@ mod tests {
         CreationChoices {
             name: "Test Player".into(),
             primary_position: pos,
+            primary_role: None,
             nationality: "English".to_string(),
             club: "Local FC".to_string(),
         }
@@ -594,6 +613,72 @@ mod tests {
                     "seed {seed} pos {pos:?}: familiarity diverged"
                 );
             }
+        }
+    }
+
+    /// Creation role choice (TASK-CORE-creation-role-choice): `Some(Winger)`
+    /// skips the role dice — Natural familiarity lands exactly on Winger, its
+    /// family (Midfielder) at Competent, everything else Awkward; potentials
+    /// still shaped by the chosen position's key attrs.
+    #[test]
+    fn chosen_role_is_natural_and_shapes_familiarity() {
+        let mut c = choices(PrimaryPosition::W);
+        c.primary_role = Some(RoleId::Winger);
+        let p = generate_player(42, &c);
+
+        assert_eq!(
+            p.familiarity[RoleId::Winger as usize],
+            FamiliarityTier::Natural,
+            "the chosen role must be Natural"
+        );
+        for &r in &RoleId::ALL {
+            if r == RoleId::Winger {
+                continue;
+            }
+            let expected = if ROLE_POSITION_FAMILY[r as usize] == PositionFamily::Midfielder {
+                FamiliarityTier::Competent
+            } else {
+                FamiliarityTier::Awkward
+            };
+            assert_eq!(p.familiarity[r as usize], expected, "role {r:?}");
+        }
+
+        // Potentials still position-shaped: Winger key attrs outrank zero-weight ones.
+        use crate::attrs::AttrId;
+        let acc = p.potential[AttrId::Acceleration as usize];
+        let mark = p.potential[AttrId::Marking as usize];
+        assert!(acc > mark, "W key attrs must shape potentials");
+    }
+
+    /// The None path must stay byte-identical to the pre-role-choice generator
+    /// (frozen golden values are defined with primary_role: None).
+    #[test]
+    fn none_role_path_is_unchanged_by_the_role_feature() {
+        for pos in [PrimaryPosition::ST, PrimaryPosition::W, PrimaryPosition::CB] {
+            let c = choices(pos); // primary_role: None
+            let a = generate_player(4242, &c);
+            // Same as the dice path computed manually: roll_primary_role is the
+            // only consumer of the main stream after ceiling/spikiness.
+            let mut rng = GoatRng::new(4242);
+            let _ceiling =
+                rng.next_range_u8(crate::tuning::CEILING_MIN, crate::tuning::CEILING_MAX);
+            let _spike = rng.next_range_u8(1, 3);
+            let rolled = roll_primary_role(&mut rng, pos.family());
+            // seed_familiarity's rule: the rolled role if in-family, else the
+            // first in-family role — replicate it to verify the None path.
+            let natural = if ROLE_POSITION_FAMILY[rolled as usize] == pos.family() {
+                rolled
+            } else {
+                *RoleId::ALL
+                    .iter()
+                    .find(|&&r| ROLE_POSITION_FAMILY[r as usize] == pos.family())
+                    .unwrap()
+            };
+            assert_eq!(
+                a.familiarity[natural as usize],
+                FamiliarityTier::Natural,
+                "pos {pos:?}: the dice-path natural role must follow the legacy rule"
+            );
         }
     }
 }

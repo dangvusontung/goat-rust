@@ -15,6 +15,7 @@ fn player() -> WorldState {
     let choices = CreationChoices {
         name: "Life".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "Brazilian".to_string(),
         club: "Riverside Town".to_string(),
     };

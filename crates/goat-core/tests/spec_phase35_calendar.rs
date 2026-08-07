@@ -20,6 +20,7 @@ fn forward(seed: u64) -> WorldState {
     let choices = CreationChoices {
         name: "Cal".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "Brazilian".to_string(),
         club: "Riverside Town".to_string(),
     };
