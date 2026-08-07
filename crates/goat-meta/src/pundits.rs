@@ -4,6 +4,7 @@
 //! and prints without modification. All player-facing text is in this module.
 
 use crate::legacy::LegacyAxes;
+use goat_rng::{GoatRng, RngSource};
 
 /// A named pundit character who follows the player's whole career.
 #[derive(Debug, Clone, Copy)]
@@ -173,6 +174,46 @@ pub const PUNDITS: [Pundit; NUM_PUNDITS] = [
     },
 ];
 
+// ── Credibility tiers (Design round 6, Slice 2) ─────────────────────────────
+
+/// A pundit's credibility, currently assigned by `tier_for` — a deliberately
+/// simple/placeholder function. The real "grows with tenure and being proven
+/// right" mechanic (raised by Tùng, not designed this round) will replace
+/// `tier_for`'s body without touching anything that reads `PunditTier` — that
+/// is the entire point of keeping this behind one function boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PunditTier {
+    Rookie,
+    Established,
+    Legend,
+}
+
+/// Deliberately simple/placeholder tier assignment — a seeded roll per
+/// (world_seed, pundit index), deterministic within a save, independent across
+/// saves. This is the ONE function the real "grows with tenure / proven-right
+/// accuracy" formula replaces later; nothing outside this function should ever
+/// compute a tier by any other means. Never stored on the const `Pundit` and
+/// never persisted (Slice 2.2) — recomputed on demand, same "generated but
+/// consistent" idiom as `WorldGenesis`.
+pub fn tier_for(pundit_idx: usize, world_seed: u64) -> PunditTier {
+    let mut rng = GoatRng::new(pundit_tier_seed(world_seed, pundit_idx));
+    match rng.next_range_u32(0, 99) {
+        // TUNABLE placeholder split (Design's pick, flagged for TASK-TUNE):
+        // mostly Established, Legend genuinely rare, Rookie a real minority.
+        0..=19 => PunditTier::Rookie,       // 20%
+        20..=84 => PunditTier::Established, // 65%
+        _ => PunditTier::Legend,            // 15%
+    }
+}
+
+/// Index-keyed XOR-and-multiply — same idiom as `world.rs`'s `club_seed`.
+fn pundit_tier_seed(world_seed: u64, pundit_idx: usize) -> u64 {
+    world_seed
+        ^ (pundit_idx as u64)
+            .rotate_left(23)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+}
+
 /// Generate a pundit comment for the given context.
 ///
 /// Fills template slots: {name}, {goals}, {matches}, {avg_output}, {pos}, {season},
@@ -284,5 +325,65 @@ mod tests {
             assert!(!p.doubt.is_empty());
             assert!(!p.season_reaction.is_empty());
         }
+    }
+
+    // ── Slice 2: PunditTier / tier_for ───────────────────────────────────────
+
+    #[test]
+    fn tier_for_is_deterministic_per_seed() {
+        for idx in 0..NUM_PUNDITS {
+            assert_eq!(tier_for(idx, 42), tier_for(idx, 42));
+        }
+    }
+
+    #[test]
+    fn tier_for_varies_across_pundits_and_seeds() {
+        let mut seen = [false; 3];
+        for seed in 0..50u64 {
+            for idx in 0..NUM_PUNDITS {
+                match tier_for(idx, seed) {
+                    PunditTier::Rookie => seen[0] = true,
+                    PunditTier::Established => seen[1] = true,
+                    PunditTier::Legend => seen[2] = true,
+                }
+            }
+        }
+        assert!(
+            seen[0] && seen[1] && seen[2],
+            "all three tiers must be reachable"
+        );
+    }
+
+    #[test]
+    fn tier_for_roughly_matches_declared_split() {
+        // 12 pundits × 1,000 seeds = 12,000 rolls; wide tolerance — this pins
+        // the SHAPE (mostly Established, rare Legend, minority Rookie), not
+        // exact frequencies.
+        let (mut rookie, mut established, mut legend) = (0u32, 0u32, 0u32);
+        for seed in 0..1_000u64 {
+            for idx in 0..NUM_PUNDITS {
+                match tier_for(idx, seed) {
+                    PunditTier::Rookie => rookie += 1,
+                    PunditTier::Established => established += 1,
+                    PunditTier::Legend => legend += 1,
+                }
+            }
+        }
+        let total = (rookie + established + legend) as f64;
+        let r = rookie as f64 / total;
+        let e = established as f64 / total;
+        let l = legend as f64 / total;
+        assert!(
+            (0.10..=0.30).contains(&r),
+            "rookie share {r:.3} vs declared 0.20"
+        );
+        assert!(
+            (0.55..=0.75).contains(&e),
+            "established share {e:.3} vs declared 0.65"
+        );
+        assert!(
+            (0.07..=0.23).contains(&l),
+            "legend share {l:.3} vs declared 0.15"
+        );
     }
 }
