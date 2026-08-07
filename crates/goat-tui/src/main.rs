@@ -2815,8 +2815,13 @@ fn run_awards_and_pundits(
     let rankings = all_rankings(&ev, &axes);
 
     writeln!(out, "\n  --- THE PUNDITS ---").unwrap();
-    for pundit in PUNDITS.iter() {
+    for (pundit_idx, pundit) in PUNDITS.iter().enumerate() {
         let (_, rank, _) = rankings[pundit.school_idx];
+        // Round 6 Slice 3: the credibility tier is computed here, at the one
+        // live comment call site (never stored on the const struct, never
+        // persisted — Slice 2.2). Shown in the byline (Slice 3.2) and consumed
+        // by the Reputation-impact wiring (Slice 4).
+        let tier = goat_meta::pundits::tier_for(pundit_idx, state.world_seed);
         let ctx = PunditContext::Season {
             goals: state.pc_season_goals,
             matches: state.pc_season_matches,
@@ -2824,7 +2829,14 @@ fn run_awards_and_pundits(
             finish_pos,
         };
         let comment = pundit_comment(pundit, &axes, &ctx, pc_name, &pc_club, season);
-        writeln!(out, "\n  {} ({}):", pundit.name, pundit.role).unwrap();
+        writeln!(
+            out,
+            "\n  {} ({}) [{}]:",
+            pundit.name,
+            pundit.role,
+            tier.name()
+        )
+        .unwrap();
         // Word-wrap at ~60 chars
         let words: Vec<&str> = comment.split_whitespace().collect();
         let mut line = String::from("  \"");
