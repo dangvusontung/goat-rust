@@ -552,6 +552,7 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     let choices = CreationChoices {
         name: data.pc_name.clone(),
         primary_position,
+        primary_role: None,
         nationality: nationality.clone(),
         club: club.name.clone(),
     };

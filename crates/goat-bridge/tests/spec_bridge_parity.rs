@@ -40,7 +40,14 @@ const LIFESTYLE_PRO: u8 = 0;
 
 /// Scripted run: new game, set a routine, then train + play `n` rounds.
 fn script_rounds(seed: u64, n: u32) -> (api::GoatGameState, Vec<api::MatchResultDto>) {
-    api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, seed, LIFESTYLE_PRO);
+    api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        seed,
+        LIFESTYLE_PRO,
+        None,
+    );
     let mut snap = api::set_routine(vec![0, 1, 2], 1);
     let mut results = Vec::new();
     for _ in 0..n {
@@ -85,7 +92,14 @@ fn assert_snapshot_invariants(s: &api::GoatGameState, ctx: &str) {
 #[test]
 fn new_game_snapshot_is_sane() {
     let _g = serial();
-    let s = api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    let s = api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
 
     assert!(api::has_active_game());
     assert_eq!(s.player_name, NAME);
@@ -187,6 +201,14 @@ fn direct_build_peers(world_seed: u64, nationality: &str) -> Vec<PeerState> {
 
 /// Same intent sequence `new_game` performs, applied via direct reduce.
 fn direct_new_game(seed: u64, club_id: usize) -> WorldState {
+    direct_new_game_with_role(seed, club_id, None)
+}
+
+fn direct_new_game_with_role(
+    seed: u64,
+    club_id: usize,
+    primary_role: Option<goat_core::roles::RoleId>,
+) -> WorldState {
     let world = WorldGenesis::generate(seed);
     let club = &world.clubs[club_id];
     let div_idx = world.club_league(club_id);
@@ -195,6 +217,7 @@ fn direct_new_game(seed: u64, club_id: usize) -> WorldState {
     let choices = CreationChoices {
         name: NAME.to_string(),
         primary_position: PrimaryPosition::ST,
+        primary_role,
         nationality: nationality.clone(),
         club: club.name.clone(),
     };
@@ -312,7 +335,14 @@ fn bridge_path_matches_direct_reduce() {
     let _g = serial();
 
     // Bridge path.
-    let bridge_snap = api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    let bridge_snap = api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
     // Direct path.
     let mut direct = direct_new_game(SEED, CLUB_ID as usize);
     assert_bridge_matches_direct(&bridge_snap, &direct, "after new_game");
@@ -347,7 +377,14 @@ fn bridge_path_matches_direct_reduce() {
 fn bridge_phase10_actions_match_direct_reduce() {
     let _g = serial();
 
-    let bridge_snap = api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    let bridge_snap = api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
     let mut direct = direct_new_game(SEED, CLUB_ID as usize);
     assert_bridge_matches_direct(&bridge_snap, &direct, "after new_game");
 
@@ -422,7 +459,14 @@ fn bridge_phase10_actions_match_direct_reduce() {
 #[test]
 fn full_season_and_season_end_flow() {
     let _g = serial();
-    api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
     api::set_routine(vec![0, 1, 2], 1);
 
     let mut snap = api::get_state().expect("state after new_game");
@@ -515,7 +559,14 @@ fn save_load_roundtrip_preserves_snapshot() {
 #[test]
 fn interactive_match_completes_and_advances_round() {
     let _g = serial();
-    api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
     api::advance_week();
 
     let round_before = api::get_state().unwrap().season_round;
@@ -572,7 +623,14 @@ fn interactive_match_completes_and_advances_round() {
 #[test]
 fn calendar_shifts_with_played_rounds() {
     let _g = serial();
-    let s = api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    let s = api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
     assert_eq!(s.calendar_week, 7);
     assert_eq!(s.week_fixtures.len(), 1, "week 7 is a single-fixture week");
 
@@ -607,7 +665,14 @@ fn double_fixture_week_ticks_once() {
 
     // Untrained path: rounds 0..3 span calendar weeks 0–1 (week 1 has two
     // fixtures). Exactly 2 weeks may elapse.
-    api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
     let (s, _) = api::play_round(false); // round 0 → week 0 elapses
     assert_eq!((s.age_years, s.age_weeks_in_year), (16, 1));
     assert!(!s.week_training_done);
@@ -626,7 +691,14 @@ fn double_fixture_week_ticks_once() {
     assert!(!s.week_training_done, "a fresh week opens after the pair");
 
     // Trained path: a second training in the same week is a reducer-level no-op.
-    api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
     api::set_routine(vec![0, 1, 2], 1);
     api::advance_week(); // week 0 training
     api::play_round(false); // round 0
@@ -654,7 +726,7 @@ fn each_position_seeds_matching_family() {
     use goat_core::roles::{RoleId, ROLE_POSITION_FAMILY};
 
     for pos in 0u8..8 {
-        let s = api::new_game(NAME.to_string(), pos, CLUB_ID, SEED + pos as u64, 0);
+        let s = api::new_game(NAME.to_string(), pos, CLUB_ID, SEED + pos as u64, 0, None);
         assert_eq!(s.position, pos, "snapshot echoes position {pos}");
 
         let roles = api::get_roles();
@@ -690,7 +762,14 @@ fn each_position_seeds_matching_family() {
 #[test]
 fn advance_weeks_caps_to_one_week_while_match_is_pending() {
     let _g = serial();
-    let s0 = api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    let s0 = api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
     assert_eq!(s0.season_round, 0);
     assert!(
         !s0.week_fixtures.is_empty(),
@@ -753,7 +832,14 @@ fn advance_weeks_caps_to_one_week_while_match_is_pending() {
 #[test]
 fn retire_sets_flag_via_bridge() {
     let _g = serial();
-    api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
     let s = api::retire();
     assert!(
         s.is_retired,
@@ -766,7 +852,14 @@ fn retire_sets_flag_via_bridge() {
 #[test]
 fn world_read_models_return_summaries_without_mutating_state() {
     let _g = serial();
-    let before = api::new_game(NAME.to_string(), POS_FWD, CLUB_ID, SEED, LIFESTYLE_PRO);
+    let before = api::new_game(
+        NAME.to_string(),
+        POS_FWD,
+        CLUB_ID,
+        SEED,
+        LIFESTYLE_PRO,
+        None,
+    );
 
     let canon = api::get_pantheon_canon();
     assert!(!canon.is_empty(), "pantheon canon must be non-empty");
@@ -797,4 +890,32 @@ fn world_read_models_return_summaries_without_mutating_state() {
     assert_eq!(before.season_round, after.season_round);
     assert_eq!(before.savings, after.savings);
     assert_eq!(before.energy, after.energy);
+}
+
+// ── Creation role choice (TASK-CORE-creation-role-choice) ────────────────────
+
+/// new_game with an explicit role must produce the same player as the direct
+/// path with that role — and a measurably different one from the dice path.
+#[test]
+fn new_game_with_role_choice_matches_direct() {
+    let _g = serial();
+
+    // Role 8 = Winger, on the default ST position (parity is about identical
+    // inputs on both paths; the role-correctness invariants live in goat-core's
+    // generation tests).
+    let bridge_snap = api::new_game(NAME.to_string(), 0, CLUB_ID, SEED, LIFESTYLE_PRO, Some(8));
+    let direct = direct_new_game_with_role(
+        SEED,
+        CLUB_ID as usize,
+        Some(goat_core::roles::RoleId::Winger),
+    );
+    assert_bridge_matches_direct(&bridge_snap, &direct, "new_game with role");
+
+    // The role picker metadata is complete and correctly family-mapped.
+    let roles = api::list_roles_for_creation();
+    assert_eq!(roles.len(), 14);
+    assert_eq!(roles[8].name, "Winger");
+    assert_eq!(roles[8].family, 1, "Winger is Midfielder family");
+    assert_eq!(roles[12].name, "Complete Forward");
+    assert_eq!(roles[12].family, 2);
 }

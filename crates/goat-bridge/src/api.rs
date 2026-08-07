@@ -400,20 +400,30 @@ pub struct BeatOutcomeDto {
 
 // ── Builder helpers ───────────────────────────────────────────────────────────
 
-/// Family-representative match role for a specific position (0..7 PrimaryPosition
-/// discriminant). Deploying the player in their exact role (Winger vs Poacher …)
-/// is the TASK-CORE-creation-role-choice follow-up; until then the match engine
-/// uses one anchor role per broad family, matching pre-revision behaviour.
-fn match_role_for_position(pc_position: u8) -> RoleId {
-    use goat_core::roles::PositionFamily;
-    match PrimaryPosition::from_u8(pc_position)
-        .unwrap_or(PrimaryPosition::ST)
-        .family()
-    {
-        PositionFamily::Defender => RoleId::CentreBack,
-        PositionFamily::Midfielder => RoleId::CentralMid,
-        PositionFamily::Forward => RoleId::CompleteForward,
-    }
+/// Role metadata for the creation picker (TASK-CORE-creation-role-choice):
+/// RoleId discriminant + display name + broad family.
+pub struct CreationRoleDto {
+    pub role_id: u8,
+    pub name: String,
+    /// 0=Defender 1=Midfielder 2=Forward.
+    pub family: u8,
+}
+
+/// All 14 roles for the creation screen's role picker.
+pub fn list_roles_for_creation() -> Vec<CreationRoleDto> {
+    use goat_core::roles::{PositionFamily, ROLE_POSITION_FAMILY};
+    RoleId::ALL
+        .iter()
+        .map(|&r| CreationRoleDto {
+            role_id: r as u8,
+            name: r.name().to_string(),
+            family: match ROLE_POSITION_FAMILY[r as usize] {
+                PositionFamily::Defender => 0,
+                PositionFamily::Midfielder => 1,
+                PositionFamily::Forward => 2,
+            },
+        })
+        .collect()
 }
 
 /// Map the state's accumulated window flashpoints to DTOs (B.2). `WindowKind`
@@ -736,6 +746,7 @@ pub fn new_game(
     club_id: u32,
     seed: u64,
     _lifestyle: u8,
+    primary_role: Option<u8>,
 ) -> GoatGameState {
     let club_id = club_id as usize;
     // The actual played world is generated from `seed` (the real game seed), not
@@ -753,6 +764,10 @@ pub fn new_game(
     let choices = CreationChoices {
         name: player_name,
         primary_position,
+        // Role choice (TASK-CORE-creation-role-choice): Some(r) picks the role
+        // outright; None keeps the dice roll — byte-identical to before.
+        primary_role: primary_role
+            .and_then(|r| goat_core::roles::RoleId::ALL.get(r as usize).copied()),
         nationality: nationality.clone(),
         club: club.name.clone(),
     };
@@ -1333,7 +1348,9 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
                 };
 
                 let setup = MatchSetup {
-                    player_role: match_role_for_position(state.pc_position),
+                    player_role: PrimaryPosition::from_u8(state.pc_position)
+                        .unwrap_or(PrimaryPosition::ST)
+                        .default_role(),
                     player_attrs: view.current,
                     player_familiarity: view.familiarity,
                     own_strength: own_str,
@@ -2177,7 +2194,9 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
         };
 
         let setup = MatchSetup {
-            player_role: match_role_for_position(s.pc_position),
+            player_role: PrimaryPosition::from_u8(s.pc_position)
+                .unwrap_or(PrimaryPosition::ST)
+                .default_role(),
             player_attrs: view.current,
             player_familiarity: view.familiarity,
             own_strength: own_str,

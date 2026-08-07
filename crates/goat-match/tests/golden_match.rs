@@ -24,6 +24,7 @@ fn forward_attrs() -> [Fixed; NUM_ATTRS] {
     let c = CreationChoices {
         name: "Test".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "Brazilian".to_string(),
         club: "Riverside Town".to_string(),
     };
@@ -34,6 +35,7 @@ fn forward_fam() -> [goat_core::roles::FamiliarityTier; goat_core::roles::NUM_RO
     let c = CreationChoices {
         name: "Test".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "Brazilian".to_string(),
         club: "Riverside Town".to_string(),
     };

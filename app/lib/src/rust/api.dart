@@ -6,9 +6,13 @@
 import 'frb_generated.dart';
 import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated.dart';
 
-// These functions are ignored because they are not marked as `pub`: `beat_to_dto`, `build_game_state`, `build_peers`, `current_week_has_pending_match`, `current_year`, `flashpoint_dtos`, `get_world`, `live_league_clubs`, `match_role_for_position`, `set_state`, `take_state`, `with_beat_lib`, `with_state_mut`, `with_state`
+// These functions are ignored because they are not marked as `pub`: `beat_to_dto`, `build_game_state`, `build_peers`, `current_week_has_pending_match`, `current_year`, `flashpoint_dtos`, `get_world`, `live_league_clubs`, `set_state`, `take_state`, `with_beat_lib`, `with_state_mut`, `with_state`
 // These types are ignored because they are neither used by any `pub` functions nor (for structs and enums) marked `#[frb(unignore)]`: `ActiveMatchSession`
 // These function are ignored because they are on traits that is not defined in current crate (put an empty `#[frb]` on it to unignore): `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `clone`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `eq`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`, `fmt`
+
+/// All 14 roles for the creation screen's role picker.
+Future<List<CreationRoleDto>> listRolesForCreation() =>
+    RustLib.instance.api.crateApiListRolesForCreation();
 
 /// True if a game is currently loaded in memory.
 Future<bool> hasActiveGame() => RustLib.instance.api.crateApiHasActiveGame();
@@ -35,13 +39,15 @@ Future<GoatGameState> newGame(
         required int position,
         required int clubId,
         required BigInt seed,
-        required int lifestyle}) =>
+        required int lifestyle,
+        int? primaryRole}) =>
     RustLib.instance.api.crateApiNewGame(
         playerName: playerName,
         position: position,
         clubId: clubId,
         seed: seed,
-        lifestyle: lifestyle);
+        lifestyle: lifestyle,
+        primaryRole: primaryRole);
 
 /// Advance one training week. Returns updated state.
 Future<GoatGameState> advanceWeek() =>
@@ -470,6 +476,34 @@ class ClubDto {
           strength == other.strength &&
           divName == other.divName &&
           divIdx == other.divIdx;
+}
+
+/// Role metadata for the creation picker (TASK-CORE-creation-role-choice):
+/// RoleId discriminant + display name + broad family.
+class CreationRoleDto {
+  final int roleId;
+  final String name;
+
+  /// 0=Defender 1=Midfielder 2=Forward.
+  final int family;
+
+  const CreationRoleDto({
+    required this.roleId,
+    required this.name,
+    required this.family,
+  });
+
+  @override
+  int get hashCode => roleId.hashCode ^ name.hashCode ^ family.hashCode;
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is CreationRoleDto &&
+          runtimeType == other.runtimeType &&
+          roleId == other.roleId &&
+          name == other.name &&
+          family == other.family;
 }
 
 class FamilyDto {

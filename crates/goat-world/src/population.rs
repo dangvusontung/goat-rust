@@ -284,6 +284,7 @@ impl Population {
         let choices = CreationChoices {
             name: name.into(),
             primary_position: position_from_u8(self.position[idx]),
+            primary_role: None,
             nationality: world.nation_name(self.nation[idx] as usize).to_string(),
             club: club.name.clone(),
         };

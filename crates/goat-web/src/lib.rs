@@ -428,19 +428,6 @@ fn beat_to_dto(
     }
 }
 
-/// Family-representative match role for a position (copied from the bridge).
-fn match_role_for_position(pc_position: u8) -> goat_core::roles::RoleId {
-    use goat_core::roles::PositionFamily;
-    match PrimaryPosition::from_u8(pc_position)
-        .unwrap_or(PrimaryPosition::ST)
-        .family()
-    {
-        PositionFamily::Defender => goat_core::roles::RoleId::CentreBack,
-        PositionFamily::Midfielder => goat_core::roles::RoleId::CentralMid,
-        PositionFamily::Forward => goat_core::roles::RoleId::CompleteForward,
-    }
-}
-
 fn build_match_setup(
     s: &WorldState,
     own_strength: u8,
@@ -455,7 +442,9 @@ fn build_match_setup(
         RefPersonality::from_rng(&mut rp_rng)
     };
     MatchSetup {
-        player_role: match_role_for_position(s.pc_position),
+        player_role: PrimaryPosition::from_u8(s.pc_position)
+            .unwrap_or(PrimaryPosition::ST)
+            .default_role(),
         player_attrs: view.current,
         player_familiarity: view.familiarity,
         own_strength,
@@ -680,6 +669,7 @@ pub fn new_game(
     let choices = CreationChoices {
         name: name.to_string(),
         primary_position,
+        primary_role: None,
         nationality: nationality.clone(),
         club: club.name.clone(),
     };

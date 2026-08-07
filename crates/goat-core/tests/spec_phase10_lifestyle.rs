@@ -44,6 +44,7 @@ fn run_career(seed: u64, lifestyle: u8, weeks: u32) -> (i32, u32) {
     let choices = CreationChoices {
         name: "Spec".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "Brazilian".to_string(),
         club: "Riverside Town".to_string(),
     };
@@ -131,6 +132,7 @@ fn lifestyle_never_breaks_talent_ceiling() {
     let choices = CreationChoices {
         name: "Ceil".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "Brazilian".to_string(),
         club: "Riverside Town".to_string(),
     };

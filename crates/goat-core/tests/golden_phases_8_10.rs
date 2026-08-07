@@ -18,6 +18,7 @@ fn base_state() -> WorldState {
     let choices = CreationChoices {
         name: "Test Legend".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "England".to_string(),
         club: "Burnley".to_string(),
     };

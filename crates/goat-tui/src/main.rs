@@ -290,6 +290,7 @@ fn run_new_game(
     let choices = CreationChoices {
         name,
         primary_position,
+        primary_role: None,
         nationality: nationality.clone(),
         club: club_name,
     };
@@ -456,7 +457,9 @@ fn run_friendly(
         RefPersonality::from_rng(&mut rp_rng)
     };
     let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
-        player_role: best_role_for_position(state.pc_position),
+        player_role: PrimaryPosition::from_u8(state.pc_position)
+            .unwrap_or(PrimaryPosition::ST)
+            .default_role(),
         player_attrs: view.current,
         player_familiarity: view.familiarity,
         own_strength: world.clubs[pc_club_id].strength,
@@ -1138,6 +1141,7 @@ fn run_game_loop(
                         name: view.name.clone(),
                         primary_position: PrimaryPosition::from_u8(state.pc_position)
                             .unwrap_or(PrimaryPosition::ST),
+                        primary_role: None,
                         nationality: state.pc_nationality.clone(),
                         club: state.pc_club.clone(),
                     };
@@ -1292,7 +1296,9 @@ fn run_next_round(
                 };
 
                 let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
-                    player_role: best_role_for_position(state.pc_position),
+                    player_role: PrimaryPosition::from_u8(state.pc_position)
+                        .unwrap_or(PrimaryPosition::ST)
+                        .default_role(),
                     player_attrs: view.current,
                     player_familiarity: view.familiarity,
                     own_strength: own_str,
@@ -1620,7 +1626,9 @@ fn maybe_play_cup_fixture(
         };
         let view = state.players.snapshot(pc_id);
         let setup = MatchSetup {
-            player_role: best_role_for_position(state.pc_position),
+            player_role: PrimaryPosition::from_u8(state.pc_position)
+                .unwrap_or(PrimaryPosition::ST)
+                .default_role(),
             player_attrs: view.current,
             player_familiarity: view.familiarity,
             own_strength: own_str,
@@ -1762,7 +1770,9 @@ fn play_orbit_match(
         };
         let view = state.players.snapshot(pc_id);
         let setup = MatchSetup {
-            player_role: best_role_for_position(state.pc_position),
+            player_role: PrimaryPosition::from_u8(state.pc_position)
+                .unwrap_or(PrimaryPosition::ST)
+                .default_role(),
             player_attrs: view.current,
             player_familiarity: view.familiarity,
             own_strength: own_str,
@@ -2463,21 +2473,6 @@ fn competition_label(competition_id: goat_calendar::CompetitionId) -> &'static s
         "Continental Championship"
     } else {
         "Competition"
-    }
-}
-
-/// Family-representative match role for a 0..7 PrimaryPosition discriminant
-/// (0=ST … 7=CB). The pre-revision 0..2 mapping would deploy a Striker (0) as
-/// a CentreBack.
-fn best_role_for_position(pc_position: u8) -> RoleId {
-    use goat_core::{positions::PrimaryPosition, roles::PositionFamily};
-    match PrimaryPosition::from_u8(pc_position)
-        .unwrap_or(PrimaryPosition::ST)
-        .family()
-    {
-        PositionFamily::Defender => RoleId::CentreBack,
-        PositionFamily::Midfielder => RoleId::CentralMid,
-        PositionFamily::Forward => RoleId::CompleteForward,
     }
 }
 

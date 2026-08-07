@@ -52,7 +52,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   MatchResultDto dco_decode_box_autoadd_match_result_dto(dynamic raw);
 
   @protected
+  int dco_decode_box_autoadd_u_8(dynamic raw);
+
+  @protected
   ClubDto dco_decode_club_dto(dynamic raw);
+
+  @protected
+  CreationRoleDto dco_decode_creation_role_dto(dynamic raw);
 
   @protected
   FamilyDto dco_decode_family_dto(dynamic raw);
@@ -92,6 +98,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ClubDto> dco_decode_list_club_dto(dynamic raw);
+
+  @protected
+  List<CreationRoleDto> dco_decode_list_creation_role_dto(dynamic raw);
 
   @protected
   List<FlashpointDto> dco_decode_list_flashpoint_dto(dynamic raw);
@@ -149,6 +158,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   MatchResultDto? dco_decode_opt_box_autoadd_match_result_dto(dynamic raw);
+
+  @protected
+  int? dco_decode_opt_box_autoadd_u_8(dynamic raw);
 
   @protected
   PantheonEntryDto dco_decode_pantheon_entry_dto(dynamic raw);
@@ -234,7 +246,13 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       SseDeserializer deserializer);
 
   @protected
+  int sse_decode_box_autoadd_u_8(SseDeserializer deserializer);
+
+  @protected
   ClubDto sse_decode_club_dto(SseDeserializer deserializer);
+
+  @protected
+  CreationRoleDto sse_decode_creation_role_dto(SseDeserializer deserializer);
 
   @protected
   FamilyDto sse_decode_family_dto(SseDeserializer deserializer);
@@ -275,6 +293,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   List<ClubDto> sse_decode_list_club_dto(SseDeserializer deserializer);
+
+  @protected
+  List<CreationRoleDto> sse_decode_list_creation_role_dto(
+      SseDeserializer deserializer);
 
   @protected
   List<FlashpointDto> sse_decode_list_flashpoint_dto(
@@ -344,6 +366,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   MatchResultDto? sse_decode_opt_box_autoadd_match_result_dto(
       SseDeserializer deserializer);
+
+  @protected
+  int? sse_decode_opt_box_autoadd_u_8(SseDeserializer deserializer);
 
   @protected
   PantheonEntryDto sse_decode_pantheon_entry_dto(SseDeserializer deserializer);
@@ -431,7 +456,14 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
       MatchResultDto self, SseSerializer serializer);
 
   @protected
+  void sse_encode_box_autoadd_u_8(int self, SseSerializer serializer);
+
+  @protected
   void sse_encode_club_dto(ClubDto self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_creation_role_dto(
+      CreationRoleDto self, SseSerializer serializer);
 
   @protected
   void sse_encode_family_dto(FamilyDto self, SseSerializer serializer);
@@ -473,6 +505,10 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
 
   @protected
   void sse_encode_list_club_dto(List<ClubDto> self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_list_creation_role_dto(
+      List<CreationRoleDto> self, SseSerializer serializer);
 
   @protected
   void sse_encode_list_flashpoint_dto(
@@ -546,6 +582,9 @@ abstract class RustLibApiImplPlatform extends BaseApiImpl<RustLibWire> {
   @protected
   void sse_encode_opt_box_autoadd_match_result_dto(
       MatchResultDto? self, SseSerializer serializer);
+
+  @protected
+  void sse_encode_opt_box_autoadd_u_8(int? self, SseSerializer serializer);
 
   @protected
   void sse_encode_pantheon_entry_dto(

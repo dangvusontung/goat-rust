@@ -14,6 +14,7 @@ fn forward_choices() -> CreationChoices {
     CreationChoices {
         name: "Golden Forward".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "Brazilian".to_string(),
         club: "Local FC".to_string(),
     }
@@ -94,6 +95,7 @@ fn golden_seed_777_defender() {
     let choices = CreationChoices {
         name: "Golden Defender".into(),
         primary_position: PrimaryPosition::CB,
+        primary_role: None,
         nationality: "English".to_string(),
         club: "Academy United".to_string(),
     };

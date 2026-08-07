@@ -223,6 +223,7 @@ fn scan_star_seed(limit: u64, sim_pos: SimPos) -> Option<u64> {
     let choices = CreationChoices {
         name: "Prospect".into(),
         primary_position: sim_pos.to_position(),
+        primary_role: None,
         nationality: "England".to_string(),
         club: "Leeds United".to_string(),
     };
@@ -292,6 +293,7 @@ fn main() {
         let choices = CreationChoices {
             name: "Striker".into(),
             primary_position: PrimaryPosition::ST,
+            primary_role: None,
             nationality: "Brazilian".to_string(),
             club: "Riverside Town".to_string(),
         };
@@ -387,6 +389,7 @@ fn main() {
         let choices = CreationChoices {
             name: "Tung".into(),
             primary_position: PrimaryPosition::ST,
+            primary_role: None,
             nationality: "England".to_string(),
             club: world.clubs[pc_club_id].name.clone(),
         };
@@ -659,6 +662,7 @@ fn main() {
         let choices = CreationChoices {
             name: "Striker".into(),
             primary_position: PrimaryPosition::ST,
+            primary_role: None,
             nationality: "Brazilian".to_string(),
             club: "Riverside Town".to_string(),
         };
@@ -930,6 +934,7 @@ fn main() {
         let choices = CreationChoices {
             name: "X".into(),
             primary_position: sim_pos.to_position(),
+            primary_role: None,
             nationality: "England".to_string(),
             club: "Leeds United".to_string(),
         };
@@ -977,6 +982,7 @@ fn main() {
     let choices = CreationChoices {
         name: "Tung".into(),
         primary_position: sim_pos.to_position(),
+        primary_role: None,
         nationality: "England".to_string(),
         club: world.clubs[pc_club_id].name.clone(),
     };

@@ -48,7 +48,11 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected MatchResultDto dco_decode_box_autoadd_match_result_dto(dynamic raw);
 
+@protected int dco_decode_box_autoadd_u_8(dynamic raw);
+
 @protected ClubDto dco_decode_club_dto(dynamic raw);
+
+@protected CreationRoleDto dco_decode_creation_role_dto(dynamic raw);
 
 @protected FamilyDto dco_decode_family_dto(dynamic raw);
 
@@ -75,6 +79,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected List<BeatChoiceDto> dco_decode_list_beat_choice_dto(dynamic raw);
 
 @protected List<ClubDto> dco_decode_list_club_dto(dynamic raw);
+
+@protected List<CreationRoleDto> dco_decode_list_creation_role_dto(dynamic raw);
 
 @protected List<FlashpointDto> dco_decode_list_flashpoint_dto(dynamic raw);
 
@@ -113,6 +119,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected GoatGameState? dco_decode_opt_box_autoadd_goat_game_state(dynamic raw);
 
 @protected MatchResultDto? dco_decode_opt_box_autoadd_match_result_dto(dynamic raw);
+
+@protected int? dco_decode_opt_box_autoadd_u_8(dynamic raw);
 
 @protected PantheonEntryDto dco_decode_pantheon_entry_dto(dynamic raw);
 
@@ -166,7 +174,11 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected MatchResultDto sse_decode_box_autoadd_match_result_dto(SseDeserializer deserializer);
 
+@protected int sse_decode_box_autoadd_u_8(SseDeserializer deserializer);
+
 @protected ClubDto sse_decode_club_dto(SseDeserializer deserializer);
+
+@protected CreationRoleDto sse_decode_creation_role_dto(SseDeserializer deserializer);
 
 @protected FamilyDto sse_decode_family_dto(SseDeserializer deserializer);
 
@@ -193,6 +205,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected List<BeatChoiceDto> sse_decode_list_beat_choice_dto(SseDeserializer deserializer);
 
 @protected List<ClubDto> sse_decode_list_club_dto(SseDeserializer deserializer);
+
+@protected List<CreationRoleDto> sse_decode_list_creation_role_dto(SseDeserializer deserializer);
 
 @protected List<FlashpointDto> sse_decode_list_flashpoint_dto(SseDeserializer deserializer);
 
@@ -231,6 +245,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected GoatGameState? sse_decode_opt_box_autoadd_goat_game_state(SseDeserializer deserializer);
 
 @protected MatchResultDto? sse_decode_opt_box_autoadd_match_result_dto(SseDeserializer deserializer);
+
+@protected int? sse_decode_opt_box_autoadd_u_8(SseDeserializer deserializer);
 
 @protected PantheonEntryDto sse_decode_pantheon_entry_dto(SseDeserializer deserializer);
 
@@ -284,7 +300,11 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 
 @protected void sse_encode_box_autoadd_match_result_dto(MatchResultDto self, SseSerializer serializer);
 
+@protected void sse_encode_box_autoadd_u_8(int self, SseSerializer serializer);
+
 @protected void sse_encode_club_dto(ClubDto self, SseSerializer serializer);
+
+@protected void sse_encode_creation_role_dto(CreationRoleDto self, SseSerializer serializer);
 
 @protected void sse_encode_family_dto(FamilyDto self, SseSerializer serializer);
 
@@ -311,6 +331,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected void sse_encode_list_beat_choice_dto(List<BeatChoiceDto> self, SseSerializer serializer);
 
 @protected void sse_encode_list_club_dto(List<ClubDto> self, SseSerializer serializer);
+
+@protected void sse_encode_list_creation_role_dto(List<CreationRoleDto> self, SseSerializer serializer);
 
 @protected void sse_encode_list_flashpoint_dto(List<FlashpointDto> self, SseSerializer serializer);
 
@@ -349,6 +371,8 @@ import 'package:flutter_rust_bridge/flutter_rust_bridge_for_generated_web.dart';
 @protected void sse_encode_opt_box_autoadd_goat_game_state(GoatGameState? self, SseSerializer serializer);
 
 @protected void sse_encode_opt_box_autoadd_match_result_dto(MatchResultDto? self, SseSerializer serializer);
+
+@protected void sse_encode_opt_box_autoadd_u_8(int? self, SseSerializer serializer);
 
 @protected void sse_encode_pantheon_entry_dto(PantheonEntryDto self, SseSerializer serializer);
 

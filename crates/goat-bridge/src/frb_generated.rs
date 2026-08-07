@@ -37,7 +37,7 @@ flutter_rust_bridge::frb_generated_boilerplate!(
     default_rust_auto_opaque = RustAutoOpaqueMoi,
 );
 pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_VERSION: &str = "2.9.0";
-pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = -2032257203;
+pub(crate) const FLUTTER_RUST_BRIDGE_CODEGEN_CONTENT_HASH: i32 = 1006663269;
 
 // Section: executor
 
@@ -826,6 +826,38 @@ fn wire__crate__api__list_clubs_impl(
         },
     )
 }
+fn wire__crate__api__list_roles_for_creation_impl(
+    port_: flutter_rust_bridge::for_generated::MessagePort,
+    ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
+    rust_vec_len_: i32,
+    data_len_: i32,
+) {
+    FLUTTER_RUST_BRIDGE_HANDLER.wrap_normal::<flutter_rust_bridge::for_generated::SseCodec, _, _>(
+        flutter_rust_bridge::for_generated::TaskInfo {
+            debug_name: "list_roles_for_creation",
+            port: Some(port_),
+            mode: flutter_rust_bridge::for_generated::FfiCallMode::Normal,
+        },
+        move || {
+            let message = unsafe {
+                flutter_rust_bridge::for_generated::Dart2RustMessageSse::from_wire(
+                    ptr_,
+                    rust_vec_len_,
+                    data_len_,
+                )
+            };
+            let mut deserializer =
+                flutter_rust_bridge::for_generated::SseDeserializer::new(message);
+            deserializer.end();
+            move |context| {
+                transform_result_sse::<_, ()>((move || {
+                    let output_ok = Result::<_, ()>::Ok(crate::api::list_roles_for_creation())?;
+                    Ok(output_ok)
+                })())
+            }
+        },
+    )
+}
 fn wire__crate__api__load_beat_library_impl(
     port_: flutter_rust_bridge::for_generated::MessagePort,
     ptr_: flutter_rust_bridge::for_generated::PlatformGeneralizedUint8ListPtr,
@@ -953,6 +985,7 @@ fn wire__crate__api__new_game_impl(
             let api_club_id = <u32>::sse_decode(&mut deserializer);
             let api_seed = <u64>::sse_decode(&mut deserializer);
             let api__lifestyle = <u8>::sse_decode(&mut deserializer);
+            let api_primary_role = <Option<u8>>::sse_decode(&mut deserializer);
             deserializer.end();
             move |context| {
                 transform_result_sse::<_, ()>((move || {
@@ -962,6 +995,7 @@ fn wire__crate__api__new_game_impl(
                         api_club_id,
                         api_seed,
                         api__lifestyle,
+                        api_primary_role,
                     ))?;
                     Ok(output_ok)
                 })())
@@ -1517,6 +1551,20 @@ impl SseDecode for crate::api::ClubDto {
     }
 }
 
+impl SseDecode for crate::api::CreationRoleDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut var_roleId = <u8>::sse_decode(deserializer);
+        let mut var_name = <String>::sse_decode(deserializer);
+        let mut var_family = <u8>::sse_decode(deserializer);
+        return crate::api::CreationRoleDto {
+            role_id: var_roleId,
+            name: var_name,
+            family: var_family,
+        };
+    }
+}
+
 impl SseDecode for crate::api::FamilyDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -1791,6 +1839,18 @@ impl SseDecode for Vec<crate::api::ClubDto> {
     }
 }
 
+impl SseDecode for Vec<crate::api::CreationRoleDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        let mut len_ = <i32>::sse_decode(deserializer);
+        let mut ans_ = vec![];
+        for idx_ in 0..len_ {
+            ans_.push(<crate::api::CreationRoleDto>::sse_decode(deserializer));
+        }
+        return ans_;
+    }
+}
+
 impl SseDecode for Vec<crate::api::FlashpointDto> {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
@@ -2007,6 +2067,17 @@ impl SseDecode for Option<crate::api::MatchResultDto> {
     fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
         if (<bool>::sse_decode(deserializer)) {
             return Some(<crate::api::MatchResultDto>::sse_decode(deserializer));
+        } else {
+            return None;
+        }
+    }
+}
+
+impl SseDecode for Option<u8> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_decode(deserializer: &mut flutter_rust_bridge::for_generated::SseDeserializer) -> Self {
+        if (<bool>::sse_decode(deserializer)) {
+            return Some(<u8>::sse_decode(deserializer));
         } else {
             return None;
         }
@@ -2264,22 +2335,23 @@ fn pde_ffi_dispatcher_primary_impl(
         22 => wire__crate__api__has_active_game_impl(port, ptr, rust_vec_len, data_len),
         23 => wire__crate__api__invest_in_business_impl(port, ptr, rust_vec_len, data_len),
         24 => wire__crate__api__list_clubs_impl(port, ptr, rust_vec_len, data_len),
-        25 => wire__crate__api__load_beat_library_impl(port, ptr, rust_vec_len, data_len),
-        26 => wire__crate__api__load_game_impl(port, ptr, rust_vec_len, data_len),
-        27 => wire__crate__api__make_beat_choice_impl(port, ptr, rust_vec_len, data_len),
-        28 => wire__crate__api__new_game_impl(port, ptr, rust_vec_len, data_len),
-        29 => wire__crate__api__play_round_impl(port, ptr, rust_vec_len, data_len),
-        30 => wire__crate__api__respond_to_media_impl(port, ptr, rust_vec_len, data_len),
-        31 => wire__crate__api__retire_impl(port, ptr, rust_vec_len, data_len),
-        32 => wire__crate__api__save_game_impl(port, ptr, rust_vec_len, data_len),
-        33 => wire__crate__api__set_dev_investment_impl(port, ptr, rust_vec_len, data_len),
-        34 => wire__crate__api__set_marketability_impl(port, ptr, rust_vec_len, data_len),
-        35 => wire__crate__api__set_routine_impl(port, ptr, rust_vec_len, data_len),
-        36 => wire__crate__api__settle_season_economy_impl(port, ptr, rust_vec_len, data_len),
-        37 => wire__crate__api__should_retire_impl(port, ptr, rust_vec_len, data_len),
-        38 => wire__crate__api__sign_sponsor_impl(port, ptr, rust_vec_len, data_len),
-        39 => wire__crate__api__start_interactive_match_impl(port, ptr, rust_vec_len, data_len),
-        40 => wire__crate__api__start_next_season_impl(port, ptr, rust_vec_len, data_len),
+        25 => wire__crate__api__list_roles_for_creation_impl(port, ptr, rust_vec_len, data_len),
+        26 => wire__crate__api__load_beat_library_impl(port, ptr, rust_vec_len, data_len),
+        27 => wire__crate__api__load_game_impl(port, ptr, rust_vec_len, data_len),
+        28 => wire__crate__api__make_beat_choice_impl(port, ptr, rust_vec_len, data_len),
+        29 => wire__crate__api__new_game_impl(port, ptr, rust_vec_len, data_len),
+        30 => wire__crate__api__play_round_impl(port, ptr, rust_vec_len, data_len),
+        31 => wire__crate__api__respond_to_media_impl(port, ptr, rust_vec_len, data_len),
+        32 => wire__crate__api__retire_impl(port, ptr, rust_vec_len, data_len),
+        33 => wire__crate__api__save_game_impl(port, ptr, rust_vec_len, data_len),
+        34 => wire__crate__api__set_dev_investment_impl(port, ptr, rust_vec_len, data_len),
+        35 => wire__crate__api__set_marketability_impl(port, ptr, rust_vec_len, data_len),
+        36 => wire__crate__api__set_routine_impl(port, ptr, rust_vec_len, data_len),
+        37 => wire__crate__api__settle_season_economy_impl(port, ptr, rust_vec_len, data_len),
+        38 => wire__crate__api__should_retire_impl(port, ptr, rust_vec_len, data_len),
+        39 => wire__crate__api__sign_sponsor_impl(port, ptr, rust_vec_len, data_len),
+        40 => wire__crate__api__start_interactive_match_impl(port, ptr, rust_vec_len, data_len),
+        41 => wire__crate__api__start_next_season_impl(port, ptr, rust_vec_len, data_len),
         _ => unreachable!(),
     }
 }
@@ -2422,6 +2494,25 @@ impl flutter_rust_bridge::IntoDart for crate::api::ClubDto {
 impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::ClubDto {}
 impl flutter_rust_bridge::IntoIntoDart<crate::api::ClubDto> for crate::api::ClubDto {
     fn into_into_dart(self) -> crate::api::ClubDto {
+        self
+    }
+}
+// Codec=Dco (DartCObject based), see doc to use other codecs
+impl flutter_rust_bridge::IntoDart for crate::api::CreationRoleDto {
+    fn into_dart(self) -> flutter_rust_bridge::for_generated::DartAbi {
+        [
+            self.role_id.into_into_dart().into_dart(),
+            self.name.into_into_dart().into_dart(),
+            self.family.into_into_dart().into_dart(),
+        ]
+        .into_dart()
+    }
+}
+impl flutter_rust_bridge::for_generated::IntoDartExceptPrimitive for crate::api::CreationRoleDto {}
+impl flutter_rust_bridge::IntoIntoDart<crate::api::CreationRoleDto>
+    for crate::api::CreationRoleDto
+{
+    fn into_into_dart(self) -> crate::api::CreationRoleDto {
         self
     }
 }
@@ -2890,6 +2981,15 @@ impl SseEncode for crate::api::ClubDto {
     }
 }
 
+impl SseEncode for crate::api::CreationRoleDto {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <u8>::sse_encode(self.role_id, serializer);
+        <String>::sse_encode(self.name, serializer);
+        <u8>::sse_encode(self.family, serializer);
+    }
+}
+
 impl SseEncode for crate::api::FamilyDto {
     // Codec=Sse (Serialization based), see doc to use other codecs
     fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
@@ -3062,6 +3162,16 @@ impl SseEncode for Vec<crate::api::ClubDto> {
         <i32>::sse_encode(self.len() as _, serializer);
         for item in self {
             <crate::api::ClubDto>::sse_encode(item, serializer);
+        }
+    }
+}
+
+impl SseEncode for Vec<crate::api::CreationRoleDto> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <i32>::sse_encode(self.len() as _, serializer);
+        for item in self {
+            <crate::api::CreationRoleDto>::sse_encode(item, serializer);
         }
     }
 }
@@ -3245,6 +3355,16 @@ impl SseEncode for Option<crate::api::MatchResultDto> {
         <bool>::sse_encode(self.is_some(), serializer);
         if let Some(value) = self {
             <crate::api::MatchResultDto>::sse_encode(value, serializer);
+        }
+    }
+}
+
+impl SseEncode for Option<u8> {
+    // Codec=Sse (Serialization based), see doc to use other codecs
+    fn sse_encode(self, serializer: &mut flutter_rust_bridge::for_generated::SseSerializer) {
+        <bool>::sse_encode(self.is_some(), serializer);
+        if let Some(value) = self {
+            <u8>::sse_encode(value, serializer);
         }
     }
 }

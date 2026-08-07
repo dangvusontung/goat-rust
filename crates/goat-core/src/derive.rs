@@ -253,6 +253,7 @@ mod tests {
         let c = CreationChoices {
             name: "T".into(),
             primary_position: PrimaryPosition::ST,
+            primary_role: None,
             nationality: "English".to_string(),
             club: "Local FC".to_string(),
         };

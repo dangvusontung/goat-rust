@@ -35,6 +35,7 @@ fn setup_state() -> WorldState {
     let choices = CreationChoices {
         name: "Round-Trip Sam".into(),
         primary_position: PrimaryPosition::ST,
+        primary_role: None,
         nationality: "England".to_string(),
         club: world.clubs[pc_club_id].name.clone(),
     };
