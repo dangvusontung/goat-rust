@@ -1,8 +1,11 @@
 # ROADMAP — Become the GOAT
 
 The whole game, built in 10 phases. Each phase has a **playable gate** — something you
-can do in `goat-tui` when it lands. Claude Code works one phase per task file
-(`tasks/TASK-NN-*.md`), in order, with review pauses inside each.
+can do in `goat-tui` when it lands. `goat-tui` (and, added later, `goat-web`) exist as
+dev/testing harnesses for exercising and manually verifying the core; the actual shipping
+renderer is the Flutter mobile app built against `goat-bridge` (see CLAUDE.md's Project
+overview, and `docs/CLIENT-IMPL.md` / `docs/FLUTTER-APP-GUIDE.md`). Claude Code works one
+phase per task file (`tasks/TASK-NN-*.md`), in order, with review pauses inside each.
 
 Principles baked into the ordering:
 - **Playable from Phase 2 onward.** The TUI arrives early and grows with every phase —
@@ -70,6 +73,14 @@ rather than the inline fallback in `advance_week`.
 
 ## Explicitly out of scope (entire roadmap)
 
-Goalkeeper career, graphical renderers (2D/3D/Flutter), `goat-bridge` FFI, final tuning
-numbers (placeholders throughout, centralized in `tuning` modules), beat-library volume
-beyond the starter set, deeper relationship web. All parked per bible §11.
+Goalkeeper career, final tuning numbers (placeholders throughout, centralized in `tuning`
+modules), beat-library volume beyond the starter set, deeper relationship web. All parked
+per bible §11.
+
+**No longer out of scope, superseding the above:** the Flutter renderer and `goat-bridge`
+FFI were originally parked for this roadmap but are now actively under construction — see
+`docs/CLIENT-IMPL.md` (bridge API reference) and `docs/FLUTTER-APP-GUIDE.md` (screen-by-
+screen build guide, which tracks how far `goat-bridge` lags the core via
+`tasks/TASK-BRIDGE-refresh.md`). `goat-web` (a WASM browser dev harness, `crates/goat-web`
++ `web/`) was also added after this roadmap was written and isn't listed in the phase table
+above; treat it the same as `goat-tui` — a testing surface, not a phase deliverable.
