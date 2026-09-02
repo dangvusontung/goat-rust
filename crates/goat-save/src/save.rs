@@ -1,7 +1,8 @@
-//! Binary save format — big-endian, fixed-size fields, no external deps.
+//! Binary save format — little-endian, fixed-size fields, no external deps.
+//! (The header comment said "big-endian" for years; every field has always been LE.)
 //!
 //! Magic: b"GOAT" (4 bytes)
-//! Version: u32 (4 bytes)
+//! Version: u32 (4 bytes) — the LAYOUT version.
 //! Then all fields as little-endian primitives.
 
 use goat_core::{attrs::NUM_ATTRS, player::PlayerView, roles::NUM_ROLES, state::WorldState};
@@ -64,7 +65,20 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// from wall-clock once by the outer layer at new-game. One trailing u32;
 /// pre-19 saves default to 2025 (the old hardcoded BASE_CAREER_YEAR), keeping
 /// their displayed dates byte-identical.
-pub const VERSION: u32 = 19;
+/// v20+: adds `sim_version` — one trailing u32, pure tail-append. Pre-20 saves read
+/// it as 0, which mismatches the current SIM_VERSION and is refused on load (their
+/// sim behaviour predates the ceiling-lottery restore, so they are genuinely
+/// incompatible).
+pub const VERSION: u32 = 20;
+
+/// The SIMULATION-BEHAVIOUR version — independent of the layout VERSION above.
+/// Bump this whenever a change alters sim outcomes without changing the binary layout
+/// (tuning constants, roll formulas, RNG consumption order). `VERSION` guards "can we
+/// parse these bytes"; `SIM_VERSION` guards "do these bytes still mean the same world".
+/// Without this guard a sim change with no layout change loads old saves *silently*
+/// into a differently-computed universe — the exact failure mode the design's
+/// save-versioning decision (decision list §3) exists to prevent.
+pub const SIM_VERSION: u32 = 1;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -201,6 +215,9 @@ pub enum SaveError {
     Io(io::Error),
     BadMagic,
     BadVersion(u32),
+    /// The save parses fine but was written by an incompatible simulation —
+    /// its world would silently recompute differently. Refuse, don't migrate.
+    SimVersionMismatch { found: u32, expected: u32 },
     Corrupt(&'static str),
 }
 
@@ -216,6 +233,10 @@ impl std::fmt::Display for SaveError {
             SaveError::Io(e) => write!(f, "IO error: {e}"),
             SaveError::BadMagic => write!(f, "not a GOAT save file"),
             SaveError::BadVersion(v) => write!(f, "unsupported save version {v}"),
+            SaveError::SimVersionMismatch { found, expected } => write!(
+                f,
+                "save was written by sim version {found}, this build runs sim version {expected} — the world would recompute differently; start a new career or use the older build"
+            ),
             SaveError::Corrupt(s) => write!(f, "corrupt save: {s}"),
         }
     }
@@ -824,12 +845,38 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
     }
     // v19+ — career base year (one trailing u32).
     push_u32(&mut v, d.career_base_year);
+    // v20+ — simulation-behaviour version (one trailing u32). Always the CURRENT
+    // constant on write; the guard lives in `from_bytes`.
+    push_u32(&mut v, SIM_VERSION);
     v
 }
 
 /// Deserialize from the raw byte format (no I/O) — the web/WASM counterpart of
 /// `to_bytes`, for clients that store save bytes themselves.
+///
+/// This is the GUARDED entry point: it enforces the `SIM_VERSION` check. Use
+/// `from_bytes_layout_only` only for layout-migration tests / future migration tooling.
 pub fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
+    let (data, sim_version) = parse(b)?;
+    if sim_version != SIM_VERSION {
+        return Err(SaveError::SimVersionMismatch {
+            found: sim_version,
+            expected: SIM_VERSION,
+        });
+    }
+    Ok(data)
+}
+
+/// Layout-migration parse WITHOUT the sim-version guard. Pre-v20 byte streams decode
+/// with sim_version = 0 and would be refused by `from_bytes`; this entry exists so the
+/// v8–v19 tail-append migration logic stays exercised by its round-trip tests.
+/// Never wire this into a load path players can reach.
+pub fn from_bytes_layout_only(b: &[u8]) -> Result<SaveData, SaveError> {
+    Ok(parse(b)?.0)
+}
+
+/// Inner parser: returns the data plus the save's sim_version (0 for pre-v20 layouts).
+fn parse(b: &[u8]) -> Result<(SaveData, u32), SaveError> {
     if b.len() < 8 {
         return Err(SaveError::Corrupt("too short"));
     }
@@ -1035,8 +1082,17 @@ pub fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     // Career base year (v19+; default 2025 for older saves — the old hardcoded
     // BASE_CAREER_YEAR, so pre-v19 saves keep their displayed dates).
     let career_base_year = read_u32(b, &mut cur).unwrap_or(2025);
+    // Sim-behaviour version (v20+). The field only EXISTS in v20+ layouts: for older
+    // layout tags the cursor isn't at the trailer, so we must not read there at all —
+    // a pre-20 save's sim_version is definitionally 0 (unknown/legacy semantics).
+    // The guard itself lives in `from_bytes` — this parser just surfaces the value.
+    let sim_version = if ver >= 20 {
+        read_u32(b, &mut cur).unwrap_or(0)
+    } else {
+        0
+    };
 
-    Ok(SaveData {
+    Ok((SaveData {
         world_seed,
         pc_name,
         pc_position,
@@ -1113,7 +1169,7 @@ pub fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_career_clutch_index,
         pc_nation_membership,
         career_base_year,
-    })
+    }, sim_version))
 }
 
 // ── Primitive helpers ─────────────────────────────────────────────────────────

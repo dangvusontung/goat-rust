@@ -19,40 +19,45 @@ fn forward_choices() -> CreationChoices {
     }
 }
 
-/// Seed 12345, Forward — golden values re-frozen after C.9b tuning (KEY=95, IMP=92, SEC=91).
-/// FROZEN after first green run post-tuning.
+/// Seed 12345, Forward.
+///
+/// RE-FROZEN (intentional behaviour change): the talent lottery was restored —
+/// `CEILING_MIN`/`CEILING_MAX` went 99/99 → 70/99, so this seed now rolls ceiling **79**
+/// instead of 99. Same stream order, same formulas; only the ceiling input changed.
+/// This is exactly the class of change goldens exist to catch — updated deliberately,
+/// per the header rule ("new behaviour = new goldens"), NOT to silence a failure.
 #[test]
 fn golden_seed_12345_forward() {
     let p = generate_player(12345, &forward_choices());
 
-    // ── Frozen potential values (C.5 position-shaped + C.9b tuning) ──────────
-    // ST Key=Fin[2]/AttPos[22]: 95% × 99 = ~94 ± noise.
-    // Imp=BallControl[13]/ShotPower[4]/Composure[27]: 92% × 99 = ~91 ± noise.
-    // Sec attrs (Acceleration etc.): 91% × 99 = ~90 ± noise.
+    // ── Frozen potential values (ceiling 79, C.5 position-shaped + noise) ─────
+    // ST Key=Fin[2]/AttPos[22]: 95% × 79 = ~75 ± noise.
+    // Imp=BallControl[13]/ShotPower[4]/Composure[27]: 92% × 79 = ~73 ± noise.
+    // Sec attrs (Acceleration etc.): 91% × 79 = ~72 ± noise.
     // Zero-weight attrs unchanged (~40–49).
-    assert_eq!(p.potential[AttrId::Finishing as usize], Fixed::from_int(92));
+    assert_eq!(p.potential[AttrId::Finishing as usize], Fixed::from_int(73));
     assert_eq!(
         p.potential[AttrId::AttPositioning as usize],
-        Fixed::from_int(94)
+        Fixed::from_int(75)
     );
     assert_eq!(
         p.potential[AttrId::BallControl as usize],
-        Fixed::from_int(93)
+        Fixed::from_int(74)
     );
-    assert_eq!(p.potential[AttrId::Composure as usize], Fixed::from_int(89));
-    assert_eq!(p.potential[AttrId::ShotPower as usize], Fixed::from_int(92));
+    assert_eq!(p.potential[AttrId::Composure as usize], Fixed::from_int(70));
+    assert_eq!(p.potential[AttrId::ShotPower as usize], Fixed::from_int(73));
     assert_eq!(
         p.potential[AttrId::Acceleration as usize],
-        Fixed::from_int(90)
+        Fixed::from_int(71)
     );
 
     // ── Frozen current values ─────────────────────────────────────────────────
-    // Physical (Acc=90): 90_000 × 850/1000 = 76_500
-    // Technical (BCo=93): 93_000 × 700/1000 = 65_100 (unchanged)
-    // Mental (Vision=44 zero-weight): 44_000 × 550/1000 = 24_200 (unchanged)
-    assert_eq!(p.current[AttrId::Acceleration as usize], Fixed::raw(76_500));
-    assert_eq!(p.current[AttrId::BallControl as usize], Fixed::raw(65_100));
-    assert_eq!(p.current[AttrId::Vision as usize], Fixed::raw(24_200));
+    // Physical (Acc=71): 71_000 × 850/1000 = 60_350
+    // Technical (BCo=74): 74_000 × 700/1000 = 51_800
+    // Mental (Vision=40 zero-weight): 40_000 × 550/1000 = 22_000
+    assert_eq!(p.current[AttrId::Acceleration as usize], Fixed::raw(60_350));
+    assert_eq!(p.current[AttrId::BallControl as usize], Fixed::raw(51_800));
+    assert_eq!(p.current[AttrId::Vision as usize], Fixed::raw(22_000));
 
     // ── Frozen familiarity ────────────────────────────────────────────────────
     // primary_position = ST (Forward default)

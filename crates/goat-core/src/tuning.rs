@@ -84,8 +84,11 @@ pub const FAM_XP_IMP_PER_WEEK: Fixed = Fixed::raw(10);
 
 // ── Generation: talent ceiling ────────────────────────────────────────────────
 
-/// Minimum overall talent ceiling (inclusive). Set to 99 so the PC always has max potential.
-pub const CEILING_MIN: u8 = 99;
+/// Minimum overall talent ceiling (inclusive). The lottery is live again (bible §2.4 —
+/// talent is the one thing you cannot choose): the PC's ceiling is rolled uniformly in
+/// this band. 70–99 is a placeholder band — a 70-ceiling career is a journeyman-pro
+/// story, a 99 is a generational roll. Tune against the prototype (see decision list).
+pub const CEILING_MIN: u8 = 70;
 /// Maximum overall talent ceiling (inclusive).
 pub const CEILING_MAX: u8 = 99;
 

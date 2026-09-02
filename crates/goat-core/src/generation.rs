@@ -84,10 +84,31 @@ pub fn generate_player_biased(
     choices: &CreationChoices,
     tactical_identity: Option<&TacticalIdentity>,
 ) -> PlayerView {
+    generate_player_biased_with_ceiling(seed, choices, tactical_identity, None)
+}
+
+/// `generate_player_biased` with an optional externally-decided ceiling.
+///
+/// Used by `Population::promote` (lazy-promote, bible §245): a background player's
+/// headline `potential_ovr` was already rolled at genesis/intake via
+/// `roll_potential_ovr` (anchored to club strength, ~2% outliers) and the batch sim
+/// has been aging him against THAT number ever since — so promotion must honour it,
+/// not re-roll a fresh (and previously always-99) ceiling. The PC path passes `None`
+/// and keeps the lottery.
+///
+/// The ceiling draw is always consumed even when overridden, so every downstream
+/// roll (spikiness, role DNA) stays at the same stream position as before.
+pub fn generate_player_biased_with_ceiling(
+    seed: u64,
+    choices: &CreationChoices,
+    tactical_identity: Option<&TacticalIdentity>,
+    ceiling_override: Option<u8>,
+) -> PlayerView {
     let mut rng = GoatRng::new(seed);
 
     // Step 1 — ceiling (talent band)
-    let ceiling = rng.next_range_u8(CEILING_MIN, CEILING_MAX);
+    let rolled_ceiling = rng.next_range_u8(CEILING_MIN, CEILING_MAX);
+    let ceiling = ceiling_override.unwrap_or(rolled_ceiling);
 
     // Step 2 — spikiness: 1=even, 2=varied, 3=spiky specialist (C.5)
     let spikiness = rng.next_range_u8(1, 3) as i32;

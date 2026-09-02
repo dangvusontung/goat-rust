@@ -69,8 +69,12 @@ fn balanced_setup() -> MatchSetup {
 #[test]
 fn golden_seed_42_balanced_auto() {
     let result = auto_play_match(&lib(), balanced_setup(), &mut GoatRng::new(42));
-    assert_eq!(result.player_output, 87, "output frozen at 87");
-    assert_eq!(result.goals_for, 4, "goals_for frozen at 4");
+    // RE-FROZEN for the ceiling-lottery restore (intentional): the setup's attrs come
+    // from generate_player(12345), whose ceiling now rolls 79 (was 99), so output drops
+    // 87 → 74. goals_for moved 4 → 3 because attr-dependent contest outcomes consume
+    // the stream differently; team-strength axis (50v50) is unchanged.
+    assert_eq!(result.player_output, 74, "output frozen at 74 (ceiling 79 era)");
+    assert_eq!(result.goals_for, 3, "goals_for frozen at 3 (ceiling 79 era)");
     assert_eq!(result.goals_against, 1, "goals_against frozen at 1");
 }
 

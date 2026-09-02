@@ -50,25 +50,22 @@ fn golden_52_weeks_forward() {
 
     let s = reduce(s, Intent::AdvanceWeeks { n: 52 }, &mut GoatRng::new(999));
 
-    // ── Frozen values (re-frozen after BL7 durability/injury-proneness trait, Design
-    // round 9): seed 12345's rolled `durability_x10` isn't the neutral midpoint, so
-    // this seed's injury-week timing over the 52-week horizon shifted, changing how
-    // many weeks actually trained. Expected — this coefficient is designed to add
-    // per-seed injury variance (see `week.rs::durability_neutral_value_reproduces_
-    // pre_existing_injury_numbers` for proof the *formula* itself is unchanged at
-    // neutral durability).
+    // ── Frozen values (RE-FROZEN for the ceiling-lottery restore — intentional):
+    // seed 12345 now rolls ceiling 79 (band 70–99) instead of 99, so potentials cap
+    // lower and 52 weeks of training land lower: CloseControl 63.173 → 49.873,
+    // Vision 24.292 → 22.092. Growth formulas unchanged; only the ceiling input moved.
     let dri = s.players.get_current(0, AttrId::CloseControl as usize);
     assert_eq!(
         dri,
-        Fixed::raw(63_173),
-        "CloseControl frozen at 63.173 after 52 wks"
+        Fixed::raw(49_873),
+        "CloseControl frozen at 49.873 after 52 wks (ceiling 79 era)"
     );
 
     let vis = s.players.get_current(0, AttrId::Vision as usize);
     assert_eq!(
         vis,
-        Fixed::raw(24_292),
-        "Vision frozen at 24.292 after 52 wks"
+        Fixed::raw(22_092),
+        "Vision frozen at 22.092 after 52 wks (ceiling 79 era)"
     );
 
     // Energy must still be in valid range.

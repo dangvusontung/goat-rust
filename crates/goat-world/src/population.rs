@@ -10,7 +10,7 @@
 
 use crate::world::{ClubId, WorldGenesis};
 use goat_core::attrs::NUM_ATTRS;
-use goat_core::generation::{generate_player_biased, CreationChoices};
+use goat_core::generation::{generate_player_biased_with_ceiling, CreationChoices};
 use goat_core::player::PlayerView;
 use goat_core::positions::PrimaryPosition;
 use goat_fixed::Fixed;
@@ -288,10 +288,18 @@ impl Population {
             club: club.name.clone(),
         };
         // generate_player_biased gives the realistic per-attribute potential + shape +
-        // roles, nudged by the club's tactical identity (Design round 3, Doc C §Slice 5);
-        // we overwrite current to the age-appropriate fraction of that potential.
-        let mut view =
-            generate_player_biased(self.seed[idx], &choices, Some(&club.tactical_identity));
+        // roles, nudged by the club's tactical identity (Design round 3, Doc C §Slice 5).
+        // The ceiling is OVERRIDDEN with this player's stored `potential_ovr` — the batch
+        // sim has aged him against that headline number since genesis/intake, so promotion
+        // must not re-roll it (previously every promoted player silently got a 99 ceiling,
+        // contradicting his own background curve). We then overwrite current to the
+        // age-appropriate fraction of that potential.
+        let mut view = generate_player_biased_with_ceiling(
+            self.seed[idx],
+            &choices,
+            Some(&club.tactical_identity),
+            Some(self.potential_ovr[idx]),
+        );
         let frac = development_fraction(self.age_years_at(idx, elapsed_weeks));
         for a in 0..NUM_ATTRS {
             view.current[a] = (view.potential[a] * frac).clamp(Fixed::MIN_ATTR, view.potential[a]);
@@ -471,6 +479,37 @@ mod tests {
                 view.current[i] <= view.potential[i],
                 "attr {i} exceeds potential"
             );
+        }
+    }
+
+    #[test]
+    fn promoted_player_matches_stored_background_potential() {
+        // Regression for the promote-ceiling leak: promotion must honour the headline
+        // `potential_ovr` the batch sim has aged this player against since genesis —
+        // not re-roll a fresh ceiling (which was silently 99 for everyone).
+        for seed in [7u64, 9, 42, 1234] {
+            let world = WorldGenesis::generate(seed);
+            let pop = genesis(seed, &world);
+            for idx in [0usize, 50, 500] {
+                let povr = pop.potential_ovr[idx] as i32;
+                let view = pop.promote(idx, 8 * 52, "Prospect", &world).unwrap();
+                let max_pot = (0..NUM_ATTRS)
+                    .map(|i| view.potential[i].to_int())
+                    .max()
+                    .unwrap();
+                assert!(
+                    max_pot <= povr,
+                    "seed {seed} idx {idx}: promoted max potential {max_pot} inflates past \
+                     stored background potential_ovr {povr}"
+                );
+                // And it must not collapse either: with the ceiling overridden to povr,
+                // the player's best attribute sits within the key-tier band of it.
+                assert!(
+                    max_pot >= povr * 6 / 10,
+                    "seed {seed} idx {idx}: promoted max potential {max_pot} collapsed far \
+                     below stored potential_ovr {povr}"
+                );
+            }
         }
     }
 
