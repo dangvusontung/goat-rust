@@ -13,7 +13,9 @@ use goat_core::{
 };
 use goat_fixed::Fixed;
 use goat_rng::GoatRng;
-use goat_save::save::{from_world_state, load_from_file, save_to_file, to_world_state};
+use goat_save::save::{
+    from_bytes_layout_only, from_world_state, load_from_file, save_to_file, to_world_state,
+};
 use goat_world::world::WorldGenesis;
 
 const TEST_WORLD_SEED: u64 = 54321;
@@ -300,16 +302,12 @@ fn old_v8_save_without_pantheon_signals_defaults_to_zero() {
     // Truncate the 5 trailing v9 fields (pc_career_standout_matches,
     // pc_season_standout_matches, pc_career_best_ovr, pc_career_transfer_requests,
     // pc_season_transfer_requests — all 4-byte fields) to simulate a pre-v9 save.
-    let v8_len = bytes.len() - 5 * 4;
+    let v8_len = bytes.len() - 5 * 4 - 4; // +4: drop the v20 sim_version trailer too
     bytes.truncate(v8_len);
 
-    let truncated_path = std::env::temp_dir().join(format!(
-        "goat_save_v8_truncated_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&truncated_path, &bytes).unwrap();
-    let loaded = load_from_file(&truncated_path).unwrap();
-    std::fs::remove_file(&truncated_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&bytes).unwrap();
 
     assert_eq!(loaded.pc_career_standout_matches, 0);
     assert_eq!(loaded.pc_season_standout_matches, 0);
@@ -413,13 +411,9 @@ fn old_v10_save_with_bare_suspension_scalar_migrates_to_a_league_scoped_ledger_e
     v10_bytes[divergence..divergence + 4].copy_from_slice(&3u32.to_le_bytes());
     v10_bytes[4..8].copy_from_slice(&10u32.to_le_bytes());
 
-    let v10_path = std::env::temp_dir().join(format!(
-        "goat_save_v10_synthetic_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&v10_path, &v10_bytes).unwrap();
-    let loaded = load_from_file(&v10_path).unwrap();
-    std::fs::remove_file(&v10_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&v10_bytes).unwrap();
 
     assert_eq!(
         loaded.pc_suspensions,
@@ -455,13 +449,9 @@ fn old_v10_save_with_zero_suspension_scalar_migrates_to_an_empty_ledger() {
     // `data.pc_suspensions` is empty by default, so this is already a "count = 0" v11
     // buffer — retagging it as v10 exercises the `old == 0` migration branch.
     bytes[4..8].copy_from_slice(&10u32.to_le_bytes());
-    let v10_path = std::env::temp_dir().join(format!(
-        "goat_save_v10_zero_synthetic_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&v10_path, &bytes).unwrap();
-    let loaded = load_from_file(&v10_path).unwrap();
-    std::fs::remove_file(&v10_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&bytes).unwrap();
 
     assert!(
         loaded.pc_suspensions.is_empty(),
@@ -519,16 +509,12 @@ fn old_v11_save_without_club_budgets_defaults_to_empty() {
     // count, then club_manager's and free_agents' empty-list 4-byte length prefixes,
     // then v15's two assist u32s (BL5.1), v16's decisive-moments u32 (BL5.2), and
     // v17's two clutch-index u32s (BL5.3).
-    let v11_len = bytes.len() - (4 + 3 * 8) - 4 - (4 + 4 + 4 + 4) - 2 * 4 - 4 - 2 * 4 - 4 - 4;
+    let v11_len = bytes.len() - (4 + 3 * 8) - 4 - (4 + 4 + 4 + 4) - 2 * 4 - 4 - 2 * 4 - 4 - 4 - 4; // last -4: v20 sim_version trailer
     bytes.truncate(v11_len);
 
-    let v11_path = std::env::temp_dir().join(format!(
-        "goat_save_v11_truncated_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&v11_path, &bytes).unwrap();
-    let loaded = load_from_file(&v11_path).unwrap();
-    std::fs::remove_file(&v11_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&bytes).unwrap();
 
     assert!(
         loaded.club_budgets.is_empty(),
@@ -596,16 +582,12 @@ fn old_v12_save_without_academy_boosts_defaults_to_empty() {
     // 4-byte inner manager count, then club_manager's and free_agents' empty-list 4-byte
     // length prefixes, then v15's two assist u32s (BL5.1) and v16's decisive-moments
     // u32 (BL5.2), and v17's two clutch-index u32s (BL5.3).
-    let v12_len = bytes.len() - (4 + 3) - (4 + 4 + 4 + 4) - 2 * 4 - 4 - 2 * 4 - 4 - 4;
+    let v12_len = bytes.len() - (4 + 3) - (4 + 4 + 4 + 4) - 2 * 4 - 4 - 2 * 4 - 4 - 4 - 4; // last -4: v20 sim_version trailer
     bytes.truncate(v12_len);
 
-    let v12_path = std::env::temp_dir().join(format!(
-        "goat_save_v12_truncated_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&v12_path, &bytes).unwrap();
-    let loaded = load_from_file(&v12_path).unwrap();
-    std::fs::remove_file(&v12_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&bytes).unwrap();
 
     assert!(
         loaded.academy_boosts.is_empty(),
@@ -667,16 +649,12 @@ fn old_v13_save_without_managers_defaults_to_empty() {
     // empty-list 4-byte length prefix, then v15's two assist u32s (BL5.1) and v16's
     // decisive-moments u32 (BL5.2), and v17's two clutch-index u32s (BL5.3).
     let manager_blob_len = data.manager_blob.len();
-    let v13_len = bytes.len() - (4 + manager_blob_len) - (4 + 4) - 4 - 2 * 4 - 4 - 2 * 4 - 4 - 4;
+    let v13_len = bytes.len() - (4 + manager_blob_len) - (4 + 4) - 4 - 2 * 4 - 4 - 2 * 4 - 4 - 4 - 4; // last -4: v20 sim_version trailer
     bytes.truncate(v13_len);
 
-    let v13_path = std::env::temp_dir().join(format!(
-        "goat_save_v13_truncated_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&v13_path, &bytes).unwrap();
-    let loaded = load_from_file(&v13_path).unwrap();
-    std::fs::remove_file(&v13_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&bytes).unwrap();
 
     assert!(
         loaded.manager_blob.is_empty()
@@ -847,16 +825,12 @@ fn old_v14_save_without_assists_defaults_to_zero() {
 
     // Trailing encoding: pc_season_assists + pc_career_assists (2 × 4-byte u32),
     // then v16's pc_season_decisive_moments (4-byte u32).
-    let v14_len = bytes.len() - 2 * 4 - 4 - 2 * 4 - 4 - 4;
+    let v14_len = bytes.len() - 2 * 4 - 4 - 2 * 4 - 4 - 4 - 4; // last -4: v20 sim_version trailer
     bytes.truncate(v14_len);
 
-    let v14_path = std::env::temp_dir().join(format!(
-        "goat_save_v14_truncated_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&v14_path, &bytes).unwrap();
-    let loaded = load_from_file(&v14_path).unwrap();
-    std::fs::remove_file(&v14_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&bytes).unwrap();
 
     assert_eq!(loaded.pc_season_assists, 0);
     assert_eq!(loaded.pc_career_assists, 0);
@@ -910,16 +884,12 @@ fn old_v15_save_without_decisive_moments_defaults_to_zero() {
 
     // Trailing encoding: pc_season_decisive_moments (1 × 4-byte u32), then v17's
     // two clutch-index u32s (BL5.3).
-    let v15_len = bytes.len() - 4 - 2 * 4 - 4 - 4;
+    let v15_len = bytes.len() - 4 - 2 * 4 - 4 - 4 - 4; // last -4: v20 sim_version trailer
     bytes.truncate(v15_len);
 
-    let v15_path = std::env::temp_dir().join(format!(
-        "goat_save_v15_truncated_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&v15_path, &bytes).unwrap();
-    let loaded = load_from_file(&v15_path).unwrap();
-    std::fs::remove_file(&v15_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&bytes).unwrap();
 
     assert_eq!(loaded.pc_season_decisive_moments, 0);
 
@@ -971,16 +941,12 @@ fn old_v16_save_without_clutch_index_defaults_to_zero() {
     std::fs::remove_file(&full_path).ok();
 
     // Trailing encoding: pc_season_clutch_index + pc_career_clutch_index (2 × 4-byte).
-    let v16_len = bytes.len() - 2 * 4 - 4 - 4;
+    let v16_len = bytes.len() - 2 * 4 - 4 - 4 - 4; // last -4: v20 sim_version trailer
     bytes.truncate(v16_len);
 
-    let v16_path = std::env::temp_dir().join(format!(
-        "goat_save_v16_truncated_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&v16_path, &bytes).unwrap();
-    let loaded = load_from_file(&v16_path).unwrap();
-    std::fs::remove_file(&v16_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&bytes).unwrap();
 
     assert_eq!(loaded.pc_season_clutch_index, 0);
     assert_eq!(loaded.pc_career_clutch_index, 0);
@@ -1037,16 +1003,12 @@ fn old_v17_save_without_membership_defaults_to_genesis_static() {
     std::fs::remove_file(&full_path).ok();
 
     // Trailing encoding: 4-byte count + 60 entries × 4 bytes.
-    let v17_len = bytes.len() - 4 - 60 * 4 - 4;
+    let v17_len = bytes.len() - 4 - 60 * 4 - 4 - 4; // last -4: v20 sim_version trailer
     bytes.truncate(v17_len);
 
-    let v17_path = std::env::temp_dir().join(format!(
-        "goat_save_v17_truncated_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&v17_path, &bytes).unwrap();
-    let loaded = load_from_file(&v17_path).unwrap();
-    std::fs::remove_file(&v17_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&bytes).unwrap();
 
     assert!(
         loaded.pc_nation_membership.is_empty(),
@@ -1097,18 +1059,83 @@ fn old_v18_save_without_career_base_year_defaults_to_2025() {
     std::fs::remove_file(&full_path).ok();
 
     // Trailing encoding: career_base_year (1 × 4-byte u32).
-    let v18_len = bytes.len() - 4;
+    let v18_len = bytes.len() - 4 - 4; // second -4: v20 sim_version trailer
     bytes.truncate(v18_len);
 
-    let v18_path = std::env::temp_dir().join(format!(
-        "goat_save_v18_truncated_{}.gsav",
-        std::process::id()
-    ));
-    std::fs::write(&v18_path, &bytes).unwrap();
-    let loaded = load_from_file(&v18_path).unwrap();
-    std::fs::remove_file(&v18_path).ok();
+    // Pre-v20 layouts have no sim_version trailer, so the guarded `from_bytes`
+    // would refuse them — these tests exercise layout migration specifically.
+    let loaded = from_bytes_layout_only(&bytes).unwrap();
 
     assert_eq!(loaded.career_base_year, 2025);
     let restored = to_world_state(&loaded, &test_world());
     assert_eq!(restored.career_base_year, 2025);
+}
+
+// ── sim_version guard (v20+) ─────────────────────────────────────────────────
+
+#[test]
+fn pre_v20_save_is_refused_by_guarded_load_but_readable_layout_only() {
+    use goat_save::save::{from_bytes, SaveError, SIM_VERSION};
+
+    let state = setup_state();
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    // Full current save, then strip the trailing sim_version u32 → pre-v20 stream.
+    let path =
+        std::env::temp_dir().join(format!("goat_save_v20_full_{}.gsav", std::process::id()));
+    save_to_file(&data, &path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    let legacy = &bytes[..bytes.len() - 4];
+
+    // The guarded entry point refuses it: sim semantics unknown (decodes as 0).
+    assert!(
+        matches!(
+            from_bytes(legacy),
+            Err(SaveError::SimVersionMismatch {
+                found: 0,
+                expected
+            }) if expected == SIM_VERSION
+        ),
+        "a stream without the v20 sim_version trailer must be refused"
+    );
+
+    // The layout-only escape hatch still parses it (layout stays tail-append
+    // compatible; only the sim-semantics guarantee is withheld).
+    let loaded = from_bytes_layout_only(legacy).unwrap();
+    assert_eq!(loaded.world_seed, data.world_seed);
+
+    // A header retagged to v19 is likewise refused: pre-v20 layouts carry no
+    // sim_version at all, so the guarded path must not trust the body bytes.
+    let mut retagged = bytes.clone();
+    retagged[4..8].copy_from_slice(&19u32.to_le_bytes());
+    assert!(
+        matches!(
+            from_bytes(&retagged),
+            Err(SaveError::SimVersionMismatch { .. })
+        ),
+        "a pre-v20 layout tag must be refused regardless of body content"
+    );
+}
+
+#[test]
+fn current_save_roundtrips_through_guarded_from_bytes() {
+    use goat_save::save::from_bytes;
+
+    let state = setup_state();
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path =
+        std::env::temp_dir().join(format!("goat_save_v20_guarded_{}.gsav", std::process::id()));
+    save_to_file(&data, &path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+
+    let loaded = from_bytes(&bytes).expect("current saves carry the current SIM_VERSION");
+    assert_eq!(loaded.world_seed, data.world_seed);
+    assert_eq!(loaded.career_base_year, data.career_base_year);
 }
