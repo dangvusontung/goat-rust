@@ -277,7 +277,19 @@ fn roll_potentials_biased(
             0
         };
 
-        let val = (base + noise + nudge).clamp(1, 99);
+        // Weighted attrs (KEY/IMP/SEC) must not spill noise past the player's own
+        // ceiling — previously invisible because ceiling was always 99 (talent
+        // lottery pinned at max), so clamp(1,99) and clamp(1,ceiling) were the same
+        // thing. Restoring the lottery (CEILING_MIN < 99) exposed it: noise could
+        // push a KEY attr's potential above the ceiling it's supposed to be a % of.
+        // Zero-weight attrs keep their absolute NONE_POT_ABS_LOW floor, which is
+        // intentionally allowed to exceed a low ceiling (baseline stats outside a
+        // player's specialty aren't gated by his talent band).
+        let val = if w > 0 {
+            (base + noise + nudge).clamp(1, ceiling as i32)
+        } else {
+            base.clamp(1, 99)
+        };
         potential[i] = Fixed::from_int(val);
     }
     potential
