@@ -72,11 +72,13 @@ fn balanced_setup() -> MatchSetup {
 }
 
 /// Seed 42, balanced teams → exact output and scoreline frozen (Match Flow era,
-/// re-frozen after the strength/goals/decoupling tuning pass).
+/// re-frozen after the strength/goals/decoupling tuning pass; output re-frozen
+/// 54 → 52 in round 3b when the rating taper's asymptote moved to the 0/100
+/// rails — same moments/scoreline, only the rating arithmetic moved).
 #[test]
 fn golden_seed_42_balanced_auto() {
     let result = auto_play_match(&lib(), balanced_setup(), &mut GoatRng::new(42));
-    assert_eq!(result.player_output, 54, "output frozen at 54");
+    assert_eq!(result.player_output, 52, "output frozen at 52");
     assert_eq!(result.goals_for, 2, "goals_for frozen at 2");
     assert_eq!(result.goals_against, 2, "goals_against frozen at 2");
 }
