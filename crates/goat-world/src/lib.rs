@@ -12,6 +12,7 @@ pub mod history;
 pub mod nations;
 pub mod population;
 pub mod rival;
+pub mod scout;
 pub mod season;
 pub mod world;
 pub mod worldgen;

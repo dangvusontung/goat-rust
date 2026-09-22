@@ -1114,13 +1114,17 @@ fn run_awards_and_pundits(
 fn generate_transfer_offers(state: &WorldState, view: &PlayerView) -> Vec<(usize, u8, i64, u32)> {
     // Returns Vec of (club_idx, div_idx, wage_offer, length)
     use goat_rng::RngSource;
-    let form = state.pc_form.to_int();
+    use goat_world::scout::scout_estimate;
     let age = view.age_weeks / 52;
-    // Only generate offers if form > 55 and age < 34
-    if form < 55 || age >= 34 {
+    let mut rng = GoatRng::new(state.world_seed ^ ((state.season_number as u64) << 32) ^ 0xA11BEEF);
+    // Clubs scout OBSERVED performance (form + this season's output), never the
+    // hidden attributes — and sometimes they read it wrong.
+    let observed = (state.pc_form.to_int() + state.pc_season_output) / 2;
+    let scouted = scout_estimate(observed, &mut rng);
+    // Only generate offers if the scouted level impresses and age < 34
+    if scouted < 55 || age >= 34 {
         return Vec::new();
     }
-    let mut rng = GoatRng::new(state.world_seed ^ ((state.season_number as u64) << 32) ^ 0xA11BEEF);
     let world = generate_world(state.world_seed);
     let n_offers = rng.next_range_u64(0, 2) as usize; // 0-2 offers
     let mut offers = Vec::new();
@@ -1131,8 +1135,11 @@ fn generate_transfer_offers(state: &WorldState, view: &PlayerView) -> Vec<(usize
         let club_pos = rng.next_range_u64(0, (CLUBS_PER_DIV - 1) as u64) as usize;
         let club_id = div_clubs(target_div)[club_pos];
         let target_strength = world.clubs[club_id].strength;
-        let wage_offer =
-            state.pc_wage_annual + (target_strength as i64 * 2) + rng.next_range_u64(0, 50) as i64;
+        // Wage follows the scouted level — an overrated player gets overpaid.
+        let wage_offer = state.pc_wage_annual
+            + (target_strength as i64 * 2)
+            + (scouted as i64 - 50)
+            + rng.next_range_u64(0, 50) as i64;
         let length = 2 + rng.next_range_u64(0, 2) as u32;
         if club_id != state.pc_club_idx as usize {
             offers.push((club_id, target_div as u8, wage_offer, length));
