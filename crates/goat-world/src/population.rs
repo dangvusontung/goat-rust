@@ -40,7 +40,8 @@ pub struct Population {
     /// Primary position: 0 = Defender, 1 = Midfielder, 2 = Forward.
     pub position: Vec<u8>,
     /// Age in weeks at genesis (birth data is the stored residue; age advances by date).
-    pub birth_age_weeks: Vec<u32>,
+    /// Signed: youth-intake players born AFTER genesis get negative values.
+    pub birth_age_weeks: Vec<i64>,
     /// Headline potential OVR (1–99). Cached identity column; the per-attribute potential
     /// is re-derivable from `seed`.
     pub potential_ovr: Vec<u8>,
@@ -114,6 +115,13 @@ fn player_seed(world_seed: u64, club_id: u64, slot: u64) -> u64 {
         ^ slot.rotate_left(43).wrapping_mul(0xC2B2_AE3D_27D4_EB4F)
 }
 
+/// Seed for a youth-intake player: a NEW identity replacing a retiree, so it
+/// must differ from every genesis seed — the season mixes in as a domain tag.
+pub(crate) fn player_seed_for_intake(world_seed: u64, season: u32, club_id: u64, slot: u64) -> u64 {
+    player_seed(world_seed ^ (season as u64).rotate_left(17), club_id, slot)
+        .wrapping_add(0xAC4D_E11A_55C2_9001)
+}
+
 /// Generate the background population deterministically from `world_seed`. Every club
 /// gets a `SQUAD_SIZE` squad; potential is anchored to club stature (stronger clubs draw
 /// stronger players) with per-player variance. Pure and order-stable.
@@ -140,7 +148,7 @@ pub fn genesis(world_seed: u64) -> Population {
             pop.club.push(club.id as u16);
             pop.nation.push(club.nation);
             pop.position.push(position);
-            pop.birth_age_weeks.push(birth_age_weeks);
+            pop.birth_age_weeks.push(birth_age_weeks as i64);
             pop.potential_ovr.push(potential_ovr);
             pop.career_goals.push(0);
             pop.career_apps.push(0);
@@ -179,7 +187,7 @@ fn position_from_u8(p: u8) -> Position {
 impl Population {
     /// Age in years of background player `idx` at `elapsed_weeks` after genesis.
     fn age_years_at(&self, idx: usize, elapsed_weeks: u32) -> u32 {
-        (self.birth_age_weeks[idx] + elapsed_weeks) / 52
+        ((self.birth_age_weeks[idx] + elapsed_weeks as i64).max(0) / 52) as u32
     }
 
     /// Cheap O(1) current OVR of a background player at a date (epoch weeks since genesis),
@@ -223,7 +231,7 @@ impl Population {
         for a in 0..NUM_ATTRS {
             view.current[a] = (view.potential[a] * frac).clamp(Fixed::MIN_ATTR, view.potential[a]);
         }
-        view.age_weeks = self.birth_age_weeks[idx] + elapsed_weeks;
+        view.age_weeks = (self.birth_age_weeks[idx] + elapsed_weeks as i64).max(0) as u32;
         Some(view)
     }
 }
@@ -297,7 +305,8 @@ mod tests {
         let world = generate_world(11);
         let idx = 0;
         // Elapsed time that puts this player exactly at the retirement age.
-        let elapsed = RETIRE_AGE_YEARS * 52 - pop.birth_age_weeks[idx];
+        let elapsed = (RETIRE_AGE_YEARS * 52) as i64 - pop.birth_age_weeks[idx];
+        let elapsed = elapsed.max(0) as u32;
         assert!(pop.is_retired(idx, elapsed));
         assert!(
             pop.promote(idx, elapsed, "Veteran", &world).is_none(),

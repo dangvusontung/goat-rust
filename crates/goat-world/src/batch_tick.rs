@@ -11,7 +11,8 @@ use crate::population::Population;
 use crate::season::Table;
 use crate::sim_team_match;
 use crate::world::{div_clubs, ClubId, NUM_CLUBS, NUM_DIVISIONS};
-use goat_rng::GoatRng;
+use crate::worldgen::generate_world;
+use goat_rng::{GoatRng, RngSource};
 
 /// League appearances credited to a regular (top-OVR) squad member per season.
 const SEASON_APPS_STARTER: u32 = 30;
@@ -61,8 +62,44 @@ fn club_strength(pop: &Population, squad: &[usize], elapsed_weeks: u32) -> u8 {
     (sum / squad.len() as u32).clamp(1, 99) as u8
 }
 
+/// Youth intake (design B.1 NPC path — the cheap formula): at season end every
+/// retired player is replaced by a fresh academy graduate at the SAME club —
+/// new seed, age 16–18, potential re-anchored to club strength, career
+/// accumulators reset. Squad sizes and position spread stay constant forever.
+/// Deterministic in `(world_seed, season, idx)`. Returns the intake count.
+fn youth_intake(pop: &mut Population, world_seed: u64, season: u32, elapsed_weeks: u32) -> usize {
+    let world = generate_world(world_seed);
+    let mut count = 0;
+    for idx in 0..pop.len() {
+        if !pop.is_retired(idx, elapsed_weeks) {
+            continue;
+        }
+        let slot = idx % crate::population::SQUAD_SIZE;
+        let club = pop.club[idx] as u64;
+        let pseed =
+            crate::population::player_seed_for_intake(world_seed, season, club, slot as u64);
+        let mut rng = GoatRng::new(pseed);
+
+        let age_years = rng.next_range_u32(16, 18);
+        // Born after genesis → negative "age at genesis" (i64 column).
+        pop.seed[idx] = pseed;
+        pop.birth_age_weeks[idx] = age_years as i64 * 52 - elapsed_weeks as i64;
+
+        let base = world.clubs[pop.club[idx] as usize].strength as i32;
+        let variance = rng.next_range_u32(0, 30) as i32 - 15;
+        pop.potential_ovr[idx] = (base + variance).clamp(30, 99) as u8;
+
+        pop.career_goals[idx] = 0;
+        pop.career_apps[idx] = 0;
+        pop.career_titles[idx] = 0;
+        count += 1;
+    }
+    count
+}
+
 /// Advance every non-orbit league one season. Mutates the population's career accumulators
 /// and returns one `SeasonResult` per division. Deterministic in `(world_seed, season)`.
+/// Retired players are replaced by youth intake at the end of the season.
 pub fn batch_tick_season(
     pop: &mut Population,
     world_seed: u64,
@@ -153,6 +190,9 @@ pub fn batch_tick_season(
         });
     }
 
+    // Season end: retirees make way for the next academy class.
+    youth_intake(pop, world_seed, season, elapsed_weeks);
+
     results
 }
 
@@ -205,5 +245,57 @@ mod tests {
         let titles_after: u64 = pop.career_titles.iter().map(|&x| x as u64).sum();
         // Titles added = sum of each champion's non-retired squad size — bounded & > 0.
         assert!(titles_after > titles_before);
+    }
+
+    #[test]
+    fn youth_intake_replaces_every_retiree() {
+        let mut pop = genesis(7);
+        let size = pop.len();
+        // Run long enough that the entire genesis generation has retired.
+        for season in 1..=25u32 {
+            batch_tick_season(&mut pop, 7, season, season * 52);
+        }
+        assert_eq!(pop.len(), size, "population size must stay constant");
+        for idx in 0..pop.len() {
+            assert!(
+                !pop.is_retired(idx, 25 * 52),
+                "idx {idx} still retired after intake"
+            );
+        }
+    }
+
+    #[test]
+    fn youth_intake_is_deterministic() {
+        let run = || {
+            let mut pop = genesis(11);
+            for season in 1..=10u32 {
+                batch_tick_season(&mut pop, 11, season, season * 52);
+            }
+            pop.fingerprint()
+        };
+        assert_eq!(run(), run(), "intake must be deterministic");
+    }
+
+    #[test]
+    fn intake_players_reset_career_and_stay_club_anchored() {
+        let mut pop = genesis(5);
+        for season in 1..=25u32 {
+            batch_tick_season(&mut pop, 5, season, season * 52);
+        }
+        let world = generate_world(5);
+        for idx in 0..pop.len() {
+            // A post-intake player (career shorter than 25 seasons) must have a
+            // potential anchored near his club's strength band.
+            let age_weeks = pop.birth_age_weeks[idx] + 25 * 52;
+            let career_seasons = age_weeks / 52 - 15; // rough: debuted ~15-16
+            if career_seasons < 20 {
+                let club_str = world.clubs[pop.club[idx] as usize].strength as i32;
+                let pot = pop.potential_ovr[idx] as i32;
+                assert!(
+                    (pot - club_str).abs() <= 15 || pot == 30,
+                    "idx {idx}: potential {pot} far from club str {club_str}"
+                );
+            }
+        }
     }
 }

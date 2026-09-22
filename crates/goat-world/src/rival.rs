@@ -41,7 +41,10 @@ fn career_score(goals: u32, titles: u32) -> u32 {
 /// of the PC's birth age.
 fn cohort_indices(pop: &Population, pc_birth_age_weeks: u32) -> Vec<usize> {
     (0..pop.len())
-        .filter(|&i| pop.birth_age_weeks[i].abs_diff(pc_birth_age_weeks) <= COHORT_HALF_WIDTH_WEEKS)
+        .filter(|&i| {
+            (pop.birth_age_weeks[i] - pc_birth_age_weeks as i64).abs()
+                <= COHORT_HALF_WIDTH_WEEKS as i64
+        })
         .collect()
 }
 

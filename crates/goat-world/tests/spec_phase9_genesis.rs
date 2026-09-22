@@ -8,6 +8,8 @@
 //! Re-frozen once for the World Scale-Up (Phase A): the world grew from 2 nations /
 //! 64 clubs to 50 nations / 2,544 clubs, so every fingerprint below legitimately changed.
 //! The invariants (determinism, both rival outcomes occurring) are unchanged.
+//! Batch-tick and rival-verdict values re-frozen again for Phase B youth intake
+//! (retirees are now replaced each season).
 
 use goat_world::batch_tick::batch_tick_season;
 use goat_world::history::backfill_history;
@@ -48,7 +50,7 @@ fn batch_tick_world_fingerprint_is_stable() {
         pop.career_fingerprint()
     };
     assert_eq!(run(7), run(7), "batch-tick must be deterministic");
-    assert_eq!(run(7), 0x3361_ae92_eacf_dd9e, "career fingerprint drifted");
+    assert_eq!(run(7), 0x0631_6320_a5fe_cc3f, "career fingerprint drifted");
 }
 
 /// The backfilled pre-history is a stable, derivable canon for a fixed seed. Frozen.
@@ -92,5 +94,5 @@ fn rival_verdict_pattern_is_stable() {
         mask != 0 && mask != (1 << 24) - 1,
         "rivalry has no variance"
     );
-    assert_eq!(mask, 0x000c_9004, "rival verdict pattern drifted");
+    assert_eq!(mask, 0x0001_1000, "rival verdict pattern drifted");
 }
