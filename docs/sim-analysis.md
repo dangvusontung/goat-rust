@@ -103,3 +103,34 @@ Seed │ PeakOVR │ PeakAge │ Apps │ Goals │ Titles │ Ceilings Reached
   - Was: `pc_gf / 4` (flat quarter of team goals, ignores Finishing).
   - Now: per-team-goal Finishing roll — `fin/400` chance per goal. Fin 90 ≈ 22% per team goal.
   - Career totals went from ~9 to ~150–190 goals over 20 seasons.
+
+---
+
+# Match Flow — Realism Tuning Log
+
+Harnesses:
+- **match-batch** (`cargo run --release -p goat-tui --bin match-batch -- 100000`): 100k matches,
+  random fresh-gen PCs across 5 roles, own str 75 vs opp 60–95. From round 3 on, 1-in-4 matches is
+  played by a "star injection" PC (attr floor 75, role rating 65–79) so star-player effects are
+  visible — fresh-gen players cap at role rating ~60 and used to wash them out of the averages.
+- **match-sim** (`career-sim --match-sim N 7`): fixed star striker (OVR ~64), own str 70,
+  opp 45–90 — the actual career-game scenario. `starred_in_defeat = output ≥ 70 & L`.
+
+Targets: W/D/L plausible, goals/match ~2.7, starred-in-defeat 2–4%, rating tail thin at 90–100.
+
+## Round 2 baseline (commit 177dc98, pre-star-injection harness)
+
+100k, master seed 0xBA7C4 — W 36.8 / D 23.8 / L 39.5 · goals 2.91 (1.45–1.46) · clean sheets 15.8% ·
+PC 2+ goals & L: 2.10% · rating 90–100 bucket: 2.1% · mean rating 56.8.
+
+But the two open issues hid in the population average:
+- match-sim star striker (N=2000): starred-in-defeat 1.85% (seed 7), 1.30% (seed 11), 1.65% (seed 23)
+  — the "~1%" that motivated round 3. 80+ output bucket 11–13%.
+- Star PCs pile at rating exactly 100 (soft-cap asymptote was at 200, +1 minimum delta per success).
+
+## Round 3 baseline (star-injection harness, same engine)
+
+100k, master seed 0xBA7C4 — W 39.3 / D 23.3 / L 37.4 · goals 2.98 (1.52–1.46) · clean sheets 15.9% ·
+PC 2+ goals & L: 2.38% · rating≥70 & L: 3.02% (8.1% of losses) · mean rating 59.1.
+Star band (role rating ≥ 65, n=25k): 90–100 bucket 8.8% — of which rating **exactly 100: 1.96%**
+(a clamp pile: 22% of the top bucket sits on the rail) · starred-in-defeat 4.94% (15.9% of losses).

@@ -61,12 +61,26 @@ fn main() {
     let mut rating_hist = [0u64; 10]; // buckets 0-9 .. 90-100
     let mut pc_goals_hist = [0u64; 6]; // 0,1,2,3,4,5+
     let mut brace_losses = 0u64; // PC 2+ goals, team loses
+    let mut clean_sheets = 0u64; // goals_against == 0
+                                 // Decoupling: output rating vs team result (match-sim.sh definitions).
+    let mut starred_70 = 0u64; // rating >= 70, team loses
+    let mut starred_80 = 0u64; // rating >= 80, team loses
+    let mut carried_45 = 0u64; // rating <= 45, team wins
     let mut total_gf = 0u64;
     let mut total_ga = 0u64;
     let mut rating_sum = 0i64;
     // Per-position W/D/L and avg rating.
     let mut pos_wdl = [[0u64; 3]; 5];
     let mut pos_rating = [0i64; 5];
+    // Star-band view: strong PCs (role rating >= 65) experience the match as the
+    // protagonist of a real career — decoupling/rating issues hide in the
+    // population average, so track them separately.
+    let mut star_n = 0u64;
+    let mut star_rating_hist = [0u64; 10];
+    let mut star_rating_100 = 0u64;
+    let mut star_starred_70 = 0u64;
+    let mut star_losses = 0u64;
+    let mut role_rating_hist = [0u64; 10];
     let mut outliers: Vec<Outlier> = Vec::new();
 
     for i in 0..n {
@@ -82,14 +96,25 @@ fn main() {
             club: "Riverside Town".into(),
         };
         let pl = generate_player(seed, &choices);
-        let aggression = pl.current[AttrId::Aggression as usize]
-            .to_int()
-            .clamp(1, 99) as u8;
+        // Star injection: 1 in 4 matches is played by a peak-career PC (attr
+        // floor 75), modelling the actual game scenario — the PC grows into a
+        // star. Fresh-gen players cap at role rating ~60, which would otherwise
+        // wash star-player effects out of the stats.
+        let mut attrs = pl.current;
+        if i % 4 == 3 {
+            for a in attrs.iter_mut() {
+                *a = (*a).max(Fixed::from_int(75));
+            }
+        }
+        let role_rating =
+            goat_core::derive::role_rating(&attrs, role, pl.familiarity[role as usize]).to_int();
+        role_rating_hist[(role_rating.clamp(0, 99) as usize) / 10] += 1;
+        let aggression = attrs[AttrId::Aggression as usize].to_int().clamp(1, 99) as u8;
         let match_seed = seed ^ 0xc0ffee;
         let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
         let setup = MatchSetup {
             player_role: role,
-            player_attrs: pl.current,
+            player_attrs: attrs,
             player_familiarity: pl.familiarity,
             own_profile: TacticalProfile::derive(75, 1000, seed),
             opp_profile: TacticalProfile::derive(opp_str, 2000, seed),
@@ -115,6 +140,9 @@ fn main() {
             std::cmp::Ordering::Greater => {
                 wins += 1;
                 pos_wdl[pos_idx][0] += 1;
+                if r.player_output <= 45 {
+                    carried_45 += 1;
+                }
             }
             std::cmp::Ordering::Less => {
                 losses += 1;
@@ -122,10 +150,32 @@ fn main() {
                 if pc_goals >= 2 {
                     brace_losses += 1;
                 }
+                if r.player_output >= 70 {
+                    starred_70 += 1;
+                }
+                if r.player_output >= 80 {
+                    starred_80 += 1;
+                }
             }
             std::cmp::Ordering::Equal => {
                 draws += 1;
                 pos_wdl[pos_idx][1] += 1;
+            }
+        }
+        if r.goals_against == 0 {
+            clean_sheets += 1;
+        }
+        if role_rating >= 65 {
+            star_n += 1;
+            star_rating_hist[(r.player_output.clamp(0, 99) as usize) / 10] += 1;
+            if r.player_output == 100 {
+                star_rating_100 += 1;
+            }
+            if r.goals_for < r.goals_against {
+                star_losses += 1;
+                if r.player_output >= 70 {
+                    star_starred_70 += 1;
+                }
             }
         }
         gf_hist[(r.goals_for as usize).min(10)] += 1;
@@ -191,6 +241,68 @@ fn main() {
         brace_losses,
         brace_losses as f64 / nf * 100.0
     );
+
+    println!("\n── Decoupling (output rating vs team result) ──");
+    println!(
+        "  starred in defeat (rating>=70 & L): {} ({:.2}%)   (rating>=80 & L): {} ({:.2}%)",
+        starred_70,
+        starred_70 as f64 / nf * 100.0,
+        starred_80,
+        starred_80 as f64 / nf * 100.0,
+    );
+    println!(
+        "  carried to a win (rating<=45 & W): {} ({:.2}%)",
+        carried_45,
+        carried_45 as f64 / nf * 100.0,
+    );
+    if losses > 0 {
+        println!(
+            "  share of losses with rating>=70: {:.1}%",
+            starred_70 as f64 / losses as f64 * 100.0
+        );
+    }
+    println!(
+        "  clean sheets (goals_against == 0): {} ({:.1}%)",
+        clean_sheets,
+        clean_sheets as f64 / nf * 100.0
+    );
+
+    println!("\n── PC role rating (quality spread of generated players) ──");
+    print_hist(
+        &role_rating_hist,
+        n,
+        &[
+            "0-9", "10-19", "20-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-89", "90-100",
+        ],
+    );
+
+    if star_n > 0 {
+        println!("\n── Star band (role rating >= 65, n={star_n}) ──");
+        print_hist(
+            &star_rating_hist,
+            star_n,
+            &[
+                "0-9", "10-19", "20-29", "30-39", "40-49", "50-59", "60-69", "70-79", "80-89",
+                "90-100",
+            ],
+        );
+        let sf = star_n as f64;
+        println!(
+            "  of which rating == 100 (clamp pile): {} ({:.2}%)",
+            star_rating_100,
+            star_rating_100 as f64 / sf * 100.0,
+        );
+        println!(
+            "  starred in defeat (rating>=70 & L): {} ({:.2}%)   share of losses: {:.1}%",
+            star_starred_70,
+            star_starred_70 as f64 / sf * 100.0,
+            if star_losses > 0 {
+                star_starred_70 as f64 / star_losses as f64 * 100.0
+            } else {
+                0.0
+            },
+        );
+    }
 
     println!("\n── Goals per match ──");
     println!(
