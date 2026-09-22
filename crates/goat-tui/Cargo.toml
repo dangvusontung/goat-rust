@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "career-sim"
 path = "src/career_sim.rs"
 
+[[bin]]
+name = "match-batch"
+path = "src/match_batch.rs"
+
 [dependencies]
 goat-core   = { path = "../goat-core"   }
 goat-match  = { path = "../goat-match"  }

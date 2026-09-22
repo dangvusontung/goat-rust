@@ -35,7 +35,8 @@ impl RefPersonality {
     }
 }
 
-/// Which (beat_id, choice_idx) pairs carry foul risk, and how serious.
+/// Foul risk carried by an action (authored in beats.json as `foul_chance` /
+/// `foul_serious`).
 ///
 /// `foul_chance` (0–100): base probability of a foul being awarded.
 /// `serious`: true = DOGSO / cynical — escalates directly to red risk.
@@ -43,64 +44,6 @@ impl RefPersonality {
 pub struct FoulRisk {
     pub foul_chance: u8,
     pub serious: bool,
-}
-
-/// Hardcoded foul-risk table: (beat_id, choice_idx, FoulRisk).
-/// Checked in `advance_beat` after resolving a contest.
-const FOUL_RISK_TABLE: &[(usize, usize, FoulRisk)] = &[
-    // B_DEFEND_TACKLE (7) — "Commit to the slide" choice 0
-    (
-        7,
-        0,
-        FoulRisk {
-            foul_chance: 35,
-            serious: false,
-        },
-    ),
-    // B_DEFEND_AERIAL (8) — "Go up strong" choice 0
-    (
-        8,
-        0,
-        FoulRisk {
-            foul_chance: 25,
-            serious: false,
-        },
-    ),
-    // B_CRUCIAL_TACKLE (23) — "Slide in" choice 0
-    (
-        23,
-        0,
-        FoulRisk {
-            foul_chance: 45,
-            serious: true,
-        },
-    ),
-    // B_RECKLESS_CHALLENGE (26) — "Commit" choice 0
-    (
-        26,
-        0,
-        FoulRisk {
-            foul_chance: 70,
-            serious: true,
-        },
-    ),
-    // B_RECKLESS_CHALLENGE (26) — "Late challenge" choice 1
-    (
-        26,
-        1,
-        FoulRisk {
-            foul_chance: 50,
-            serious: false,
-        },
-    ),
-];
-
-/// Look up foul risk for a (beat_id, choice_idx) pair.
-pub fn foul_risk_for(beat_id: usize, choice_idx: usize) -> Option<&'static FoulRisk> {
-    FOUL_RISK_TABLE
-        .iter()
-        .find(|(b, c, _)| *b == beat_id && *c == choice_idx)
-        .map(|(_, _, fr)| fr)
 }
 
 /// Resolve a foul risk into a card (or nothing).

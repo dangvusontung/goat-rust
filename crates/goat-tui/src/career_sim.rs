@@ -12,6 +12,7 @@ use goat_core::{
     positions::POSITION_WEIGHT_TABLE,
     roles::RoleId,
     state::{reduce, Intent, WorldState},
+    tactical::TacticalProfile,
     week::{Intensity, Routine},
 };
 use goat_fixed::Fixed;
@@ -273,17 +274,25 @@ fn main() {
         })
         .unwrap_or(Intensity::High);
 
-    // --match-beats [seed] [opp_str] — play ONE match and print the beat-by-beat narrative.
+    // --match-beats [seed] [opp_str] [pos] — play ONE match and print the beat-by-beat
+    // narrative. pos: st (default) | w | cam | cm | cb.
     if args.iter().any(|a| a == "--match-beats") {
         let p = args.iter().position(|a| a == "--match-beats").unwrap();
         let seed: u64 = args.get(p + 1).and_then(|s| s.parse().ok()).unwrap_or(7);
         let opp_str: u8 = args.get(p + 2).and_then(|s| s.parse().ok()).unwrap_or(78);
+        let (label, position, role) = match args.get(p + 3).map(|s| s.to_lowercase()).as_deref() {
+            Some("cb") => ("Centre Back", Position::Defender, RoleId::CentreBack),
+            Some("cm") => ("Central Mid", Position::Midfielder, RoleId::CentralMid),
+            Some("cam") => ("Attacking Mid", Position::Midfielder, RoleId::AttackingMid),
+            Some("w") | Some("winger") => ("Winger", Position::Midfielder, RoleId::Winger),
+            _ => ("Striker", Position::Forward, RoleId::CompleteForward),
+        };
         use goat_match::beats::ScoreEvent;
 
         let lib = BeatLibrary::load(BEATS_JSON).expect("beats.json must parse");
         let choices = CreationChoices {
-            name: "Striker".into(),
-            position: Position::Forward,
+            name: label.into(),
+            position,
             nationality: "Brazilian",
             club: "Riverside Town",
         };
@@ -294,11 +303,11 @@ fn main() {
         let match_seed = seed ^ 0xc0ffee;
         let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
         let setup = MatchSetup {
-            player_role: RoleId::CompleteForward,
+            player_role: role,
             player_attrs: pl.current,
             player_familiarity: pl.familiarity,
-            own_strength: 75,
-            opp_strength: opp_str,
+            own_profile: TacticalProfile::derive(75, 1000, seed),
+            opp_profile: TacticalProfile::derive(opp_str, 2000, seed),
             opp_name: "Rivals FC",
             form: Fixed::from_int(65),
             player_aggression: aggression,
@@ -309,12 +318,17 @@ fn main() {
         let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
 
         println!(
-            "MATCH — Striker (OVR {}) vs Rivals FC (str {opp_str})   seed {seed}\n",
+            "MATCH — {label} (OVR {}) vs Rivals FC (str {opp_str})   seed {seed}\n",
             ovr(&pl.current, pl.primary_position).to_int()
         );
         for m in &r.moments {
+            if !m.is_action {
+                println!("  {:>2}'  {}", m.minute, m.setup_text);
+                continue;
+            }
             let tag = match m.goal_event {
-                Some(ScoreEvent::GoalFor) => " ⚽ GOAL!",
+                _ if m.outcome_text.contains("GOAL") => "",
+                Some(ScoreEvent::GoalFor) => " *** GOAL! ***",
                 Some(ScoreEvent::GoalAgainst) => " (they score)",
                 _ if m.success => " ✓",
                 _ => " ✗",
@@ -425,8 +439,12 @@ fn main() {
                 player_role: RoleId::CompleteForward,
                 player_attrs: view.current,
                 player_familiarity: view.familiarity,
-                own_strength: CLUBS[pc_club_id].strength,
-                opp_strength: CLUBS[opp].strength,
+                own_profile: TacticalProfile::derive(
+                    CLUBS[pc_club_id].strength,
+                    pc_club_id as u32,
+                    seed,
+                ),
+                opp_profile: TacticalProfile::derive(CLUBS[opp].strength, opp as u32, seed),
                 opp_name: CLUBS[opp].name,
                 form: state.pc_form,
                 player_aggression: aggression,
@@ -619,8 +637,8 @@ fn main() {
                 player_role: RoleId::CompleteForward,
                 player_attrs: p.current,
                 player_familiarity: p.familiarity,
-                own_strength,
-                opp_strength,
+                own_profile: TacticalProfile::derive(own_strength, 1000, seed),
+                opp_profile: TacticalProfile::derive(opp_strength, 2000, match_seed),
                 opp_name: "Rivals FC",
                 form: Fixed::from_int(60),
                 player_aggression: aggression,

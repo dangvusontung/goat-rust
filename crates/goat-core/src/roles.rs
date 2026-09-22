@@ -103,6 +103,35 @@ pub const ROLE_POSITION_FAMILY: [PositionFamily; NUM_ROLES] = [
     PositionFamily::Forward,    // Trequartista
 ];
 
+/// Where on the pitch a role operates — used by the match engine to weight which
+/// situations a player actually encounters (a Winger sees wide situations, a
+/// Centre Back sees defensive ones).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PitchZone {
+    Defense,
+    Midfield,
+    AttackWide,
+    AttackCentral,
+}
+
+/// Pitch zone for each role, indexed by `RoleId as usize`. Order is load-bearing.
+pub const ROLE_ZONE: [PitchZone; NUM_ROLES] = [
+    PitchZone::Defense,       // CentreBack
+    PitchZone::Defense,       // Sweeper
+    PitchZone::Defense,       // FullBack
+    PitchZone::AttackWide,    // WingBack
+    PitchZone::Midfield,      // DefensiveMid
+    PitchZone::Midfield,      // CentralMid
+    PitchZone::Midfield,      // BoxToBox
+    PitchZone::AttackCentral, // AttackingMid
+    PitchZone::AttackWide,    // Winger
+    PitchZone::AttackWide,    // InsideForward
+    PitchZone::AttackCentral, // TargetForward
+    PitchZone::AttackCentral, // PressingForward
+    PitchZone::AttackCentral, // CompleteForward
+    PitchZone::AttackCentral, // Trequartista
+];
+
 /// The four familiarity tiers (bible §5.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FamiliarityTier {

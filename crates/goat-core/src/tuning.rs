@@ -38,6 +38,17 @@ pub const NOISE_SALT: u64 = 0x9e3779b97f4a7c15;
 /// Spikiness 1 → ±3, 2 → ±6, 3 → ±9.
 pub const NOISE_WIDTH_PER_SPIKE: i32 = 3;
 
+// ── Tactical profiles (stat-driven match situations) ─────────────────────────
+
+/// ± jitter applied to club strength when deriving attack/midfield/defense ratings.
+pub const TACTICAL_JITTER: u8 = 5;
+/// Every style weight starts at this base plus a roll of 0..=TACTICAL_STYLE_SPAN.
+pub const TACTICAL_STYLE_BASE: u8 = 10;
+/// Inclusive span of the style base roll.
+pub const TACTICAL_STYLE_SPAN: u8 = 29;
+/// Extra weight granted to a club's dominant (highest-rolled) style.
+pub const TACTICAL_STYLE_DOM_BOOST: u8 = 40;
+
 // ── Position-tier potential base percentages (appendix C.5) ──────────────────
 
 /// Key attrs: potential centres at this % of talent ceiling.

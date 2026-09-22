@@ -41,21 +41,8 @@ fn stamina_mod(stamina: Fixed) -> i32 {
     } // ‒1 pp per 2 stamina below 30; max ‒15
 }
 
-/// Auto-pick the best available choice (for skip-match or AI) by choosing the
-/// option where (player_attr − difficulty) is highest (most favourable odds).
-pub fn auto_pick_choice(
-    choices: &[crate::beats::BeatChoice],
-    player_attrs: &[Fixed; goat_core::attrs::NUM_ATTRS],
-) -> usize {
-    choices
-        .iter()
-        .enumerate()
-        .max_by_key(|(_, c)| player_attrs[c.primary as usize].to_int() - c.difficulty as i32)
-        .map(|(i, _)| i)
-        .unwrap_or(0)
-}
-
-/// Auto-pick for generated choices (same logic, owned types).
+/// Auto-pick the best available choice (for skip-match / idle / chain beats) by
+/// choosing the option where (player_attr − difficulty) is highest (most favourable odds).
 pub fn auto_pick_generated_choice(
     choices: &[crate::beats::GeneratedChoice],
     player_attrs: &[Fixed; goat_core::attrs::NUM_ATTRS],

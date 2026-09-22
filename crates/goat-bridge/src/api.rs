@@ -14,6 +14,7 @@ use goat_core::{
     generation::{CreationChoices, Position},
     roles::{RoleId, NUM_ROLES},
     state::{reduce, Intent, PeerState, WorldState},
+    tactical::TacticalProfile,
     week::{Intensity, Routine},
 };
 use goat_fixed::Fixed;
@@ -547,8 +548,10 @@ fn beat_to_dto(
         goals_for: ms.goals_for,
         goals_against: ms.goals_against,
         stamina: ms.stamina.to_int(),
-        beat_number: ms.beat_idx as u32 + 1,
-        total_beats: ms.beats.len() as u32,
+        // Dynamic flow: no fixed beat count. beat_number = action beats so far;
+        // total_beats = 0 signals "unknown" to the client.
+        beat_number: ms.moments.iter().filter(|m| m.is_action).count() as u32 + 1,
+        total_beats: 0,
         opp_name: opp_name.to_string(),
     }
 }
@@ -799,8 +802,8 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
             },
             player_attrs: view.current,
             player_familiarity: view.familiarity,
-            own_strength: own_str,
-            opp_strength: opp.strength,
+            own_profile: TacticalProfile::derive(own_str, pc_club_id as u32, world_seed),
+            opp_profile: TacticalProfile::derive(opp.strength, opp_id as u32, world_seed),
             opp_name: opp.name,
             form: state.pc_form,
             player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
@@ -1455,8 +1458,8 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
             },
             player_attrs: view.current,
             player_familiarity: view.familiarity,
-            own_strength: own_str,
-            opp_strength: opp.strength,
+            own_profile: TacticalProfile::derive(own_str, pc_club_id as u32, world_seed),
+            opp_profile: TacticalProfile::derive(opp.strength, opp_id as u32, world_seed),
             opp_name: opp.name,
             form: s.pc_form,
             player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
