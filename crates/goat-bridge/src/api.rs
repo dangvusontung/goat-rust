@@ -1321,13 +1321,16 @@ pub fn get_transfer_offers() -> Vec<TransferOfferDto> {
             None => return Vec::new(),
         };
         let view = s.players.snapshot(pc_id);
-        let form = s.pc_form.to_int();
         let age = view.age_weeks / 52;
-        if form < 55 || age >= 34 {
+
+        let mut rng = GoatRng::new(s.world_seed ^ ((s.season_number as u64) << 32) ^ 0xA11BEEF);
+        // Scouted from OBSERVED performance, with noise — never hidden attrs.
+        let observed = (s.pc_form.to_int() + s.pc_season_output) / 2;
+        let scouted = goat_world::scout::scout_estimate(observed, &mut rng);
+        if scouted < 55 || age >= 34 {
             return Vec::new();
         }
 
-        let mut rng = GoatRng::new(s.world_seed ^ ((s.season_number as u64) << 32) ^ 0xA11BEEF);
         let world = generate_world(s.world_seed);
         let n = rng.next_range_u64(0, 2) as usize;
         let mut offers = Vec::new();
@@ -1343,6 +1346,7 @@ pub fn get_transfer_offers() -> Vec<TransferOfferDto> {
             }
             let wage = s.pc_wage_annual
                 + (world.clubs[club_id].strength as i64 * 2)
+                + (scouted as i64 - 50)
                 + rng.next_range_u64(0, 50) as i64;
             let length = 2 + rng.next_range_u64(0, 2) as u32;
             offers.push(TransferOfferDto {
