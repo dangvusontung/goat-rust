@@ -40,6 +40,14 @@ pub struct WorldState {
     pub pc_div_idx: u8,
     /// Facilities development multiplier at the PC's club (set from goat-world).
     pub pc_facilities_mult: Fixed,
+    // ── Phase B: academy arc (optional U21 start) ────────────────────────────
+    /// True while the PC is in the club's academy (U21), pre-first-team debut.
+    pub pc_in_academy: bool,
+    /// Academy (U21) matches played — basis for the breakthrough average.
+    pub pc_academy_matches: u32,
+    /// Sum of (output − 50) over academy matches; proxy for accumulated
+    /// performance + media hype around the prospect.
+    pub pc_academy_hype: i32,
     /// Current season number (starts at 1).
     pub season_number: u32,
     /// Current round within the season (0-indexed, 0..ROUNDS_PER_SEASON).
@@ -164,6 +172,9 @@ impl WorldState {
             pc_club_idx: 0,
             pc_div_idx: 0,
             pc_facilities_mult: Fixed::ONE,
+            pc_in_academy: false,
+            pc_academy_matches: 0,
+            pc_academy_hype: 0,
             season_number: 0,
             season_round: 0,
             pc_form: Fixed::from_int(50),

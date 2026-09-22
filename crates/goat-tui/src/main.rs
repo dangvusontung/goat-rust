@@ -214,6 +214,19 @@ fn run_new_game(
     let club_id = div_club_ids[club_pos];
     let club = &world.clubs[club_id];
 
+    // Phase B: optional academy (U21) start — default is a straight first-team
+    // debut (design B.3).
+    writeln!(
+        out,
+        "\nStart in {}'s academy (U21)? Break through to the first team by performing. [y/N]",
+        club.name
+    )
+    .unwrap();
+    let academy = matches!(
+        prompt(lines, out, ">").trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    );
+
     let nationality = nation_name(world.divisions[div_idx].nation);
     let choices = CreationChoices {
         name,
@@ -272,6 +285,7 @@ fn run_new_game(
                         },
                         &mut GoatRng::new(0),
                     );
+                    state.pc_in_academy = academy;
                     state = reduce(
                         state,
                         Intent::SetLifestyle { lifestyle },
@@ -578,6 +592,11 @@ fn run_next_round(
         );
     }
 
+    // Phase B: academy (U21) weeks replace the league fixture until promotion.
+    if state.pc_in_academy {
+        return run_academy_round(lines, out, state, play_interactive, beat_lib, pc_traits);
+    }
+
     // Find PC's fixture this round.
     let pc_fixture = fixture_for_round(world_seed, season, div_idx, pc_club_id, round);
 
@@ -784,6 +803,177 @@ fn club_div_pos_in(div_idx: usize, club_id: usize) -> usize {
         .iter()
         .position(|&c| c == club_id)
         .expect("club in division")
+}
+
+/// One academy (U21) week: the PC plays a youth match (interactive or auto)
+/// instead of the league fixture, builds hype, and may break through to the
+/// first team. The league round still resolves — the first team plays without
+/// him (neutral PC contribution).
+#[allow(clippy::too_many_arguments)]
+fn run_academy_round(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+    mut state: WorldState,
+    play_interactive: bool,
+    beat_lib: &BeatLibrary,
+    pc_traits: PlayerTraits,
+) -> WorldState {
+    use goat_core::week::apply_academy_match;
+
+    let pc_id = match state.pc_player_id {
+        Some(id) => id,
+        None => return state,
+    };
+    let round = state.season_round as usize;
+    let season = state.season_number;
+    let div_idx = state.pc_div_idx as usize;
+    let pc_club_id = state.pc_club_idx as usize;
+    let world_seed = state.world_seed;
+    let world = generate_world(world_seed);
+    let club_str = world.clubs[pc_club_id].strength;
+
+    // U21 opponent: another club's youth side from the same division.
+    let match_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xACA_DE11;
+    let mut match_rng = GoatRng::new(match_seed);
+    let opp_pos =
+        (club_div_pos_in(div_idx, pc_club_id) + 1 + (round % (CLUBS_PER_DIV - 1))) % CLUBS_PER_DIV;
+    let opp_id = div_clubs(div_idx)[opp_pos];
+    let opp_name = format!("{} U21", world.clubs[opp_id].name);
+    let own_u21 = club_str.saturating_sub(12).max(20);
+    let opp_u21 = club_str.saturating_sub(18).max(15);
+
+    writeln!(
+        out,
+        "\n  ACADEMY — {} U21 vs {}",
+        world.clubs[pc_club_id].name, opp_name
+    )
+    .unwrap();
+
+    let ref_personality = {
+        let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+        RefPersonality::from_rng(&mut rp_rng)
+    };
+    let view = state.players.snapshot(pc_id);
+    let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
+        player_role: best_role_for_position(state.pc_position),
+        player_attrs: view.current,
+        player_familiarity: view.familiarity,
+        own_profile: goat_core::tactical::TacticalProfile::derive(
+            own_u21,
+            pc_club_id as u32,
+            world_seed,
+        ),
+        opp_profile: goat_core::tactical::TacticalProfile::derive(
+            opp_u21,
+            opp_id as u32,
+            world_seed,
+        ),
+        opp_name: static_name(&opp_name),
+        form: state.pc_form,
+        player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+            .to_int()
+            .clamp(1, 99) as u8,
+        ref_personality,
+        dirty_rep: state.pc_discipline_rep,
+        player_traits: pc_traits,
+    };
+
+    let result = if play_interactive {
+        let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
+        let mut shown_moments = 0usize;
+        while !ms.is_complete {
+            for m in ms
+                .moments
+                .iter()
+                .skip(shown_moments)
+                .filter(|m| !m.is_action)
+            {
+                writeln!(out, " {:>2}'  {}", m.minute, m.outcome_text).unwrap();
+            }
+            shown_moments = ms.moments.len();
+            render_beat(out, &ms);
+            if ms.final_result.is_some() {
+                break;
+            }
+            let choice_idx = read_choice(
+                lines,
+                out,
+                ms.current_beat().map(|b| b.choices.len()).unwrap_or(1),
+            );
+            ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
+        }
+        ms.final_result.unwrap_or_else(|| {
+            auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
+        })
+    } else {
+        auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
+    };
+
+    render_match_result(out, &result, &opp_name);
+
+    // Match load still costs energy and builds role familiarity.
+    state = reduce(
+        state,
+        Intent::ApplyMatchResult {
+            familiarity_xp: result.familiarity_xp,
+            energy_cost: Fixed::from_int(25),
+            injury_weeks: None,
+        },
+        &mut GoatRng::new(0),
+    );
+
+    // Breakthrough check (multi-factor: performance, age, fit, hype).
+    let view = state.players.snapshot(pc_id);
+    let best_fam = view.familiarity.iter().map(|&t| t as u8).max().unwrap_or(0);
+    let age_years = view.age_weeks / 52;
+    let mut bt_rng = GoatRng::new(match_seed ^ 0xB12A_9000);
+    let promoted = apply_academy_match(
+        &mut state,
+        result.player_output,
+        age_years,
+        best_fam,
+        &mut bt_rng,
+    );
+    let avg = 50 + state.pc_academy_hype / state.pc_academy_matches.max(1) as i32;
+    writeln!(
+        out,
+        "  Academy: {} U21 match(es), avg output {}, hype {}.",
+        state.pc_academy_matches, avg, state.pc_academy_hype
+    )
+    .unwrap();
+    if promoted {
+        writeln!(
+            out,
+            "\n  ★ BREAKTHROUGH! The first team calls — you are promoted from the academy! ★"
+        )
+        .unwrap();
+    }
+
+    // The league round resolves without the PC (neutral contribution).
+    let all_fixtures = round_fixtures(world_seed, season, div_idx, round);
+    let sim_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
+    let mut sim_rng = GoatRng::new(sim_seed);
+    let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
+    for f in &all_fixtures {
+        let (gf, ga) = sim_team_match(
+            world.clubs[f.home].strength,
+            world.clubs[f.away].strength,
+            &mut sim_rng,
+        );
+        let h_pos = club_div_pos_in(div_idx, f.home) as u8;
+        let a_pos = club_div_pos_in(div_idx, f.away) as u8;
+        round_results.push((h_pos, a_pos, gf, ga));
+    }
+    reduce(
+        state,
+        Intent::ApplyRoundResult {
+            pc_goals: 0,
+            pc_output: 50,
+            pc_result: 0,
+            round_results,
+        },
+        &mut GoatRng::new(0),
+    )
 }
 
 fn best_role_for_position(pc_position: u8) -> RoleId {
