@@ -134,3 +134,33 @@ But the two open issues hid in the population average:
 PC 2+ goals & L: 2.38% · rating≥70 & L: 3.02% (8.1% of losses) · mean rating 59.1.
 Star band (role rating ≥ 65, n=25k): 90–100 bucket 8.8% — of which rating **exactly 100: 1.96%**
 (a clamp pile: 22% of the top bucket sits on the rail) · starred-in-defeat 4.94% (15.9% of losses).
+
+## Round 3a — response surge + star funnel + weaker momentum→contest coupling
+
+Changes (`crates/goat-match/src/sim.rs`):
+- **Response surge**: for 2 ticks after a goal, the conceding side gets +8 pp possession and
+  ×1.40 goal chance (`RESPONSE_TICKS/SHARE_PCT/GOAL_BOOST`) — real matches cluster goals right
+  after a goal, and a PC goal inviting a reply decouples his output from the result.
+- **Momentum→contest coupling halved** (`MOMENTUM_CONTEST_DIV` 10 → 20): match momentum is a team
+  state; letting it dominate the PC's contest roll coupled his rating to the scoreline.
+- **Star funnel when trailing**: +20 pp involvement, +15 pp zone pull when behind
+  (`TRAIL_INVOLVE_BONUS`, `TRAIL_ZONE_PULL_BONUS`) — chasing teams play through their star.
+- `AUTO_GOAL_SCALE` 36 → 33 to pay for the surge/funnel goal inflation (2.98 → 3.14 → 3.01).
+
+Golden seed 42 unchanged (output 54, 2-2) — all new mechanics are score-state-conditional
+and consume no extra RNG on the golden path.
+
+| Metric (match-batch 100k, seed 0xBA7C4) | Before | After |
+|---|---|---|
+| W / D / L % | 39.3 / 23.3 / 37.4 | 39.7 / 25.4 / 34.9 |
+| Goals/match (for–against) | 2.98 (1.52–1.46) | 3.01 (1.55–1.46) |
+| Clean sheets | 15.9% | 17.1% |
+| PC 2+ goals & L | 2.38% | **3.24%** |
+| Starred-in-defeat (rating≥70 & L) | 3.02% | **3.72%** |
+| Mean rating | 59.1 | 60.2 |
+| Star band 90–100 / pile at 100 | 8.8% / 1.96% | 9.2% / 2.11% |
+
+match-sim star striker (N=5000, seeds 7/11/23): starred-in-defeat **1.64/1.42/1.84% →
+2.00/1.90/2.26%** — now inside the 2–4% target on both harnesses.
+Star band (role rating ≥ 65, n=25k): 90–100 bucket 8.8% — of which rating **exactly 100: 1.96%**
+(a clamp pile: 22% of the top bucket sits on the rail) · starred-in-defeat 4.94% (15.9% of losses).
