@@ -446,7 +446,7 @@ fn run_game_loop(
             .unwrap();
             writeln!(
                 out,
-                "  [T] Table  [G] Legacy  [U] World  [V] Sheet  [Z] Save  [Q] Quit"
+                "  [T] Table  [G] Legacy  [U] World  [H] Staff  [V] Sheet  [Z] Save  [Q] Quit"
             )
             .unwrap();
         } else {
@@ -494,6 +494,7 @@ fn run_game_loop(
                 }
                 "T" if has_season => render_table(out, &state),
                 "U" => render_world_screen(out, &state),
+                "H" => state = run_staff_menu(lines, out, state),
                 "G" if has_season => {
                     let ev = build_legacy_evidence(&state);
                     render_legacy_screen(out, &ev, &state);
@@ -805,6 +806,113 @@ fn club_div_pos_in(div_idx: usize, club_id: usize) -> usize {
         .iter()
         .position(|&c| c == club_id)
         .expect("club in division")
+}
+
+// ── Personal staff (Phase C) ──────────────────────────────────────────────────
+
+const PERSONAL_ROLE_NAMES: [&str; 5] = [
+    "Personal Trainer (stamina)",
+    "Nutritionist (development)",
+    "Psychologist (headspace)",
+    "Physio (injury recovery)",
+    "Agent (negotiation)",
+];
+
+/// Recompute the merged staff bundle after any hire/fire/transfer:
+/// per-domain best of club-provided and personally hired staff.
+fn refresh_staff_mods(state: &mut WorldState) {
+    state.pc_staff_mods = state
+        .pc_club_staff_mods
+        .best_of(goat_core::staff::personal_staff_mods(
+            &state.pc_personal_staff,
+        ));
+}
+
+/// Hire/fire personal staff (design C nhóm 2 — pay-to-upgrade from wages).
+fn run_staff_menu(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+    mut state: WorldState,
+) -> WorldState {
+    use goat_core::staff::{PersonalStaff, NUM_PERSONAL_ROLES};
+
+    loop {
+        writeln!(
+            out,
+            "\n--- PERSONAL STAFF (savings: {}) ---",
+            state.pc_savings
+        )
+        .unwrap();
+        for (i, name) in PERSONAL_ROLE_NAMES.iter().enumerate() {
+            let s = state.pc_personal_staff[i];
+            if s.quality > 0 {
+                writeln!(
+                    out,
+                    "  {}. {} — quality {} ({}k/yr)",
+                    i + 1,
+                    name,
+                    s.quality,
+                    s.wage_annual
+                )
+                .unwrap();
+            } else {
+                writeln!(out, "  {}. {} — vacant", i + 1, name).unwrap();
+            }
+        }
+        let total: i64 = state.pc_personal_staff.iter().map(|s| s.wage_annual).sum();
+        writeln!(
+            out,
+            "  Total staff wages: {total}k/yr   [1-5] manage role   [B] Back"
+        )
+        .unwrap();
+
+        let choice = prompt(lines, out, ">");
+        let idx: usize = match choice.trim().parse::<usize>() {
+            Ok(n) if (1..=NUM_PERSONAL_ROLES).contains(&n) => n - 1,
+            _ => return state,
+        };
+        let cur = state.pc_personal_staff[idx];
+        if cur.quality > 0 {
+            writeln!(
+                out,
+                "  Fire {} (quality {})? [y/N]",
+                PERSONAL_ROLE_NAMES[idx], cur.quality
+            )
+            .unwrap();
+            if matches!(
+                prompt(lines, out, ">").trim().to_ascii_lowercase().as_str(),
+                "y" | "yes"
+            ) {
+                state.pc_personal_staff[idx] = PersonalStaff::default();
+                refresh_staff_mods(&mut state);
+                writeln!(out, "  Staff member released.").unwrap();
+            }
+        } else {
+            // Candidate market: one deterministic candidate per role per season.
+            let role_tag = (idx as u64 + 1) * 0x9E37;
+            let mut rng =
+                GoatRng::new(state.world_seed ^ ((state.season_number as u64) << 24) ^ role_tag);
+            let quality = rng.next_range_u64(40, 95) as u8;
+            let wage = quality as i64 * 2;
+            writeln!(
+                out,
+                "  Candidate for {}: quality {}, asks {}k/yr. Hire? [y/N]",
+                PERSONAL_ROLE_NAMES[idx], quality, wage
+            )
+            .unwrap();
+            if matches!(
+                prompt(lines, out, ">").trim().to_ascii_lowercase().as_str(),
+                "y" | "yes"
+            ) {
+                state.pc_personal_staff[idx] = PersonalStaff {
+                    quality,
+                    wage_annual: wage,
+                };
+                refresh_staff_mods(&mut state);
+                writeln!(out, "  Hired! Wages are deducted at season end.").unwrap();
+            }
+        }
+    }
 }
 
 /// One academy (U21) week: the PC plays a youth match (interactive or auto)
@@ -1329,10 +1437,15 @@ fn generate_transfer_offers(state: &WorldState, view: &PlayerView) -> Vec<(usize
         let club_id = div_clubs(target_div)[club_pos];
         let target_strength = world.clubs[club_id].strength;
         // Wage follows the scouted level — an overrated player gets overpaid.
-        let wage_offer = state.pc_wage_annual
+        // A personal agent negotiates the number up.
+        let agent_q =
+            state.pc_personal_staff[goat_core::staff::PersonalRole::Agent as usize].quality as i64;
+        let wage_offer = (state.pc_wage_annual
             + (target_strength as i64 * 2)
             + (scouted as i64 - 50)
-            + rng.next_range_u64(0, 50) as i64;
+            + rng.next_range_u64(0, 50) as i64)
+            * (100 + agent_q / 4)
+            / 100;
         let length = 2 + rng.next_range_u64(0, 2) as u32;
         if club_id != state.pc_club_idx as usize {
             offers.push((club_id, target_div as u8, wage_offer, length));
@@ -1399,7 +1512,13 @@ fn run_transfer_window(
                     state.pc_club, club.name
                 )
                 .unwrap();
-                let fee_bonus = (world.clubs[state.pc_club_idx as usize].strength as i64) * 3;
+                let agent_q = state.pc_personal_staff
+                    [goat_core::staff::PersonalRole::Agent as usize]
+                    .quality as i64;
+                let fee_bonus = (world.clubs[state.pc_club_idx as usize].strength as i64)
+                    * 3
+                    * (100 + agent_q / 2)
+                    / 100;
                 state = reduce(
                     state,
                     Intent::ExecuteTransfer {

@@ -13,6 +13,8 @@
 pub struct StaffMods {
     /// Stamina cost of match actions (< 1000 = fitter squad).
     pub stamina_cost_pct: i32,
+    /// Weekly development growth multiplier (> 1000 = faster growth).
+    pub growth_pct: i32,
     /// Positive headspace gains (confidence/flow) multiplier.
     pub headspace_gain_pct: i32,
     /// Frustration gains multiplier (< 1000 = calmer player).
@@ -33,6 +35,7 @@ impl StaffMods {
     /// No staff influence.
     pub const NEUTRAL: StaffMods = StaffMods {
         stamina_cost_pct: 1000,
+        growth_pct: 1000,
         headspace_gain_pct: 1000,
         frustration_gain_pct: 1000,
         injury_duration_pct: 1000,
@@ -45,6 +48,7 @@ impl StaffMods {
         let q = q as i32;
         StaffMods {
             stamina_cost_pct: 1100 - 2 * q,
+            growth_pct: 800 + 4 * q,
             headspace_gain_pct: 800 + 4 * q,
             frustration_gain_pct: 1200 - 4 * q,
             injury_duration_pct: 1200 - 4 * q,
@@ -57,6 +61,7 @@ impl StaffMods {
     pub fn best_of(self, other: StaffMods) -> StaffMods {
         StaffMods {
             stamina_cost_pct: self.stamina_cost_pct.min(other.stamina_cost_pct),
+            growth_pct: self.growth_pct.max(other.growth_pct),
             headspace_gain_pct: self.headspace_gain_pct.max(other.headspace_gain_pct),
             frustration_gain_pct: self.frustration_gain_pct.min(other.frustration_gain_pct),
             injury_duration_pct: self.injury_duration_pct.min(other.injury_duration_pct),
@@ -73,6 +78,7 @@ mod tests {
     fn neutral_at_quality_50() {
         let m = StaffMods::from_quality(50);
         assert_eq!(m.stamina_cost_pct, 1000);
+        assert_eq!(m.growth_pct, 1000);
         assert_eq!(m.headspace_gain_pct, 1000);
         assert_eq!(m.frustration_gain_pct, 1000);
         assert_eq!(m.injury_duration_pct, 1000);
@@ -99,5 +105,94 @@ mod tests {
         // An 80-quality staff beats neutral everywhere except nothing.
         assert!(best2.stamina_cost_pct <= 1000);
         assert!(best2.headspace_gain_pct >= 1000);
+    }
+}
+
+// ── Personal (hired) staff — design C nhóm 2 ─────────────────────────────────
+
+/// The five personally-hireable staff roles. The PC pays their wages from
+/// career earnings; per domain the better of club vs personal staff wins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PersonalRole {
+    /// Personal trainer — match stamina economy.
+    Trainer = 0,
+    /// Nutritionist — weekly development growth.
+    Nutritionist = 1,
+    /// Personal psychologist — headspace management.
+    Psychologist = 2,
+    /// Personal physio — injury recovery.
+    Physio = 3,
+    /// Agent — transfer/wage negotiation (handled outside StaffMods).
+    Agent = 4,
+}
+
+pub const NUM_PERSONAL_ROLES: usize = 5;
+
+/// One hired staff member. `quality == 0` means the role is vacant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct PersonalStaff {
+    pub quality: u8,
+    /// Annual wage in the same units as `pc_wage_annual`.
+    pub wage_annual: i64,
+}
+
+/// Merge all hired personal staff into one modifier bundle (vacant roles
+/// contribute nothing). The agent is NOT here — he negotiates money, not
+/// performance.
+pub fn personal_staff_mods(staff: &[PersonalStaff; NUM_PERSONAL_ROLES]) -> StaffMods {
+    let mut m = StaffMods::NEUTRAL;
+    let hire = |role: PersonalRole| staff[role as usize].quality;
+    if hire(PersonalRole::Trainer) > 0 {
+        m.stamina_cost_pct = StaffMods::from_quality(hire(PersonalRole::Trainer)).stamina_cost_pct;
+    }
+    if hire(PersonalRole::Nutritionist) > 0 {
+        m.growth_pct = StaffMods::from_quality(hire(PersonalRole::Nutritionist)).growth_pct;
+    }
+    if hire(PersonalRole::Psychologist) > 0 {
+        let q = StaffMods::from_quality(hire(PersonalRole::Psychologist));
+        m.headspace_gain_pct = q.headspace_gain_pct;
+        m.frustration_gain_pct = q.frustration_gain_pct;
+    }
+    if hire(PersonalRole::Physio) > 0 {
+        m.injury_duration_pct =
+            StaffMods::from_quality(hire(PersonalRole::Physio)).injury_duration_pct;
+    }
+    m
+}
+
+/// Total annual wage bill of the personal staff.
+pub fn personal_staff_wages(staff: &[PersonalStaff; NUM_PERSONAL_ROLES]) -> i64 {
+    staff.iter().map(|s| s.wage_annual).sum()
+}
+
+#[cfg(test)]
+mod personal_tests {
+    use super::*;
+
+    #[test]
+    fn vacant_staff_is_neutral() {
+        let staff = [PersonalStaff::default(); NUM_PERSONAL_ROLES];
+        assert_eq!(personal_staff_mods(&staff), StaffMods::NEUTRAL);
+        assert_eq!(personal_staff_wages(&staff), 0);
+    }
+
+    #[test]
+    fn each_role_feeds_its_own_domain() {
+        let mut staff = [PersonalStaff::default(); NUM_PERSONAL_ROLES];
+        staff[PersonalRole::Trainer as usize] = PersonalStaff {
+            quality: 80,
+            wage_annual: 100,
+        };
+        staff[PersonalRole::Physio as usize] = PersonalStaff {
+            quality: 80,
+            wage_annual: 100,
+        };
+        let m = personal_staff_mods(&staff);
+        assert!(m.stamina_cost_pct < 1000);
+        assert!(m.injury_duration_pct < 1000);
+        // Untouched domains stay neutral.
+        assert_eq!(m.growth_pct, 1000);
+        assert_eq!(m.headspace_gain_pct, 1000);
+        assert_eq!(personal_staff_wages(&staff), 200);
     }
 }
