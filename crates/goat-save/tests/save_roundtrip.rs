@@ -43,6 +43,7 @@ fn setup_state() -> WorldState {
             pc_club_idx: pc_club_id as u16,
             pc_div_idx: div_index(NATION_ENGLAND, 1) as u8,
             facilities_mult: facilities_mult(world.clubs[pc_club_id].strength),
+            staff_mods: goat_world::staff::club_staff_mods(world.clubs[pc_club_id].strength),
             initial_table: Box::new([0u32; 80]),
         },
         &mut GoatRng::new(0),

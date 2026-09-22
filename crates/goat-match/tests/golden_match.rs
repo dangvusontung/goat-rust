@@ -67,6 +67,7 @@ fn balanced_setup() -> MatchSetup {
         ref_personality: RefPersonality::Balanced,
         dirty_rep: 50,
         player_traits: PlayerTraits::default(),
+        staff_mods: goat_core::staff::StaffMods::NEUTRAL,
     }
 }
 

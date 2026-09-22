@@ -40,6 +40,9 @@ pub struct WorldState {
     pub pc_div_idx: u8,
     /// Facilities development multiplier at the PC's club (set from goat-world).
     pub pc_facilities_mult: Fixed,
+    /// Club-staff effect bundle (injury recovery etc.); personal staff upgrades
+    /// merge into this via `StaffMods::best_of`.
+    pub pc_staff_mods: crate::staff::StaffMods,
     // ── Phase B: academy arc (optional U21 start) ────────────────────────────
     /// True while the PC is in the club's academy (U21), pre-first-team debut.
     pub pc_in_academy: bool,
@@ -172,6 +175,7 @@ impl WorldState {
             pc_club_idx: 0,
             pc_div_idx: 0,
             pc_facilities_mult: Fixed::ONE,
+            pc_staff_mods: crate::staff::StaffMods::NEUTRAL,
             pc_in_academy: false,
             pc_academy_matches: 0,
             pc_academy_hype: 0,
@@ -303,6 +307,7 @@ pub enum Intent {
         new_length: u32,
         new_club_name: String,
         facilities_mult: Fixed,
+        staff_mods: crate::staff::StaffMods,
         fee_bonus: i64, // fraction of fee paid to player (signing bonus)
     },
     /// Collect end-of-season wage into savings.
@@ -355,6 +360,7 @@ pub enum Intent {
         pc_club_idx: u16,
         pc_div_idx: u8,
         facilities_mult: Fixed,
+        staff_mods: crate::staff::StaffMods,
         /// Flat table raw data for the PC's division (initialised to all zeros).
         initial_table: Box<[u32; 80]>,
     },
@@ -552,12 +558,14 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             new_length,
             new_club_name,
             facilities_mult,
+            staff_mods,
             fee_bonus,
         } => {
             state.pc_club_idx = to_club_idx;
             state.pc_div_idx = to_div_idx;
             state.pc_club = new_club_name;
             state.pc_facilities_mult = facilities_mult;
+            state.pc_staff_mods = staff_mods;
             state.pc_contract_seasons_left = new_length;
             state.pc_wage_annual = new_wage;
             state.pc_power_ladder = 0;
@@ -736,12 +744,14 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             pc_club_idx,
             pc_div_idx,
             facilities_mult,
+            staff_mods,
             initial_table,
         } => {
             state.world_seed = world_seed;
             state.pc_club_idx = pc_club_idx;
             state.pc_div_idx = pc_div_idx;
             state.pc_facilities_mult = facilities_mult;
+            state.pc_staff_mods = staff_mods;
             state.table_raw = *initial_table;
             state
         }
@@ -858,6 +868,7 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
         &state.pc_routine,
         effective_mult,
         state.pc_lifestyle,
+        state.pc_staff_mods.injury_duration_pct,
         rng,
     );
 

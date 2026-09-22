@@ -99,6 +99,7 @@ fn main() {
             ref_personality: RefPersonality::from_rng(&mut rp_rng),
             dirty_rep: 50,
             player_traits: PlayerTraits::default(),
+            staff_mods: goat_core::staff::StaffMods::NEUTRAL,
         };
         let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
 

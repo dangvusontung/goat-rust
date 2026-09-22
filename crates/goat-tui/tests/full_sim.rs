@@ -65,6 +65,7 @@ fn make_state(seed: u64, position: Position, div_idx: usize) -> WorldState {
             pc_club_idx: pc_club_id as u16,
             pc_div_idx: div_idx as u8,
             facilities_mult: facilities_mult(club.strength),
+            staff_mods: goat_world::staff::club_staff_mods(club.strength),
             initial_table: Box::new([0u32; 80]),
         },
         &mut GoatRng::new(0),
@@ -208,6 +209,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                 ref_personality,
                 dirty_rep: state.pc_discipline_rep,
                 player_traits: PlayerTraits::default(),
+                staff_mods: goat_core::staff::StaffMods::NEUTRAL,
             };
 
             let result = auto_play_match(beat_lib, setup, &mut GoatRng::new(match_seed));
