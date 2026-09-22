@@ -13,7 +13,8 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// 2,544 clubs) — v7 club indices refer to the old 64-club const world and
 /// would silently load into the wrong clubs, so they are rejected.
 /// v9: academy arc fields (Phase B) — appended, v8 saves load with defaults.
-pub const VERSION: u32 = 9;
+/// v10: personal staff (Phase C) — appended, older saves load with vacancies.
+pub const VERSION: u32 = 10;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -90,6 +91,8 @@ pub struct SaveData {
     pub pc_in_academy: bool,
     pub pc_academy_matches: u32,
     pub pc_academy_hype: i32,
+    // ── Phase C personal staff (v10+): quality u8 + annual wage i64 per role ──
+    pub pc_personal_staff: [(u8, i64); 5],
 }
 
 #[derive(Debug)]
@@ -190,6 +193,10 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_in_academy: state.pc_in_academy,
         pc_academy_matches: state.pc_academy_matches,
         pc_academy_hype: state.pc_academy_hype,
+        pc_personal_staff: core::array::from_fn(|i| {
+            let s = state.pc_personal_staff[i];
+            (s.quality, s.wage_annual)
+        }),
     }
 }
 
@@ -400,6 +407,19 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
     state.pc_in_academy = data.pc_in_academy;
     state.pc_academy_matches = data.pc_academy_matches;
     state.pc_academy_hype = data.pc_academy_hype;
+    for (i, &(q, w)) in data.pc_personal_staff.iter().enumerate() {
+        state.pc_personal_staff[i] = goat_core::staff::PersonalStaff {
+            quality: q,
+            wage_annual: w,
+        };
+    }
+    // Rebuild the merged staff bundle (club base was set from the save's club).
+    state.pc_club_staff_mods = goat_world::staff::club_staff_mods(club.strength);
+    state.pc_staff_mods = state
+        .pc_club_staff_mods
+        .best_of(goat_core::staff::personal_staff_mods(
+            &state.pc_personal_staff,
+        ));
 
     state
 }
@@ -487,6 +507,11 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     v.push(u8::from(d.pc_in_academy));
     push_u32(&mut v, d.pc_academy_matches);
     push_i32(&mut v, d.pc_academy_hype);
+    // Phase C personal staff (v10+)
+    for (q, w) in d.pc_personal_staff {
+        v.push(q);
+        push_u64(&mut v, w as u64);
+    }
     v
 }
 
@@ -607,6 +632,12 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     let pc_in_academy = read_u8(b, &mut cur).unwrap_or(0) != 0;
     let pc_academy_matches = read_u32(b, &mut cur).unwrap_or(0);
     let pc_academy_hype = read_i32(b, &mut cur).unwrap_or(0);
+    // Phase C personal staff (v10+; older saves default to all-vacant)
+    let pc_personal_staff: [(u8, i64); 5] = core::array::from_fn(|_| {
+        let q = read_u8(b, &mut cur).unwrap_or(0);
+        let w = read_u64(b, &mut cur).unwrap_or(0) as i64;
+        (q, w)
+    });
 
     Ok(SaveData {
         world_seed,
@@ -666,6 +697,7 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_in_academy,
         pc_academy_matches,
         pc_academy_hype,
+        pc_personal_staff,
     })
 }
 

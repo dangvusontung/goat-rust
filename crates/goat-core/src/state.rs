@@ -43,6 +43,11 @@ pub struct WorldState {
     /// Club-staff effect bundle (injury recovery etc.); personal staff upgrades
     /// merge into this via `StaffMods::best_of`.
     pub pc_staff_mods: crate::staff::StaffMods,
+    /// The club-provided part of `pc_staff_mods` (kept so firing a personal
+    /// staff member can recompute the merged bundle).
+    pub pc_club_staff_mods: crate::staff::StaffMods,
+    /// Personally hired staff (design C nhóm 2). quality 0 = vacant.
+    pub pc_personal_staff: [crate::staff::PersonalStaff; crate::staff::NUM_PERSONAL_ROLES],
     // ── Phase B: academy arc (optional U21 start) ────────────────────────────
     /// True while the PC is in the club's academy (U21), pre-first-team debut.
     pub pc_in_academy: bool,
@@ -176,6 +181,9 @@ impl WorldState {
             pc_div_idx: 0,
             pc_facilities_mult: Fixed::ONE,
             pc_staff_mods: crate::staff::StaffMods::NEUTRAL,
+            pc_club_staff_mods: crate::staff::StaffMods::NEUTRAL,
+            pc_personal_staff: [crate::staff::PersonalStaff::default();
+                crate::staff::NUM_PERSONAL_ROLES],
             pc_in_academy: false,
             pc_academy_matches: 0,
             pc_academy_hype: 0,
@@ -566,6 +574,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_club = new_club_name;
             state.pc_facilities_mult = facilities_mult;
             state.pc_staff_mods = staff_mods;
+            state.pc_club_staff_mods = staff_mods;
             state.pc_contract_seasons_left = new_length;
             state.pc_wage_annual = new_wage;
             state.pc_power_ladder = 0;
@@ -578,6 +587,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
 
         Intent::CollectWage => {
             state.pc_savings += state.pc_wage_annual;
+            state.pc_savings -= crate::staff::personal_staff_wages(&state.pc_personal_staff);
             if state.pc_contract_seasons_left > 0 {
                 state.pc_contract_seasons_left -= 1;
             }
@@ -752,6 +762,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_div_idx = pc_div_idx;
             state.pc_facilities_mult = facilities_mult;
             state.pc_staff_mods = staff_mods;
+            state.pc_club_staff_mods = staff_mods;
             state.table_raw = *initial_table;
             state
         }
@@ -860,7 +871,10 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
     // Money buys a development edge — but growth still clamps to potential (§2.4), and
     // level 0 is ×1.0 so the no-spend path is byte-identical to existing goldens.
     let dev_mult = crate::tuning::DEV_INVEST_MULT[(state.pc_dev_invest_level as usize).min(3)];
-    let effective_mult = state.pc_facilities_mult * lifestyle_mult * dev_mult;
+    let effective_mult = state.pc_facilities_mult
+        * lifestyle_mult
+        * dev_mult
+        * goat_fixed::Fixed::raw(state.pc_staff_mods.growth_pct);
 
     let events = advance_week(
         &mut state.players,
