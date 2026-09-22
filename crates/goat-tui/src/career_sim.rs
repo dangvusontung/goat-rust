@@ -320,6 +320,7 @@ fn main() {
             ref_personality: RefPersonality::from_rng(&mut rp_rng),
             dirty_rep: 50,
             player_traits: PlayerTraits::default(),
+            staff_mods: goat_core::staff::StaffMods::NEUTRAL,
         };
         let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
 
@@ -398,6 +399,7 @@ fn main() {
                 pc_club_idx: pc_club_id as u16,
                 pc_div_idx: div_idx as u8,
                 facilities_mult: facilities_mult(world.clubs[pc_club_id].strength),
+                staff_mods: goat_world::staff::club_staff_mods(world.clubs[pc_club_id].strength),
                 initial_table: Box::new([0u32; 80]),
             },
             &mut GoatRng::new(0),
@@ -460,6 +462,7 @@ fn main() {
                 ref_personality: RefPersonality::from_rng(&mut rp_rng),
                 dirty_rep: state.pc_discipline_rep,
                 player_traits: PlayerTraits::default(),
+                staff_mods: goat_world::staff::club_staff_mods(world.clubs[pc_club_id].strength),
             };
             let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
 
@@ -658,6 +661,7 @@ fn main() {
                 ref_personality: RefPersonality::from_rng(&mut rp_rng),
                 dirty_rep: 50,
                 player_traits: PlayerTraits::default(),
+                staff_mods: goat_core::staff::StaffMods::NEUTRAL,
             };
             let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
 
@@ -938,6 +942,7 @@ fn main() {
             pc_club_idx: pc_club_id as u16,
             pc_div_idx: div_idx as u8,
             facilities_mult: facilities_mult(world.clubs[pc_club_id].strength),
+            staff_mods: goat_world::staff::club_staff_mods(world.clubs[pc_club_id].strength),
             initial_table: Box::new([0u32; 80]),
         },
         &mut GoatRng::new(0),

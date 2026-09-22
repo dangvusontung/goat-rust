@@ -281,6 +281,7 @@ fn run_new_game(
                             pc_club_idx: club_id as u16,
                             pc_div_idx: div_idx as u8,
                             facilities_mult: facilities_mult(club.strength),
+                            staff_mods: goat_world::staff::club_staff_mods(club.strength),
                             initial_table: Box::new([0u32; 80]),
                         },
                         &mut GoatRng::new(0),
@@ -639,6 +640,7 @@ fn run_next_round(
                 ref_personality,
                 dirty_rep: state.pc_discipline_rep,
                 player_traits: pc_traits,
+                staff_mods: goat_world::staff::club_staff_mods(own_str),
             };
 
             let result = if play_interactive {
@@ -876,6 +878,7 @@ fn run_academy_round(
         ref_personality,
         dirty_rep: state.pc_discipline_rep,
         player_traits: pc_traits,
+        staff_mods: goat_world::staff::club_staff_mods(own_u21),
     };
 
     let result = if play_interactive {
@@ -1406,6 +1409,7 @@ fn run_transfer_window(
                         new_length: length,
                         new_club_name: club.name.clone(),
                         facilities_mult: facilities_mult(club.strength),
+                        staff_mods: goat_world::staff::club_staff_mods(club.strength),
                         fee_bonus,
                     },
                     &mut GoatRng::new(0),

@@ -177,6 +177,7 @@ struct FlowLens<'a> {
     own: &'a TacticalProfile,
     opp: &'a TacticalProfile,
     traits: &'a PlayerTraits,
+    setpiece_bonus: i32,
 }
 
 impl BeatLibrary {
@@ -351,7 +352,12 @@ impl BeatLibrary {
             choices.push(GeneratedChoice {
                 text: raw_action.text.clone(),
                 primary: attr,
-                difficulty: scaled_difficulty(raw_action.difficulty, attr, opp),
+                difficulty: scaled_difficulty(
+                    raw_action.difficulty,
+                    attr,
+                    opp,
+                    lens.setpiece_bonus,
+                ),
                 foul_chance: raw_action.foul_chance,
                 foul_serious: raw_action.foul_serious,
                 success,
@@ -416,6 +422,9 @@ pub struct MatchSetup {
     pub ref_personality: RefPersonality,
     pub dirty_rep: i32,
     pub player_traits: PlayerTraits,
+    /// Club-staff effects on this match (stamina, headspace, set pieces).
+    /// `StaffMods::NEUTRAL` = no staff influence.
+    pub staff_mods: goat_core::staff::StaffMods,
 }
 
 /// Summary of a single flow moment for the commentary feed / post-match recap.
@@ -892,11 +901,34 @@ fn resolve_choice(
     };
 
     ms.player_output = apply_output_delta(ms.player_output, outcome.output_delta as i32);
-    ms.headspace.apply(
-        &outcome.headspace,
-        ms.setup.player_attrs[AttrId::Composure as usize],
+    {
+        let mods = &ms.setup.staff_mods;
+        let d = &outcome.headspace;
+        // Club psychologist: amplify the good days, take the edge off the bad ones.
+        let scaled = crate::beats::HeadspaceDelta {
+            confidence: if d.confidence > 0 {
+                d.confidence as i32 * mods.headspace_gain_pct / 1000
+            } else {
+                d.confidence as i32
+            } as i8,
+            frustration: if d.frustration > 0 {
+                d.frustration as i32 * mods.frustration_gain_pct / 1000
+            } else {
+                d.frustration as i32
+            } as i8,
+            flow: if d.flow > 0 {
+                d.flow as i32 * mods.headspace_gain_pct / 1000
+            } else {
+                d.flow as i32
+            } as i8,
+        };
+        ms.headspace
+            .apply(&scaled, ms.setup.player_attrs[AttrId::Composure as usize]);
+    }
+    let stamina_cost = Fixed::from_int(
+        (BASE_STAMINA_COST + outcome.stamina_cost) as i32 * ms.setup.staff_mods.stamina_cost_pct
+            / 1000,
     );
-    let stamina_cost = Fixed::from_int((BASE_STAMINA_COST + outcome.stamina_cost) as i32);
     ms.stamina = (ms.stamina - stamina_cost).clamp(Fixed::ZERO, STARTING_STAMINA);
 
     if let Some(ev) = outcome.score_event {
@@ -1043,6 +1075,7 @@ fn make_lens(ms: &ActiveMatchState) -> FlowLens<'_> {
         own: &ms.setup.own_profile,
         opp: &ms.setup.opp_profile,
         traits: &ms.setup.player_traits,
+        setpiece_bonus: ms.setup.staff_mods.setpiece_bonus,
     }
 }
 
@@ -1100,8 +1133,9 @@ fn role_family_str(f: PositionFamily) -> &'static str {
 
 /// Contest difficulty scaled by the opponent's relevant line stat:
 /// attacking attrs test against their defense, defensive attrs against their
-/// attack, everything else against the midpoint.
-fn scaled_difficulty(base: u8, attr: AttrId, opp: &TacticalProfile) -> u8 {
+/// attack, everything else against the midpoint. Set-piece attrs (FreeKickAcc,
+/// Heading) get a flat reduction from the set-piece coach.
+fn scaled_difficulty(base: u8, attr: AttrId, opp: &TacticalProfile, setpiece_bonus: i32) -> u8 {
     let idx = attr as usize;
     let stat = if DEFENDING_ATTRS.contains(&idx) {
         opp.attack as i32
@@ -1113,7 +1147,12 @@ fn scaled_difficulty(base: u8, attr: AttrId, opp: &TacticalProfile) -> u8 {
     } else {
         (opp.attack as i32 + opp.defense as i32) / 2
     };
-    (base as i32 + (stat - 50) / OPP_DIFFICULTY_DIV).clamp(1, 99) as u8
+    let sp = if attr == AttrId::FreeKickAcc || attr == AttrId::Heading {
+        setpiece_bonus
+    } else {
+        0
+    };
+    (base as i32 + (stat - 50) / OPP_DIFFICULTY_DIV - sp).clamp(1, 99) as u8
 }
 
 fn convert_outcome(raw: &RawOutcome) -> GeneratedOutcome {

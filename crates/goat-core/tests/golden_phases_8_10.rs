@@ -89,6 +89,7 @@ fn transfer_changes_club() {
             new_length: 3,
             new_club_name: "Arsenal".into(),
             facilities_mult: Fixed::from_int(1),
+            staff_mods: goat_core::staff::StaffMods::NEUTRAL,
             fee_bonus: 200,
         },
         &mut GoatRng::new(0),

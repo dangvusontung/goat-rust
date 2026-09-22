@@ -653,6 +653,7 @@ pub fn new_game(
             pc_club_idx: club_id as u16,
             pc_div_idx: div_idx as u8,
             facilities_mult: facilities_mult(club.strength),
+            staff_mods: goat_world::staff::club_staff_mods(club.strength),
             initial_table: Box::new([0u32; 80]),
         },
         &mut GoatRng::new(0),
@@ -806,6 +807,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
             ref_personality,
             dirty_rep: state.pc_discipline_rep,
             player_traits: PlayerTraits::default(),
+            staff_mods: goat_world::staff::club_staff_mods(own_str),
         };
 
         let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
@@ -1295,6 +1297,7 @@ pub fn accept_transfer(club_id: u32, wage: i64, length: u32) -> GoatGameState {
             new_length: length,
             new_club_name: club.name.clone(),
             facilities_mult: facilities_mult(club.strength),
+            staff_mods: goat_world::staff::club_staff_mods(club.strength),
             fee_bonus,
         },
         &mut GoatRng::new(0),
@@ -1475,6 +1478,7 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
             ref_personality,
             dirty_rep: s.pc_discipline_rep,
             player_traits: PlayerTraits::default(),
+            staff_mods: goat_world::staff::club_staff_mods(own_str),
         };
 
         let ms = with_beat_lib(|lib| start_match(lib, setup, &mut rng));

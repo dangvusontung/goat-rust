@@ -160,6 +160,7 @@ pub fn advance_week(
     routine: &Routine,
     facilities_mult: Fixed,
     lifestyle: u8,
+    injury_duration_pct: i32,
     rng: &mut impl RngSource,
 ) -> Vec<DevelopmentEvent> {
     let mut events: Vec<DevelopmentEvent> = Vec::new();
@@ -195,7 +196,9 @@ pub fn advance_week(
     // ── Injury check ─────────────────────────────────────────────────────────
     let inj_prob = injury_prob(new_energy, intensity, age_years, lifestyle);
     if rng.next_range_u64(0, 999) < inj_prob as u64 {
-        let dur = rng.next_range_u8(INJURY_WEEKS_MIN, INJURY_WEEKS_MAX) as u32;
+        // Club/personal physio scales the recovery timeline (1000 = neutral).
+        let raw_dur = rng.next_range_u8(INJURY_WEEKS_MIN, INJURY_WEEKS_MAX) as i32;
+        let dur = (raw_dur * injury_duration_pct / 1000).max(1) as u32;
         players.set_injury_weeks(pc_id, dur);
         events.push(DevelopmentEvent::Injury { weeks: dur });
         // Return early — injured this week, no training
@@ -488,7 +491,7 @@ mod tests {
         let routine = fwd_routine();
         let mut rng = GoatRng::new(42);
         for _ in 0..200 {
-            advance_week(&mut store, id, &routine, Fixed::ONE, 1, &mut rng);
+            advance_week(&mut store, id, &routine, Fixed::ONE, 1, 1000, &mut rng);
             let e = store.get_energy(id);
             assert!(e >= Fixed::ZERO, "energy below 0");
             assert!(e <= Fixed::from_int(100), "energy above 100");
@@ -501,7 +504,7 @@ mod tests {
         let routine = fwd_routine();
         let mut rng = GoatRng::new(99);
         for _ in 0..500 {
-            advance_week(&mut store, id, &routine, Fixed::ONE, 1, &mut rng);
+            advance_week(&mut store, id, &routine, Fixed::ONE, 1, 1000, &mut rng);
         }
         for a in 0..NUM_ATTRS {
             assert!(
@@ -520,7 +523,7 @@ mod tests {
         };
         let mut rng = GoatRng::new(1);
         for _ in 0..1_000 {
-            advance_week(&mut store, id, &routine, Fixed::ONE, 1, &mut rng);
+            advance_week(&mut store, id, &routine, Fixed::ONE, 1, 1000, &mut rng);
             for a in 0..NUM_ATTRS {
                 let c = store.get_current(id, a);
                 assert!(c >= Fixed::MIN_ATTR, "attr {a} below 1");
@@ -539,7 +542,7 @@ mod tests {
         };
         let mut rng = GoatRng::new(5);
         for _ in 0..20 {
-            advance_week(&mut store, id, &routine_high, Fixed::ONE, 1, &mut rng);
+            advance_week(&mut store, id, &routine_high, Fixed::ONE, 1, 1000, &mut rng);
         }
         let drained_energy = store.get_energy(id);
 
@@ -549,7 +552,7 @@ mod tests {
             intensity: Intensity::Low,
         };
         for _ in 0..10 {
-            advance_week(&mut store, id, &routine_rest, Fixed::ONE, 1, &mut rng);
+            advance_week(&mut store, id, &routine_rest, Fixed::ONE, 1, 1000, &mut rng);
         }
         let recovered_energy = store.get_energy(id);
         assert!(
@@ -574,13 +577,13 @@ mod tests {
             intensity: Intensity::Low,
         };
         for _ in 0..(14 * 52) {
-            advance_week(&mut store, id, &age_routine, Fixed::ONE, 1, &mut rng);
+            advance_week(&mut store, id, &age_routine, Fixed::ONE, 1, 1000, &mut rng);
         }
         let acc_at_30 = store.get_current(id, AttrId::Acceleration as usize);
 
         // Age another 8 years with physical unfocused
         for _ in 0..(8 * 52) {
-            advance_week(&mut store, id, &routine, Fixed::ONE, 1, &mut rng);
+            advance_week(&mut store, id, &routine, Fixed::ONE, 1, 1000, &mut rng);
         }
         let acc_at_38 = store.get_current(id, AttrId::Acceleration as usize);
 
