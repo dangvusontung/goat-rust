@@ -27,7 +27,7 @@ fn run_career(seed: u64, lifestyle: u8, weeks: u32) -> (i32, u32) {
         name: "Spec".into(),
         position: Position::Forward,
         nationality: "Brazilian",
-        club: "Riverside Town",
+        club: "Riverside Town".into(),
     };
     let mut s = WorldState::new();
     s = reduce(
@@ -109,7 +109,7 @@ fn lifestyle_never_breaks_talent_ceiling() {
         name: "Ceil".into(),
         position: Position::Forward,
         nationality: "Brazilian",
-        club: "Riverside Town",
+        club: "Riverside Town".into(),
     };
     let mut s = WorldState::new();
     s = reduce(

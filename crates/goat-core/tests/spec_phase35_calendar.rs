@@ -20,7 +20,7 @@ fn forward(seed: u64) -> WorldState {
         name: "Cal".into(),
         position: Position::Forward,
         nationality: "Brazilian",
-        club: "Riverside Town",
+        club: "Riverside Town".into(),
     };
     let mut s = WorldState::new();
     s = reduce(

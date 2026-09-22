@@ -79,7 +79,7 @@ fn main() {
             name: "Batch".into(),
             position,
             nationality: "Brazilian",
-            club: "Riverside Town",
+            club: "Riverside Town".into(),
         };
         let pl = generate_player(seed, &choices);
         let aggression = pl.current[AttrId::Aggression as usize]

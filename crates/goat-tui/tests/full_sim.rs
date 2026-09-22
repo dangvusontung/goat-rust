@@ -24,11 +24,17 @@ use goat_match::{
 use goat_rng::GoatRng;
 use goat_traits::PlayerTraits;
 use goat_world::{
-    fixture_for_round, round_fixtures, sim_team_match, Table, CLUBS, DIV_CLUBS, DIV_ENG_SEC,
-    DIV_ENG_TOP, ROUNDS_PER_SEASON,
+    div_clubs, div_index, facilities_mult, fixture_for_round, round_fixtures, sim_team_match,
+    worldgen::generate_world, Table, NATION_ENGLAND, ROUNDS_PER_SEASON,
 };
 
 const BEATS_JSON: &str = include_str!("../../../beats.json");
+
+/// `MatchSetup::opp_name` is `&'static str`, but generated club names are
+/// owned `String`s. Leak one copy per match — test processes are short-lived.
+fn static_name(s: &str) -> &'static str {
+    Box::leak(s.to_string().into_boxed_str())
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -37,13 +43,14 @@ fn beat_lib() -> BeatLibrary {
 }
 
 fn make_state(seed: u64, position: Position, div_idx: usize) -> WorldState {
-    let pc_club_id = DIV_CLUBS[div_idx][0];
-    let club = &CLUBS[pc_club_id];
+    let world = generate_world(seed);
+    let pc_club_id = div_clubs(div_idx)[0];
+    let club = &world.clubs[pc_club_id];
     let choices = CreationChoices {
         name: "Test Legend".into(),
         position,
         nationality: "England",
-        club: club.name,
+        club: club.name.clone(),
     };
     let mut s = WorldState::new();
     s = reduce(
@@ -57,7 +64,7 @@ fn make_state(seed: u64, position: Position, div_idx: usize) -> WorldState {
             world_seed: seed,
             pc_club_idx: pc_club_id as u16,
             pc_div_idx: div_idx as u8,
-            facilities_mult: club.facilities_mult(),
+            facilities_mult: facilities_mult(club.strength),
             initial_table: Box::new([0u32; 80]),
         },
         &mut GoatRng::new(0),
@@ -140,6 +147,7 @@ fn role_for_position(p: Position) -> RoleId {
 /// Uses `auto_play_match` for the PC's fixture each round.
 fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibrary) -> WorldState {
     let seed = state.world_seed;
+    let world = generate_world(seed);
     let pc_id = state.pc_player_id.unwrap();
 
     state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
@@ -172,7 +180,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                     .map(|f| if f.home == pc_club_id { f.away } else { f.home })
                     .unwrap_or(0)
             };
-            let opp = &CLUBS[opp_club_id];
+            let opp = &world.clubs[opp_club_id];
             let view = state.players.snapshot(pc_id);
             let match_seed = seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
             let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
@@ -183,7 +191,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                 player_attrs: view.current,
                 player_familiarity: view.familiarity,
                 own_profile: goat_core::tactical::TacticalProfile::derive(
-                    CLUBS[pc_club_id].strength,
+                    world.clubs[pc_club_id].strength,
                     pc_club_id as u32,
                     seed,
                 ),
@@ -192,7 +200,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                     opp_club_id as u32,
                     seed,
                 ),
-                opp_name: opp.name,
+                opp_name: static_name(&opp.name),
                 form: state.pc_form,
                 player_aggression: view.current[AttrId::Aggression as usize]
                     .to_int()
@@ -250,7 +258,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
         let all_fixtures = round_fixtures(seed, season, div_idx, round);
         let sim_seed = seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
         let mut sim_rng = GoatRng::new(sim_seed);
-        let div_clubs = DIV_CLUBS[div_idx];
+        let div_club_ids = div_clubs(div_idx);
 
         let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
         for f in &all_fixtures {
@@ -267,10 +275,14 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                     None => (0, 0),
                 }
             } else {
-                sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng)
+                sim_team_match(
+                    world.clubs[f.home].strength,
+                    world.clubs[f.away].strength,
+                    &mut sim_rng,
+                )
             };
-            let h_pos = div_clubs.iter().position(|&c| c == f.home).unwrap() as u8;
-            let a_pos = div_clubs.iter().position(|&c| c == f.away).unwrap() as u8;
+            let h_pos = div_club_ids.iter().position(|&c| c == f.home).unwrap() as u8;
+            let a_pos = div_club_ids.iter().position(|&c| c == f.away).unwrap() as u8;
             round_results.push((h_pos, a_pos, gf, ga));
         }
 
@@ -294,8 +306,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
 /// Apply end-of-season accounting and legacy update.
 fn end_season(mut state: WorldState) -> WorldState {
     let div_idx = state.pc_div_idx as usize;
-    let div_clubs = DIV_CLUBS[div_idx];
-    let table = Table::from_raw(&state.table_raw, &div_clubs);
+    let table = Table::from_raw(&state.table_raw, div_clubs(div_idx));
     let finish_pos = table.position_of(state.pc_club_idx as usize) as u32;
     let won_title = finish_pos == 1;
 
@@ -346,9 +357,9 @@ fn end_season(mut state: WorldState) -> WorldState {
 fn all_positions_5_seasons_invariants() {
     let lib = beat_lib();
     for (position, div_idx) in [
-        (Position::Defender, DIV_ENG_TOP),
-        (Position::Midfielder, DIV_ENG_TOP),
-        (Position::Forward, DIV_ENG_SEC),
+        (Position::Defender, div_index(NATION_ENGLAND, 0)),
+        (Position::Midfielder, div_index(NATION_ENGLAND, 0)),
+        (Position::Forward, div_index(NATION_ENGLAND, 1)),
     ] {
         let mut state = make_state(42, position, div_idx);
         for _ in 0..5 {
@@ -374,7 +385,7 @@ fn career_is_deterministic() {
     let lib = beat_lib();
 
     let run = |seed: u64| {
-        let mut state = make_state(seed, Position::Forward, DIV_ENG_SEC);
+        let mut state = make_state(seed, Position::Forward, div_index(NATION_ENGLAND, 1));
         for _ in 0..3 {
             state = run_one_season(state, Position::Forward, &lib);
             state = end_season(state);
@@ -404,7 +415,7 @@ fn career_is_deterministic() {
 /// Training routine focus actually raises the focused attributes over 52 weeks.
 #[test]
 fn training_raises_focused_attrs() {
-    let mut state = make_state(12345, Position::Forward, DIV_ENG_SEC);
+    let mut state = make_state(12345, Position::Forward, div_index(NATION_ENGLAND, 1));
     let pc_id = state.pc_player_id.unwrap();
 
     let before_fin = state.players.get_current(pc_id, AttrId::Finishing as usize);
@@ -426,7 +437,7 @@ fn training_raises_focused_attrs() {
 #[test]
 fn talent_ceiling_never_violated() {
     let lib = beat_lib();
-    let mut state = make_state(7, Position::Forward, DIV_ENG_SEC);
+    let mut state = make_state(7, Position::Forward, div_index(NATION_ENGLAND, 1));
     let pc_id = state.pc_player_id.unwrap();
 
     // Snapshot ceilings at career start.
@@ -458,7 +469,7 @@ fn talent_ceiling_never_violated() {
 #[test]
 fn energy_stays_bounded_under_heavy_load() {
     let lib = beat_lib();
-    let mut state = make_state(1234, Position::Midfielder, DIV_ENG_TOP);
+    let mut state = make_state(1234, Position::Midfielder, div_index(NATION_ENGLAND, 0));
     let pc_id = state.pc_player_id.unwrap();
 
     // Use High intensity to stress-test energy drain.
@@ -490,7 +501,7 @@ fn energy_stays_bounded_under_heavy_load() {
 #[test]
 fn legacy_evidence_accumulates() {
     let lib = beat_lib();
-    let mut state = make_state(55, Position::Forward, DIV_ENG_TOP);
+    let mut state = make_state(55, Position::Forward, div_index(NATION_ENGLAND, 0));
 
     let mut prev_matches = 0u32;
     let mut prev_seasons = 0u32;
@@ -516,7 +527,7 @@ fn legacy_evidence_accumulates() {
 /// Contract countdown and wage collection.
 #[test]
 fn wage_collection_and_contract_countdown() {
-    let mut state = make_state(88, Position::Midfielder, DIV_ENG_SEC);
+    let mut state = make_state(88, Position::Midfielder, div_index(NATION_ENGLAND, 1));
     let club_idx = state.pc_club_idx;
     state = reduce(
         state,
@@ -546,7 +557,7 @@ fn wage_collection_and_contract_countdown() {
 #[test]
 fn rival_can_crystallise() {
     let lib = beat_lib();
-    let mut state = make_state(42, Position::Forward, DIV_ENG_SEC);
+    let mut state = make_state(42, Position::Forward, div_index(NATION_ENGLAND, 1));
 
     // Force a peer to look like a rival candidate after enough seasons.
     for season in 1..=6u32 {
@@ -589,7 +600,7 @@ fn rival_can_crystallise() {
 #[test]
 fn form_stays_in_range() {
     let lib = beat_lib();
-    let mut state = make_state(321, Position::Midfielder, DIV_ENG_TOP);
+    let mut state = make_state(321, Position::Midfielder, div_index(NATION_ENGLAND, 0));
 
     for _ in 0..3 {
         state = run_one_season(state, Position::Midfielder, &lib);
@@ -605,7 +616,7 @@ fn form_stays_in_range() {
 /// Suspension: a red card blocks the player for at least one round.
 #[test]
 fn red_card_triggers_suspension() {
-    let mut state = make_state(11, Position::Midfielder, DIV_ENG_SEC);
+    let mut state = make_state(11, Position::Midfielder, div_index(NATION_ENGLAND, 1));
     assert_eq!(state.pc_suspension_weeks, 0);
 
     state = reduce(
@@ -634,7 +645,7 @@ fn professional_lifestyle_outgrows_balanced() {
     let lib = beat_lib();
 
     let run_season = |lifestyle: u8| {
-        let mut s = make_state(99, Position::Forward, DIV_ENG_SEC);
+        let mut s = make_state(99, Position::Forward, div_index(NATION_ENGLAND, 1));
         s = reduce(s, Intent::SetLifestyle { lifestyle }, &mut GoatRng::new(0));
         s = run_one_season(s, Position::Forward, &lib);
         let pc_id = s.pc_player_id.unwrap();

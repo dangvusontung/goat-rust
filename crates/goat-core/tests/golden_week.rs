@@ -15,7 +15,7 @@ fn forward_state() -> WorldState {
         name: "Golden Fwd".into(),
         position: Position::Forward,
         nationality: "Brazilian",
-        club: "Riverside Town",
+        club: "Riverside Town".into(),
     };
     let s = WorldState::new();
     reduce(

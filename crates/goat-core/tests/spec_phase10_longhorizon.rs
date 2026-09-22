@@ -16,7 +16,7 @@ fn full_career_to_retirement_holds_invariants() {
         name: "Lifer".into(),
         position: Position::Forward,
         nationality: "Brazilian",
-        club: "Riverside Town",
+        club: "Riverside Town".into(),
     };
     let mut s = WorldState::new();
     s = reduce(

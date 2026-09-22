@@ -413,7 +413,7 @@ mod tests {
             name: "Test".into(),
             position,
             nationality: "English",
-            club: "Riverside Town",
+            club: "Riverside Town".into(),
         };
         let view = generate_player(seed, &choices);
         let mut store = PlayerStore::new();
