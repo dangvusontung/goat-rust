@@ -96,6 +96,60 @@ pub enum DevelopmentEvent {
     },
 }
 
+// ── Academy breakthrough (Phase B) ────────────────────────────────────────────
+
+/// Multi-factor breakthrough chance (percent) for an academy (U21) player to
+/// be promoted to the first team this week — the PC path of design B.1,
+/// modelled on Match Flow's `situation_weight` (factors sum, then roll).
+///
+/// Factors:
+/// - performance: average U21 output vs the 52 baseline (±~48)
+/// - age pressure: older prospects force the issue (0 at 16 → +32 at 20+)
+/// - tactical fit: best role-familiarity tier (0/6/12/18)
+/// - media hype: accumulated hype per match (unbounded, grows with good runs)
+///
+/// Pure — the caller rolls the dice.
+pub fn academy_breakthrough_pct(
+    avg_output: i32,
+    age_years: u32,
+    best_familiarity_tier: u8,
+    hype: i32,
+) -> i32 {
+    let perf = (avg_output - 52) * 2;
+    let age = ((age_years as i32 - 16).max(0) * 8).min(32);
+    let fit = (best_familiarity_tier as i32 - 1).clamp(0, 3) * 6;
+    let hy = (hype / 4).clamp(-10, 25);
+    (8 + perf + age + fit + hy).clamp(2, 95)
+}
+
+/// Age at which the academy can no longer hold a player — automatic promotion.
+pub const ACADEMY_MAX_AGE_YEARS: u32 = 21;
+
+/// Record one academy (U21) match on the state and decide whether the PC
+/// breaks through to the first team this week. Returns true on promotion.
+pub fn apply_academy_match(
+    state: &mut crate::state::WorldState,
+    output: i32,
+    age_years: u32,
+    best_familiarity_tier: u8,
+    rng: &mut impl RngSource,
+) -> bool {
+    state.pc_academy_matches += 1;
+    state.pc_academy_hype += output - 50;
+    let avg_output = 50 + state.pc_academy_hype / state.pc_academy_matches as i32;
+    let pct = academy_breakthrough_pct(
+        avg_output,
+        age_years,
+        best_familiarity_tier,
+        state.pc_academy_hype,
+    );
+    let promoted = age_years >= ACADEMY_MAX_AGE_YEARS || rng.next_range_u64(1, 100) <= pct as u64;
+    if promoted {
+        state.pc_in_academy = false;
+    }
+    promoted
+}
+
 // ── Main entry point ──────────────────────────────────────────────────────────
 
 /// Advance the simulation by one week, returning the updated store and any
@@ -534,5 +588,59 @@ mod tests {
             acc_at_38 <= acc_at_30,
             "physical attr should decline (or at worst stay) after 30: {acc_at_30:?} → {acc_at_38:?}"
         );
+    }
+
+    #[test]
+    fn breakthrough_pct_is_monotonic_in_performance() {
+        let weak = academy_breakthrough_pct(45, 17, 1, -5);
+        let mid = academy_breakthrough_pct(60, 17, 1, 5);
+        let star = academy_breakthrough_pct(75, 17, 1, 20);
+        assert!(weak < mid && mid < star);
+        for pct in [weak, mid, star] {
+            assert!((2..=95).contains(&pct));
+        }
+    }
+
+    #[test]
+    fn breakthrough_pct_rewards_age_and_fit() {
+        let young = academy_breakthrough_pct(55, 16, 1, 0);
+        let older = academy_breakthrough_pct(55, 20, 1, 0);
+        let older_fits = academy_breakthrough_pct(55, 20, 3, 0);
+        assert!(young < older && older < older_fits);
+    }
+
+    #[test]
+    fn academy_promotion_eventually_happens_by_age_cap() {
+        let mut state = crate::state::WorldState::new();
+        state.pc_in_academy = true;
+        let mut rng = GoatRng::new(7);
+        // Terrible outputs, but turning 21 forces graduation.
+        let promoted = apply_academy_match(&mut state, 20, ACADEMY_MAX_AGE_YEARS, 1, &mut rng);
+        assert!(promoted);
+        assert!(!state.pc_in_academy);
+        assert_eq!(state.pc_academy_matches, 1);
+    }
+
+    #[test]
+    fn academy_star_breaks_through_within_two_seasons() {
+        // A consistently excellent 18yo prospect should promote within ~60
+        // academy matches for virtually every seed.
+        let mut failures = 0;
+        for seed in 0..20u64 {
+            let mut state = crate::state::WorldState::new();
+            state.pc_in_academy = true;
+            let mut rng = GoatRng::new(seed);
+            let mut promoted_in = None;
+            for m in 1..=60 {
+                if apply_academy_match(&mut state, 75, 18, 3, &mut rng) {
+                    promoted_in = Some(m);
+                    break;
+                }
+            }
+            if promoted_in.is_none() {
+                failures += 1;
+            }
+        }
+        assert!(failures <= 1, "{failures}/20 seeds never promoted a star");
     }
 }

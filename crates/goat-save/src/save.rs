@@ -12,7 +12,8 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// Save format version. v8: the world is procedurally generated (50 nations /
 /// 2,544 clubs) — v7 club indices refer to the old 64-club const world and
 /// would silently load into the wrong clubs, so they are rejected.
-pub const VERSION: u32 = 8;
+/// v9: academy arc fields (Phase B) — appended, v8 saves load with defaults.
+pub const VERSION: u32 = 9;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -85,6 +86,10 @@ pub struct SaveData {
     pub pc_sponsor_tier: u8,
     pub pc_relationships: [i32; 3],
     pub pc_character_rep: i32,
+    // ── Phase B academy arc (v9+) ───────────────────────────────────────────
+    pub pc_in_academy: bool,
+    pub pc_academy_matches: u32,
+    pub pc_academy_hype: i32,
 }
 
 #[derive(Debug)]
@@ -182,6 +187,9 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_sponsor_tier: state.pc_sponsor_tier,
         pc_relationships: state.pc_relationships,
         pc_character_rep: state.pc_character_rep,
+        pc_in_academy: state.pc_in_academy,
+        pc_academy_matches: state.pc_academy_matches,
+        pc_academy_hype: state.pc_academy_hype,
     }
 }
 
@@ -389,6 +397,9 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
     state.pc_sponsor_tier = data.pc_sponsor_tier;
     state.pc_relationships = data.pc_relationships;
     state.pc_character_rep = data.pc_character_rep;
+    state.pc_in_academy = data.pc_in_academy;
+    state.pc_academy_matches = data.pc_academy_matches;
+    state.pc_academy_hype = data.pc_academy_hype;
 
     state
 }
@@ -472,6 +483,10 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
         push_i32(&mut v, r);
     }
     push_i32(&mut v, d.pc_character_rep);
+    // Phase B academy arc (v9+)
+    v.push(u8::from(d.pc_in_academy));
+    push_u32(&mut v, d.pc_academy_matches);
+    push_i32(&mut v, d.pc_academy_hype);
     v
 }
 
@@ -588,6 +603,10 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         read_i32(b, &mut cur).unwrap_or(70),
     ];
     let pc_character_rep = read_i32(b, &mut cur).unwrap_or(50);
+    // Phase B academy arc (v9+; v8 saves default to a direct first-team debut)
+    let pc_in_academy = read_u8(b, &mut cur).unwrap_or(0) != 0;
+    let pc_academy_matches = read_u32(b, &mut cur).unwrap_or(0);
+    let pc_academy_hype = read_i32(b, &mut cur).unwrap_or(0);
 
     Ok(SaveData {
         world_seed,
@@ -644,6 +663,9 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_sponsor_tier,
         pc_relationships,
         pc_character_rep,
+        pc_in_academy,
+        pc_academy_matches,
+        pc_academy_hype,
     })
 }
 
