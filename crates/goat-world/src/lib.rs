@@ -9,10 +9,12 @@ pub mod batch_tick;
 pub mod calendar;
 pub mod fixtures;
 pub mod history;
+pub mod nations;
 pub mod population;
 pub mod rival;
 pub mod season;
 pub mod world;
+pub mod worldgen;
 
 pub use calendar::{
     format_match_date, format_week_header, is_break_week, match_date, round_to_week,
