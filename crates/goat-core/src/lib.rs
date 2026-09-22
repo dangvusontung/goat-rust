@@ -17,6 +17,7 @@ pub mod generation;
 pub mod player;
 pub mod positions;
 pub mod roles;
+pub mod staff;
 pub mod state;
 pub mod tactical;
 pub mod tuning;
