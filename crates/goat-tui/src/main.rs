@@ -573,8 +573,16 @@ fn run_next_round(
                 player_role: best_role_for_position(state.pc_position),
                 player_attrs: view.current,
                 player_familiarity: view.familiarity,
-                own_strength: own_str,
-                opp_strength: opp.strength,
+                own_profile: goat_core::tactical::TacticalProfile::derive(
+                    own_str,
+                    pc_club_id as u32,
+                    world_seed,
+                ),
+                opp_profile: goat_core::tactical::TacticalProfile::derive(
+                    opp.strength,
+                    opp_id as u32,
+                    world_seed,
+                ),
                 opp_name: opp.name,
                 form: state.pc_form,
                 player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
@@ -587,7 +595,18 @@ fn run_next_round(
 
             let result = if play_interactive {
                 let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
+                let mut shown_moments = 0usize;
                 while !ms.is_complete {
+                    // Commentary feed: auto-flow moments since the last decision.
+                    for m in ms
+                        .moments
+                        .iter()
+                        .skip(shown_moments)
+                        .filter(|m| !m.is_action)
+                    {
+                        writeln!(out, " {:>2}'  {}", m.minute, m.outcome_text).unwrap();
+                    }
+                    shown_moments = ms.moments.len();
                     render_beat(out, &ms);
                     if ms.final_result.is_some() {
                         break;

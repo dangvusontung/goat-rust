@@ -224,4 +224,37 @@ Nothing the appendix designs forces the architecture to break its locked princip
 
 ---
 
-*End of Appendix A. Numbers, the selector function, set-piece and discipline beat libraries, and the goalkeeper career (§11) follow separately.*
+*End of Appendix A. Numbers, the selector function, set-piece and discipline beat libraries, and the goalkeeper career (§11) follow separately.*### A.18 Match Flow — the implemented engine (supersedes A.2's static selection)
+
+The shipped engine (`goat-match/src/sim.rs`, data `beats.json`) replaces the
+pre-generated 15-beat sequence with a live **match flow**:
+
+- **State, not script.** A match is `minute / possession / zone / momentum`
+  (momentum −100..=100, resets at kickoff, decays 1/8 per tick, swings on goals
+  and contest results). Each tick advances the clock 3–8 minutes, rolls
+  possession from `50 + (midfield diff)/2 + momentum/4`, and drifts the ball
+  between semantic zones (`defense / midfield / attack_wide / attack_central`,
+  cf. A.11) at a rate driven by attack-vs-defense line strength.
+- **Stats pick the situation.** Commentary situations are weighted by both
+  teams' tactical profiles (pressing / possession / counter / wing play,
+  derived deterministically from club strength + world seed via
+  `goat_core::tactical::TacticalProfile::derive`) and filtered by zone, side,
+  and match context (leading / trailing / late / key).
+- **The camera finds the protagonist.** Involvement rolls each tick from a base
+  rate plus a quality bonus (`role_rating`); on involvement the beat is pulled
+  to the PC's role zone ~70% of the time, so a star forward is found up front
+  even when his team is pinned. This is the concrete answer to A.2/A.4.
+- **Difficulty is stat-driven.** Contest difficulty = authored base +
+  opponent's relevant line stat (their defense tests our attacking attributes,
+  their attack tests our defending ones), plus momentum and desperation.
+- **Outcomes move the flow.** Outcomes carry `possession_to` / `zone_to` /
+  `momentum_delta` and may `chain` into an immediate auto-resolved follow-up
+  (hard cap: 3 chains per tick, then control returns to the player). Goals are
+  scored only through the flow — there is no end-of-match random scoreline tail.
+- **Dynamic length.** A match runs ~12–25 ticks to 90'; auto-play (idle) and
+  interactive play run the identical engine, differing only in who picks.
+
+JSON pools are flat but *structured*: `situations` (commentary + metadata),
+`actions` (choice pool filtered by zones / role family / side, carrying foul
+risk), `outcomes` (polarity + side + transitions). Authoring-time only, per the
+locked principles.

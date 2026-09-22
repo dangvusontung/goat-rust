@@ -182,8 +182,16 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                 player_role: role_for_position(position),
                 player_attrs: view.current,
                 player_familiarity: view.familiarity,
-                own_strength: CLUBS[pc_club_id].strength,
-                opp_strength: opp.strength,
+                own_profile: goat_core::tactical::TacticalProfile::derive(
+                    CLUBS[pc_club_id].strength,
+                    pc_club_id as u32,
+                    seed,
+                ),
+                opp_profile: goat_core::tactical::TacticalProfile::derive(
+                    opp.strength,
+                    opp_club_id as u32,
+                    seed,
+                ),
                 opp_name: opp.name,
                 form: state.pc_form,
                 player_aggression: view.current[AttrId::Aggression as usize]
