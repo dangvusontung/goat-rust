@@ -57,8 +57,11 @@ const MOMENTUM_SHARE_DIV: i32 = 10;
 /// PC contest outcomes move match momentum at 1/PC_MOMENTUM_DIV strength —
 /// one player shouldn't swing the whole match's momentum on his own.
 const PC_MOMENTUM_DIV: i32 = 2;
-/// `momentum / MOMENTUM_CONTEST_DIV` feeds the contest roll (±10 pp max).
-const MOMENTUM_CONTEST_DIV: i32 = 10;
+/// `momentum / MOMENTUM_CONTEST_DIV` feeds the contest roll (±5 pp max).
+/// Deliberately weak: match momentum is a TEAM state — letting it dominate the
+/// PC's contest roll would couple his output to the scoreline and kill
+/// "starred in defeat" (a star on a battered team still plays his own game).
+const MOMENTUM_CONTEST_DIV: i32 = 20;
 
 /// `(own.midfield − opp.midfield) / MIDFIELD_SHARE_DIV` tilts possession (±24 pp max).
 const MIDFIELD_SHARE_DIV: i32 = 2;
@@ -74,6 +77,11 @@ const ZONE_ADVANCE_BASE: i32 = 55;
 /// Player-involvement chance per tick: base + quality bonus (better players
 /// find the ball — `role_rating` driven).
 const INVOLVE_BASE: u32 = 35;
+/// Star funnel: when trailing, everything goes through the protagonist —
+/// chasing teams lean on their star (+involvement, +zone pull). This is what
+/// lets a PC rack up a big rating in a losing effort.
+const TRAIL_INVOLVE_BONUS: u32 = 20;
+const TRAIL_ZONE_PULL_BONUS: u32 = 15;
 /// When the PC is involved, the camera (and the ball) comes to HIS zone this
 /// share of the time — a star forward is found in attack even when his team is
 /// pinned back. Without this pull, global zone time dominates and protagonists
@@ -90,7 +98,7 @@ const INVOLVE_QUALITY_CAP: i32 = 20;
 const CHAIN_MAX: u8 = 3;
 
 /// Auto-beat goal probability = AUTO_GOAL_SCALE × att / (att + def + 1), percent.
-const AUTO_GOAL_SCALE: u32 = 36;
+const AUTO_GOAL_SCALE: u32 = 33;
 /// Mercy rule: each goal of lead divides the attacking side's goal chance by
 /// (100 + MERCY_DAMPEN)/100 — a team 3 up scores at ~36% of its base rate, so
 /// 8-0 blowouts become rare without a hard cap.
@@ -111,6 +119,15 @@ const LATE_LEVEL_BOOST: u32 = 300;
 /// trailing side's share (capped at TRAIL_SHARE_GOALS goals).
 const TRAIL_SHARE_PCT: i32 = 6;
 const TRAIL_SHARE_GOALS: i32 = 3;
+/// Response surge: in the minutes right after conceding, the stung side pours
+/// forward (real matches cluster goals shortly after a goal). For
+/// RESPONSE_TICKS ticks the conceding side gets +RESPONSE_SHARE_PCT possession
+/// and a (100 + RESPONSE_GOAL_BOOST)/100 goal-chance multiplier. This is also a
+/// decoupler: a PC goal invites an opposition reply, so a big PC game can still
+/// end in defeat ("starred in defeat").
+const RESPONSE_TICKS: u8 = 2;
+const RESPONSE_GOAL_BOOST: u64 = 40;
+const RESPONSE_SHARE_PCT: i32 = 8;
 /// PC contest outcomes: goal outcomes are dropped from the pool entirely once
 /// the scoring side leads by this much (text stays coherent — no disallowed
 /// "GOAL!" lines).
@@ -476,6 +493,9 @@ pub struct ActiveMatchState {
     current: Option<GeneratedBeat>,
     /// Frustration flag: next tick forces a reckless defend beat.
     force_reckless: bool,
+    /// Response surge: ticks remaining of the conceding side's post-goal push.
+    response_ticks: u8,
+    response_side: Possession,
 }
 
 impl ActiveMatchState {
@@ -524,6 +544,8 @@ pub fn start_match(
         final_result: None,
         current: None,
         force_reckless: false,
+        response_ticks: 0,
+        response_side: Possession::Opp,
     };
     run_until_decision(&mut ms, lib, rng);
     ms
@@ -608,16 +630,24 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
     // 1. Clock.
     ms.minute = (ms.minute + rng.next_range_u32(TICK_MIN_MINUTES, TICK_MAX_MINUTES)).min(FULL_TIME);
 
-    // 2. Momentum decays toward zero.
+    // 2. Momentum decays toward zero; the conceding side's surge winds down.
     ms.momentum -= ms.momentum / MOMENTUM_DECAY_DIV;
+    ms.response_ticks = ms.response_ticks.saturating_sub(1);
 
     // 3. Possession battle.
-    let share = possession_share(
+    let mut share = possession_share(
         ms.setup.own_profile.midfield,
         ms.setup.opp_profile.midfield,
         ms.momentum,
         ms.goals_for as i32 - ms.goals_against as i32,
-    );
+    ) as i32;
+    if ms.response_ticks > 0 {
+        share += match ms.response_side {
+            Possession::Own => RESPONSE_SHARE_PCT,
+            Possession::Opp => -RESPONSE_SHARE_PCT,
+        };
+    }
+    let share = share.clamp(SHARE_MIN, SHARE_MAX) as u64;
     ms.possession = if rng.next_range_u64(1, 100) <= share {
         Possession::Own
     } else {
@@ -652,8 +682,15 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
         let role = ms.setup.player_role;
         // Pull the action to his zone most of the time; possession follows the
         // role's natural side (a forward is found up front, a defender is mostly
-        // found stopping the opposition).
-        if rng.next_range_u64(1, 100) <= ZONE_PULL_PCT as u64 {
+        // found stopping the opposition). When chasing the game, the team looks
+        // for him even more.
+        let pull = ZONE_PULL_PCT
+            + if ms.goals_for < ms.goals_against {
+                TRAIL_ZONE_PULL_BONUS
+            } else {
+                0
+            };
+        if rng.next_range_u64(1, 100) <= pull as u64 {
             ms.zone = ROLE_ZONE[role as usize];
             match ROLE_POSITION_FAMILY[role as usize] {
                 PositionFamily::Forward => ms.possession = Possession::Own,
@@ -695,6 +732,12 @@ fn mercy_flags(ms: &ActiveMatchState) -> (bool, bool) {
         ms.goals_for >= ms.goals_against + MERCY_LEAD,
         ms.goals_against >= ms.goals_for + MERCY_LEAD,
     )
+}
+
+/// A goal was just scored: the conceding side surges for the next few ticks.
+fn set_response_surge(ms: &mut ActiveMatchState, conceding_side: Possession) {
+    ms.response_side = conceding_side;
+    ms.response_ticks = RESPONSE_TICKS;
 }
 
 /// Soft-capped rating movement: deltas shrink as output nears the 0/100 rails,
@@ -768,7 +811,8 @@ fn wide_or_central(profile: &TacticalProfile, rng: &mut impl RngSource) -> Pitch
 }
 
 /// Does the PC get into this tick's action? Base rate plus quality — better
-/// players find the ball (stars bend the game toward them).
+/// players find the ball (stars bend the game toward them). When the team is
+/// trailing, the ball is funnelled to the protagonist.
 fn involved(ms: &ActiveMatchState, rng: &mut impl RngSource) -> bool {
     let role = ms.setup.player_role;
     let rating = role_rating(
@@ -777,8 +821,11 @@ fn involved(ms: &ActiveMatchState, rng: &mut impl RngSource) -> bool {
         ms.setup.player_familiarity[role as usize],
     )
     .to_int();
-    let chance =
+    let mut chance =
         INVOLVE_BASE.saturating_add(((rating - 50) / 2).clamp(0, INVOLVE_QUALITY_CAP) as u32);
+    if ms.goals_for < ms.goals_against {
+        chance = chance.saturating_add(TRAIL_INVOLVE_BONUS);
+    }
     rng.next_range_u64(1, 100) <= chance as u64
 }
 
@@ -824,6 +871,12 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
         } else {
             p
         };
+        // Response surge: the side that just conceded is stung into a reply.
+        let p = if ms.response_ticks > 0 && ms.possession == ms.response_side {
+            p * (100 + RESPONSE_GOAL_BOOST) / 100
+        } else {
+            p
+        };
         if rng.next_range_u64(1, 100) <= p.max(1) {
             let ev = match ms.possession {
                 Possession::Own => ScoreEvent::GoalFor,
@@ -840,12 +893,13 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
                 }
             }
             ms.momentum = ms.momentum.clamp(-MOMENTUM_MAX, MOMENTUM_MAX);
-            // Kickoff: the conceding side restarts with the ball.
+            // Kickoff: the conceding side restarts with the ball — and surges.
             ms.possession = match ev {
                 ScoreEvent::GoalFor => Possession::Opp,
                 ScoreEvent::GoalAgainst => Possession::Own,
             };
             ms.zone = PitchZone::Midfield;
+            set_response_surge(ms, ms.possession);
             if let Some(t) = lib.pick_goal_text(ev, rng) {
                 text = t;
             }
@@ -944,6 +998,7 @@ fn resolve_choice(
             ScoreEvent::GoalAgainst => Possession::Own,
         };
         ms.zone = PitchZone::Midfield;
+        set_response_surge(ms, ms.possession);
     }
 
     // The PC is 1 of 11 players: his outcomes move match momentum at half
