@@ -14,6 +14,7 @@ pub mod population;
 pub mod rival;
 pub mod scout;
 pub mod season;
+pub mod staff;
 pub mod world;
 pub mod worldgen;
 
