@@ -162,5 +162,29 @@ and consume no extra RNG on the golden path.
 
 match-sim star striker (N=5000, seeds 7/11/23): starred-in-defeat **1.64/1.42/1.84% →
 2.00/1.90/2.26%** — now inside the 2–4% target on both harnesses.
+
+## Round 3b — rating taper with the asymptote at the rails
+
+Change (`crates/goat-match/src/sim.rs`, `apply_output_delta`): positive deltas now scale by
+`(100 − output) × 7/400` (0.875 at output 50, 0 at 100) and negative deltas by
+`(output + 50) × 3/400`; the ±1 minimum delta only applies in the 10–90 mid band. The old curve
+(asymptote 200 + unconditional ±1 floor) let strong PCs grind onto the 100 clamp.
+
+Golden seed 42: scoreline/moments/cards identical (2-2, 19 moments), only output moved 54 → 52 —
+the flow is untouched, only rating arithmetic. Golden re-frozen for the output value alone.
+
+| Metric (match-batch 100k, seed 0xBA7C4) | After 3a | After 3b |
+|---|---|---|
+| W / D / L % | 39.7 / 25.4 / 34.9 | 39.7 / 25.4 / 34.9 (flow untouched) |
+| Goals/match | 3.01 | 3.01 |
+| Clean sheets | 17.1% | 17.1% |
+| PC 2+ goals & L | 3.24% | 3.24% |
+| Starred-in-defeat (rating≥70 & L) | 3.72% | 4.37% (scale shift: ≥70 is reached more often) |
+| Rating 90–100 bucket (all / star band) | 4.0% / 9.2% | **0.9% / 2.3%** |
+| Rating exactly 100 (star band) | 2.11% | **0.00%** |
+| Mean rating | 60.2 | 61.2 |
+
+match-sim star striker: output max 100 → 93–97, 80+ bucket 11–13% → 9.7–11.2%,
+starred-in-defeat **2.0–2.3% → 2.4/2.2/2.5%** — mid-band on the fixed scale.
 Star band (role rating ≥ 65, n=25k): 90–100 bucket 8.8% — of which rating **exactly 100: 1.96%**
 (a clamp pile: 22% of the top bucket sits on the rail) · starred-in-defeat 4.94% (15.9% of losses).

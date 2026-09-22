@@ -741,18 +741,21 @@ fn set_response_surge(ms: &mut ActiveMatchState, conceding_side: Possession) {
 }
 
 /// Soft-capped rating movement: deltas shrink as output nears the 0/100 rails,
-/// so ratings taper off instead of piling up at the ceiling (the 90–100 bucket
-/// was overweight when strong PCs kept adding full deltas at 95+). The factor
-/// never reaches zero — a strong PC can still grind out a 90+ rating, just
-/// slower.
+/// so ratings taper off instead of piling up at the ceiling. The positive
+/// factor is 0.875 at output 50 and falls linearly to 0 at 100 — the old
+/// asymptote at 200 let strong PCs grind out a 100 via the ±1 minimum, piling
+/// 2% of star matches onto the top clamp. The ±1 floor now only applies in the
+/// mid band (10..=90); near the rails a beat can be a no-op, which is exactly
+/// what makes 100 a rare, earned rating.
 fn apply_output_delta(output: i32, delta: i32) -> i32 {
     let scaled = if delta >= 0 {
-        delta * (200 - output) / 200
+        (delta * (100 - output) * 7 + 200) / 400
     } else {
-        delta * (100 + output) / 200
+        (delta * (output + 50) * 3 - 200) / 400
     };
-    // Keep at least ±1 of movement so a beat never feels like a no-op.
-    let scaled = if delta != 0 && scaled == 0 {
+    // Keep at least ±1 of movement in the mid band so a beat never feels like
+    // a no-op; near the rails, rounding to 0 is the taper working as intended.
+    let scaled = if delta != 0 && scaled == 0 && (10..=90).contains(&output) {
         delta.signum()
     } else {
         scaled
