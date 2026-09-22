@@ -12,7 +12,7 @@ fn player_at_age(age_years: u32, contract_left: u32) -> WorldState {
         name: "Vet".into(),
         position: Position::Forward,
         nationality: "Brazilian",
-        club: "Riverside Town",
+        club: "Riverside Town".into(),
     };
     let mut s = WorldState::new();
     s = reduce(

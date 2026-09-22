@@ -1,215 +1,135 @@
-//! Static mini-world data: 2 nations, 2 divisions each, 16 clubs per division.
+//! World structure: 50 nations, 3–4 divisions each, 16 clubs per division.
 //!
-//! Club names and strengths are fixed. Player populations are derived from the
-//! world seed in Phase 9. For Phase 5, clubs carry only aggregate strength.
+//! The world's STRUCTURE (nations, division layout, club ids) is fixed — it
+//! derives from the static `NATIONS` table, so club/division counts are
+//! compile-time constants again (asserted against `NATIONS` in tests). The
+//! world's CONTENT (club names, strengths) is generated from `world_seed` —
+//! see `worldgen.rs`.
 
+use crate::nations::NATIONS;
 use goat_fixed::Fixed;
+use std::sync::LazyLock;
 
-/// Index into `CLUBS`.
+/// Index into a `GeneratedWorld`'s club vector. Club ids are structural: the
+/// club at (nation, level, rank) has the same id in every world.
 pub type ClubId = usize;
+/// Index into `NATIONS`.
+pub type NationId = u8;
 
-/// Nation identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Nation {
-    England = 0,
-    Brazil = 1,
-}
-
-impl Nation {
-    pub fn name(self) -> &'static str {
-        match self {
-            Nation::England => "England",
-            Nation::Brazil => "Brazil",
-        }
-    }
-    pub fn from_idx(i: usize) -> Option<Self> {
-        match i {
-            0 => Some(Self::England),
-            1 => Some(Self::Brazil),
-            _ => None,
-        }
-    }
-}
-
-/// Division level within a nation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DivLevel {
-    Top = 0,
-    Second = 1,
-}
-
-/// A club in the mini-world.
-#[derive(Debug, Clone, Copy)]
-pub struct Club {
-    pub id: ClubId,
-    pub name: &'static str,
-    pub nation: Nation,
-    pub div_level: DivLevel,
-    /// Aggregate team strength 1–99.
-    pub strength: u8,
-}
-
-impl Club {
-    /// Facilities development multiplier (stronger clubs invest more in youth).
-    pub fn facilities_mult(self) -> Fixed {
-        let pct = 700 + (self.strength as i32 - 50) * 10; // 0.700 at str 50, scales ±
-        Fixed::raw(pct.clamp(500, 1_300))
-    }
-}
-
-// ── Club data ─────────────────────────────────────────────────────────────────
-
-pub const NUM_CLUBS: usize = 64;
+pub const NUM_NATIONS: usize = 50;
 pub const CLUBS_PER_DIV: usize = 16;
-pub const NUM_DIVISIONS: usize = 4; // ENG_TOP, ENG_SEC, BRA_TOP, BRA_SEC
+/// 9 nations × 4 divisions + 41 nations × 3 divisions.
+pub const NUM_DIVISIONS: usize = 159;
+pub const NUM_CLUBS: usize = NUM_DIVISIONS * CLUBS_PER_DIV; // 2544
 
-/// Division indices for use with `DIV_CLUBS`.
-pub const DIV_ENG_TOP: usize = 0;
-pub const DIV_ENG_SEC: usize = 1;
-pub const DIV_BRA_TOP: usize = 2;
-pub const DIV_BRA_SEC: usize = 3;
+/// England's index in `NATIONS` — handy for tests and harnesses.
+pub const NATION_ENGLAND: NationId = 0;
+/// Brazil's index in `NATIONS`.
+pub const NATION_BRAZIL: NationId = 5;
 
-pub const DIV_NAMES: [&str; NUM_DIVISIONS] =
-    ["Premier League", "Championship", "Série A", "Série B"];
-
-pub const DIV_NATIONS: [Nation; NUM_DIVISIONS] = [
-    Nation::England,
-    Nation::England,
-    Nation::Brazil,
-    Nation::Brazil,
-];
-
-pub const DIV_LEVELS: [DivLevel; NUM_DIVISIONS] = [
-    DivLevel::Top,
-    DivLevel::Second,
-    DivLevel::Top,
-    DivLevel::Second,
-];
-
-/// Club IDs per division, in division rank order.
-pub const DIV_CLUBS: [[ClubId; CLUBS_PER_DIV]; NUM_DIVISIONS] = [
-    // ENG_TOP (0..15)
-    [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
-    // ENG_SEC (16..31)
-    [
-        16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
-    ],
-    // BRA_TOP (32..47)
-    [
-        32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-    ],
-    // BRA_SEC (48..63)
-    [
-        48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63,
-    ],
-];
-
-macro_rules! club {
-    ($id:expr, $name:expr, $nat:expr, $div:expr, $str:expr) => {
-        Club {
-            id: $id,
-            name: $name,
-            nation: $nat,
-            div_level: $div,
-            strength: $str,
-        }
-    };
-}
-
-pub const CLUBS: [Club; NUM_CLUBS] = [
-    // ── England Premier (0–15) ────────────────────────────────────────────────
-    club!(0, "Manchester City", Nation::England, DivLevel::Top, 90),
-    club!(1, "Liverpool", Nation::England, DivLevel::Top, 88),
-    club!(2, "Arsenal", Nation::England, DivLevel::Top, 85),
-    club!(3, "Chelsea", Nation::England, DivLevel::Top, 83),
-    club!(4, "Tottenham", Nation::England, DivLevel::Top, 82),
-    club!(5, "Manchester United", Nation::England, DivLevel::Top, 80),
-    club!(6, "Newcastle", Nation::England, DivLevel::Top, 76),
-    club!(7, "Aston Villa", Nation::England, DivLevel::Top, 74),
-    club!(8, "West Ham", Nation::England, DivLevel::Top, 72),
-    club!(9, "Brighton", Nation::England, DivLevel::Top, 70),
-    club!(10, "Brentford", Nation::England, DivLevel::Top, 68),
-    club!(11, "Fulham", Nation::England, DivLevel::Top, 67),
-    club!(12, "Crystal Palace", Nation::England, DivLevel::Top, 65),
-    club!(13, "Everton", Nation::England, DivLevel::Top, 64),
-    club!(14, "Wolves", Nation::England, DivLevel::Top, 63),
-    club!(15, "Nottm Forest", Nation::England, DivLevel::Top, 62),
-    // ── England Championship (16–31) ──────────────────────────────────────────
-    club!(16, "Leeds United", Nation::England, DivLevel::Second, 58),
-    club!(17, "Sunderland", Nation::England, DivLevel::Second, 56),
-    club!(
-        18,
-        "Sheffield United",
-        Nation::England,
-        DivLevel::Second,
-        55
-    ),
-    club!(19, "Burnley", Nation::England, DivLevel::Second, 54),
-    club!(20, "Middlesbrough", Nation::England, DivLevel::Second, 53),
-    club!(21, "Watford", Nation::England, DivLevel::Second, 52),
-    club!(22, "Ipswich", Nation::England, DivLevel::Second, 51),
-    club!(23, "Norwich", Nation::England, DivLevel::Second, 50),
-    club!(24, "QPR", Nation::England, DivLevel::Second, 50),
-    club!(25, "Stoke City", Nation::England, DivLevel::Second, 49),
-    club!(26, "Hull City", Nation::England, DivLevel::Second, 48),
-    club!(27, "Millwall", Nation::England, DivLevel::Second, 48),
-    club!(28, "Coventry", Nation::England, DivLevel::Second, 47),
-    club!(29, "Bristol City", Nation::England, DivLevel::Second, 47),
-    club!(30, "Cardiff", Nation::England, DivLevel::Second, 46),
-    club!(31, "Swansea", Nation::England, DivLevel::Second, 45),
-    // ── Brazil Série A (32–47) ────────────────────────────────────────────────
-    club!(32, "Flamengo", Nation::Brazil, DivLevel::Top, 82),
-    club!(33, "Palmeiras", Nation::Brazil, DivLevel::Top, 80),
-    club!(34, "Corinthians", Nation::Brazil, DivLevel::Top, 76),
-    club!(35, "São Paulo", Nation::Brazil, DivLevel::Top, 74),
-    club!(36, "Santos", Nation::Brazil, DivLevel::Top, 72),
-    club!(37, "Cruzeiro", Nation::Brazil, DivLevel::Top, 70),
-    club!(38, "Grêmio", Nation::Brazil, DivLevel::Top, 68),
-    club!(39, "Internacional", Nation::Brazil, DivLevel::Top, 67),
-    club!(40, "Athletico PR", Nation::Brazil, DivLevel::Top, 65),
-    club!(41, "Fluminense", Nation::Brazil, DivLevel::Top, 64),
-    club!(42, "Botafogo", Nation::Brazil, DivLevel::Top, 63),
-    club!(43, "Atlético MG", Nation::Brazil, DivLevel::Top, 62),
-    club!(44, "Bahia", Nation::Brazil, DivLevel::Top, 60),
-    club!(45, "Fortaleza", Nation::Brazil, DivLevel::Top, 59),
-    club!(46, "Vasco", Nation::Brazil, DivLevel::Top, 58),
-    club!(47, "Cuiabá", Nation::Brazil, DivLevel::Top, 55),
-    // ── Brazil Série B (48–63) ────────────────────────────────────────────────
-    club!(48, "América MG", Nation::Brazil, DivLevel::Second, 48),
-    club!(49, "Chapecoense", Nation::Brazil, DivLevel::Second, 46),
-    club!(50, "Coritiba", Nation::Brazil, DivLevel::Second, 45),
-    club!(51, "Goiás", Nation::Brazil, DivLevel::Second, 44),
-    club!(52, "Guarani", Nation::Brazil, DivLevel::Second, 43),
-    club!(53, "Ituano", Nation::Brazil, DivLevel::Second, 42),
-    club!(54, "Londrina", Nation::Brazil, DivLevel::Second, 42),
-    club!(55, "Mirassol", Nation::Brazil, DivLevel::Second, 41),
-    club!(56, "Novorizontino", Nation::Brazil, DivLevel::Second, 41),
-    club!(57, "Operário", Nation::Brazil, DivLevel::Second, 40),
-    club!(58, "Ponte Preta", Nation::Brazil, DivLevel::Second, 39),
-    club!(59, "Sport", Nation::Brazil, DivLevel::Second, 39),
-    club!(60, "Tombense", Nation::Brazil, DivLevel::Second, 38),
-    club!(61, "Avaí", Nation::Brazil, DivLevel::Second, 36),
-    club!(62, "Sampaio Corrêa", Nation::Brazil, DivLevel::Second, 34),
-    club!(63, "CSA", Nation::Brazil, DivLevel::Second, 32),
-];
-
-/// Return which division index a club belongs to.
-pub fn club_division(club_id: ClubId) -> usize {
-    for (div_idx, ids) in DIV_CLUBS.iter().enumerate() {
-        if ids.contains(&club_id) {
-            return div_idx;
+/// Division rosters, built once from `NATIONS` (seed-independent).
+static ROSTERS: LazyLock<Vec<[ClubId; CLUBS_PER_DIV]>> = LazyLock::new(|| {
+    let mut rosters = Vec::with_capacity(NUM_DIVISIONS);
+    let mut next = 0usize;
+    for nation in NATIONS {
+        for _ in 0..nation.divisions {
+            let mut ids = [0usize; CLUBS_PER_DIV];
+            for (i, id) in ids.iter_mut().enumerate() {
+                *id = next + i;
+            }
+            rosters.push(ids);
+            next += CLUBS_PER_DIV;
         }
     }
-    panic!("club_id {club_id} not in any division");
+    rosters
+});
+
+/// Reverse map: club id → division index.
+static CLUB_DIV: LazyLock<Vec<u16>> = LazyLock::new(|| {
+    let mut map = vec![0u16; NUM_CLUBS];
+    for (div, ids) in ROSTERS.iter().enumerate() {
+        for &id in ids {
+            map[id] = div as u16;
+        }
+    }
+    map
+});
+
+/// Club ids of one division, in rank order (roster[0] = strongest slot).
+pub fn div_clubs(div_idx: usize) -> &'static [ClubId; CLUBS_PER_DIV] {
+    &ROSTERS[div_idx]
 }
 
-/// Return the index of a club within its division (0-based).
+/// Global division index of (nation, level) — divisions are laid out
+/// nation-major in `NATIONS` order.
+pub fn div_index(nation: NationId, level: u8) -> usize {
+    let before: usize = NATIONS[..nation as usize]
+        .iter()
+        .map(|n| n.divisions as usize)
+        .sum();
+    before + level as usize
+}
+
+/// Which division a club belongs to (O(1)).
+pub fn club_division(club_id: ClubId) -> usize {
+    CLUB_DIV[club_id] as usize
+}
+
+/// Index of a club within its division (0-based).
 pub fn club_div_pos(club_id: ClubId) -> usize {
-    let div = club_division(club_id);
-    DIV_CLUBS[div].iter().position(|&c| c == club_id).unwrap()
+    div_clubs(club_division(club_id))
+        .iter()
+        .position(|&c| c == club_id)
+        .unwrap()
 }
 
-/// Clubs available to a nation, both divisions, sorted by div then strength.
-pub fn clubs_for_nation(nation: Nation) -> impl Iterator<Item = &'static Club> {
-    CLUBS.iter().filter(move |c| c.nation == nation)
+/// Display name of a nation.
+pub fn nation_name(id: NationId) -> &'static str {
+    NATIONS[id as usize].name
+}
+
+/// Facilities development multiplier from club strength (stronger clubs invest
+/// more in youth). Same formula the legacy `Club::facilities_mult` used.
+pub fn facilities_mult(strength: u8) -> Fixed {
+    let pct = 700 + (strength as i32 - 50) * 10;
+    Fixed::raw(pct.clamp(500, 1_300))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn structure_consts_match_nations_table() {
+        assert_eq!(NUM_NATIONS, NATIONS.len());
+        let divs: usize = NATIONS.iter().map(|n| n.divisions as usize).sum();
+        assert_eq!(NUM_DIVISIONS, divs);
+        assert_eq!(NUM_CLUBS, divs * CLUBS_PER_DIV);
+    }
+
+    #[test]
+    fn rosters_cover_every_club_once() {
+        let mut seen = vec![false; NUM_CLUBS];
+        for div in 0..NUM_DIVISIONS {
+            for &id in div_clubs(div) {
+                assert!(!seen[id], "club {id} in two divisions");
+                seen[id] = true;
+                assert_eq!(club_division(id), div);
+            }
+        }
+        assert!(seen.into_iter().all(|s| s));
+    }
+
+    #[test]
+    fn div_index_round_trips() {
+        for (n_idx, nation) in NATIONS.iter().enumerate() {
+            let mut base = 0;
+            for prev in &NATIONS[..n_idx] {
+                base += prev.divisions as usize;
+            }
+            for level in 0..nation.divisions {
+                assert_eq!(div_index(n_idx as NationId, level), base + level as usize);
+            }
+        }
+    }
 }

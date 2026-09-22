@@ -62,7 +62,7 @@ pub struct CreationChoices {
     pub name: String,
     pub position: Position,
     pub nationality: &'static str,
-    pub club: &'static str,
+    pub club: String,
 }
 
 /// Hardcoded stub nationality list for phases 1–4.
@@ -288,7 +288,7 @@ mod tests {
             name: "Test Player".into(),
             position: pos,
             nationality: "English",
-            club: "Local FC",
+            club: "Local FC".into(),
         }
     }
 

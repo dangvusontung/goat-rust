@@ -8,31 +8,43 @@ use goat_core::{
     week::{Intensity, Routine},
 };
 use goat_rng::GoatRng;
+use goat_world::worldgen::generate_world;
 use goat_world::{
-    generate_fixtures, round_fixtures, sim_team_match, Table, CLUBS, CLUBS_PER_DIV, DIV_BRA_SEC,
-    DIV_BRA_TOP, DIV_CLUBS, DIV_ENG_SEC, DIV_ENG_TOP, ROUNDS_PER_SEASON,
+    div_clubs, div_index, facilities_mult, generate_fixtures, round_fixtures, sim_team_match,
+    Table, CLUBS_PER_DIV, NATION_BRAZIL, NATION_ENGLAND, NUM_CLUBS, ROUNDS_PER_SEASON,
 };
+
+fn div_eng_top() -> usize {
+    div_index(NATION_ENGLAND, 0)
+}
+fn div_eng_sec() -> usize {
+    div_index(NATION_ENGLAND, 1)
+}
+fn div_bra_top() -> usize {
+    div_index(NATION_BRAZIL, 0)
+}
 
 #[test]
 fn world_has_correct_size() {
-    assert_eq!(CLUBS.len(), 64);
-    assert_eq!(DIV_CLUBS[DIV_ENG_TOP].len(), 16);
-    assert_eq!(DIV_CLUBS[DIV_ENG_SEC].len(), 16);
-    assert_eq!(DIV_CLUBS[DIV_BRA_TOP].len(), 16);
-    assert_eq!(DIV_CLUBS[DIV_BRA_SEC].len(), 16);
+    assert_eq!(NUM_CLUBS, 2544);
+    assert_eq!(div_clubs(div_eng_top()).len(), 16);
+    assert_eq!(div_clubs(div_eng_sec()).len(), 16);
+    assert_eq!(div_clubs(div_bra_top()).len(), 16);
     assert_eq!(ROUNDS_PER_SEASON, 30);
+    let w = generate_world(42);
+    assert_eq!(w.clubs.len(), NUM_CLUBS);
 }
 
 #[test]
 fn golden_fixture_count() {
-    let fixtures = generate_fixtures(12345, 1, DIV_ENG_TOP);
+    let fixtures = generate_fixtures(12345, 1, div_eng_top());
     // 16 clubs, 30 rounds, 8 matches/round = 240
     assert_eq!(fixtures.len(), CLUBS_PER_DIV / 2 * ROUNDS_PER_SEASON);
 }
 
 #[test]
 fn each_round_has_correct_match_count() {
-    let fixtures = generate_fixtures(12345, 1, DIV_ENG_TOP);
+    let fixtures = generate_fixtures(12345, 1, div_eng_top());
     for round in 0..ROUNDS_PER_SEASON {
         let count = fixtures.iter().filter(|f| f.round == round).count();
         assert_eq!(
@@ -46,7 +58,7 @@ fn each_round_has_correct_match_count() {
 
 #[test]
 fn each_club_plays_exactly_once_per_round() {
-    let fixtures = generate_fixtures(42, 1, DIV_ENG_TOP);
+    let fixtures = generate_fixtures(42, 1, div_eng_top());
     for round in 0..ROUNDS_PER_SEASON {
         let round_fx: Vec<_> = fixtures.iter().filter(|f| f.round == round).collect();
         let mut seen = std::collections::HashSet::new();
@@ -67,8 +79,8 @@ fn each_club_plays_exactly_once_per_round() {
 
 #[test]
 fn each_club_plays_30_games_per_season() {
-    let div_clubs = DIV_CLUBS[DIV_ENG_TOP];
-    let fixtures = generate_fixtures(7, 1, DIV_ENG_TOP);
+    let div_clubs = *div_clubs(div_eng_top());
+    let fixtures = generate_fixtures(7, 1, div_eng_top());
     for &club in &div_clubs {
         let count = fixtures
             .iter()
@@ -83,8 +95,8 @@ fn each_club_plays_30_games_per_season() {
 
 #[test]
 fn fixture_list_is_deterministic() {
-    let a = generate_fixtures(999, 2, DIV_BRA_TOP);
-    let b = generate_fixtures(999, 2, DIV_BRA_TOP);
+    let a = generate_fixtures(999, 2, div_bra_top());
+    let b = generate_fixtures(999, 2, div_bra_top());
     assert_eq!(a.len(), b.len());
     for (fa, fb) in a.iter().zip(b.iter()) {
         assert_eq!(fa.home, fb.home);
@@ -95,8 +107,8 @@ fn fixture_list_is_deterministic() {
 
 #[test]
 fn different_seasons_give_different_fixtures() {
-    let s1 = generate_fixtures(42, 1, DIV_ENG_TOP);
-    let s2 = generate_fixtures(42, 2, DIV_ENG_TOP);
+    let s1 = generate_fixtures(42, 1, div_eng_top());
+    let s2 = generate_fixtures(42, 2, div_eng_top());
     let differ = s1
         .iter()
         .zip(s2.iter())
@@ -119,14 +131,15 @@ fn golden_team_match_seed_42() {
 /// - career counters are consistent at retirement age
 #[test]
 fn twenty_seasons_full_career_no_panic() {
-    let pc_club_id = DIV_CLUBS[DIV_ENG_SEC][0]; // Leeds United
     let world_seed = 0xCAFE_BABE_u64;
+    let world = generate_world(world_seed);
+    let pc_club_id = div_clubs(div_eng_sec())[0];
 
     let choices = CreationChoices {
         name: "Career GOAT".into(),
         position: Position::Forward,
         nationality: "England",
-        club: CLUBS[pc_club_id].name,
+        club: world.clubs[pc_club_id].name.clone(),
     };
 
     let mut state = WorldState::new();
@@ -143,8 +156,8 @@ fn twenty_seasons_full_career_no_panic() {
         Intent::InitWorld {
             world_seed,
             pc_club_idx: pc_club_id as u16,
-            pc_div_idx: DIV_ENG_SEC as u8,
-            facilities_mult: CLUBS[pc_club_id].facilities_mult(),
+            pc_div_idx: div_eng_sec() as u8,
+            facilities_mult: facilities_mult(world.clubs[pc_club_id].strength),
             initial_table: Box::new([0u32; 80]),
         },
         &mut GoatRng::new(0),
@@ -165,7 +178,7 @@ fn twenty_seasons_full_career_no_panic() {
         assert_eq!(state.season_number, season, "s{season}: season counter");
 
         let div_idx = state.pc_div_idx as usize;
-        let div_clubs = DIV_CLUBS[div_idx];
+        let div_clubs = *div_clubs(div_idx);
 
         for round in 0..ROUNDS_PER_SEASON {
             let age = state.players.get_age_weeks(state.pc_player_id.unwrap());
@@ -182,8 +195,11 @@ fn twenty_seasons_full_career_no_panic() {
             let mut pc_gf = 0u32;
             let mut pc_ga = 0u32;
             for f in &all_fixtures {
-                let (gf, ga) =
-                    sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng);
+                let (gf, ga) = sim_team_match(
+                    world.clubs[f.home].strength,
+                    world.clubs[f.away].strength,
+                    &mut sim_rng,
+                );
                 let h_pos = div_clubs.iter().position(|&c| c == f.home).unwrap() as u8;
                 let a_pos = div_clubs.iter().position(|&c| c == f.away).unwrap() as u8;
                 round_results.push((h_pos, a_pos, gf, ga));
@@ -271,14 +287,15 @@ fn twenty_seasons_full_career_no_panic() {
 /// 5 headless seasons: auto-sim all rounds, invariants hold, tables accumulate, no panics.
 #[test]
 fn five_headless_seasons_no_panic() {
-    let pc_club_id = DIV_CLUBS[DIV_ENG_SEC][0]; // Leeds United
     let world_seed = 7777u64;
+    let world = generate_world(world_seed);
+    let pc_club_id = div_clubs(div_eng_sec())[0];
 
     let choices = CreationChoices {
         name: "Headless Hero".into(),
         position: Position::Forward,
         nationality: "England",
-        club: CLUBS[pc_club_id].name,
+        club: world.clubs[pc_club_id].name.clone(),
     };
 
     let mut state = WorldState::new();
@@ -295,8 +312,8 @@ fn five_headless_seasons_no_panic() {
         Intent::InitWorld {
             world_seed,
             pc_club_idx: pc_club_id as u16,
-            pc_div_idx: DIV_ENG_SEC as u8,
-            facilities_mult: CLUBS[pc_club_id].facilities_mult(),
+            pc_div_idx: div_eng_sec() as u8,
+            facilities_mult: facilities_mult(world.clubs[pc_club_id].strength),
             initial_table: Box::new([0u32; 80]),
         },
         &mut GoatRng::new(0),
@@ -315,7 +332,7 @@ fn five_headless_seasons_no_panic() {
         assert_eq!(state.season_number, season, "season counter");
 
         let div_idx = state.pc_div_idx as usize;
-        let div_clubs = DIV_CLUBS[div_idx];
+        let div_clubs = *div_clubs(div_idx);
 
         for round in 0..ROUNDS_PER_SEASON {
             // Advance 1 training week before each match.
@@ -334,8 +351,11 @@ fn five_headless_seasons_no_panic() {
             let mut pc_gf = 0u32;
             let mut pc_ga = 0u32;
             for f in &all_fixtures {
-                let (gf, ga) =
-                    sim_team_match(CLUBS[f.home].strength, CLUBS[f.away].strength, &mut sim_rng);
+                let (gf, ga) = sim_team_match(
+                    world.clubs[f.home].strength,
+                    world.clubs[f.away].strength,
+                    &mut sim_rng,
+                );
                 let h_pos = div_clubs.iter().position(|&c| c == f.home).unwrap() as u8;
                 let a_pos = div_clubs.iter().position(|&c| c == f.away).unwrap() as u8;
                 round_results.push((h_pos, a_pos, gf, ga));

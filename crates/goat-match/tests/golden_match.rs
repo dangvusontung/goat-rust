@@ -26,7 +26,7 @@ fn forward_attrs() -> [Fixed; NUM_ATTRS] {
         name: "Test".into(),
         position: Position::Forward,
         nationality: "Brazilian",
-        club: "Riverside Town",
+        club: "Riverside Town".into(),
     };
     generate_player(12345, &c).current
 }
@@ -36,7 +36,7 @@ fn forward_fam() -> [goat_core::roles::FamiliarityTier; goat_core::roles::NUM_RO
         name: "Test".into(),
         position: Position::Forward,
         nationality: "Brazilian",
-        club: "Riverside Town",
+        club: "Riverside Town".into(),
     };
     generate_player(12345, &c).familiarity
 }

@@ -4,7 +4,7 @@
 //! `generate_fixtures(season, div_idx)` → `ROUNDS_PER_SEASON` rounds,
 //! each round containing `CLUBS_PER_DIV / 2` matches.
 
-use crate::world::{ClubId, CLUBS_PER_DIV, DIV_CLUBS};
+use crate::world::{div_clubs, ClubId, CLUBS_PER_DIV};
 use goat_rng::{GoatRng, RngSource};
 
 pub const ROUNDS_PER_SEASON: usize = (CLUBS_PER_DIV - 1) * 2; // 30
@@ -21,7 +21,7 @@ pub struct Fixture {
 /// All fixtures for one division, one season.
 /// Returns a flat list sorted by round.
 pub fn generate_fixtures(world_seed: u64, season: u32, div_idx: usize) -> Vec<Fixture> {
-    let clubs = DIV_CLUBS[div_idx];
+    let clubs = *div_clubs(div_idx);
     let n = CLUBS_PER_DIV;
     debug_assert!(n.is_multiple_of(2));
 

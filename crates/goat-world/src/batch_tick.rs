@@ -10,7 +10,7 @@ use crate::fixtures::{round_fixtures, ROUNDS_PER_SEASON};
 use crate::population::Population;
 use crate::season::Table;
 use crate::sim_team_match;
-use crate::world::{ClubId, DIV_CLUBS, NUM_CLUBS, NUM_DIVISIONS};
+use crate::world::{div_clubs, ClubId, NUM_CLUBS, NUM_DIVISIONS};
 use goat_rng::GoatRng;
 
 /// League appearances credited to a regular (top-OVR) squad member per season.
@@ -76,7 +76,8 @@ pub fn batch_tick_season(
 
     let mut results = Vec::with_capacity(NUM_DIVISIONS);
 
-    for (div, div_clubs) in DIV_CLUBS.iter().enumerate() {
+    for div in 0..NUM_DIVISIONS {
+        let div_clubs = div_clubs(div);
         // Resolve the division season via the shared fixture + match machinery.
         let mut table = Table::new(div_clubs);
         let mut rng = GoatRng::new(world_seed ^ ((season as u64) << 20) ^ (div as u64));
@@ -167,7 +168,7 @@ mod tests {
         assert_eq!(results.len(), NUM_DIVISIONS);
         for (div, r) in results.iter().enumerate() {
             assert_eq!(r.division, div);
-            assert!(DIV_CLUBS[div].contains(&r.champion_club));
+            assert!(div_clubs(div).contains(&r.champion_club));
         }
     }
 

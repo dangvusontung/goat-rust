@@ -12,17 +12,19 @@ use goat_core::{
 };
 use goat_rng::GoatRng;
 use goat_save::save::{from_world_state, load_from_file, save_to_file, to_world_state};
-use goat_world::world::{CLUBS, DIV_CLUBS, DIV_ENG_SEC};
+use goat_world::world::{div_clubs, div_index, facilities_mult, NATION_ENGLAND};
+use goat_world::worldgen::generate_world;
 
 fn setup_state() -> WorldState {
-    let pc_club_id = DIV_CLUBS[DIV_ENG_SEC][3]; // Burnley
     let world_seed = 54321u64;
+    let world = generate_world(world_seed);
+    let pc_club_id = div_clubs(div_index(NATION_ENGLAND, 1))[3];
 
     let choices = CreationChoices {
         name: "Round-Trip Sam".into(),
         position: Position::Forward,
         nationality: "England",
-        club: CLUBS[pc_club_id].name,
+        club: world.clubs[pc_club_id].name.clone(),
     };
 
     let mut state = WorldState::new();
@@ -39,8 +41,8 @@ fn setup_state() -> WorldState {
         Intent::InitWorld {
             world_seed,
             pc_club_idx: pc_club_id as u16,
-            pc_div_idx: DIV_ENG_SEC as u8,
-            facilities_mult: CLUBS[pc_club_id].facilities_mult(),
+            pc_div_idx: div_index(NATION_ENGLAND, 1) as u8,
+            facilities_mult: facilities_mult(world.clubs[pc_club_id].strength),
             initial_table: Box::new([0u32; 80]),
         },
         &mut GoatRng::new(0),

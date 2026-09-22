@@ -8,7 +8,8 @@
 //! same universe on every platform: that is the Phase 9 determinism spine, pinned by the
 //! `fingerprint` golden.
 
-use crate::world::{Nation, CLUBS, NUM_CLUBS};
+use crate::world::{nation_name, NUM_CLUBS};
+use crate::worldgen::{generate_world, GeneratedWorld};
 use goat_core::attrs::NUM_ATTRS;
 use goat_core::generation::{generate_player, CreationChoices, Position};
 use goat_core::player::PlayerView;
@@ -117,12 +118,13 @@ fn player_seed(world_seed: u64, club_id: u64, slot: u64) -> u64 {
 /// gets a `SQUAD_SIZE` squad; potential is anchored to club stature (stronger clubs draw
 /// stronger players) with per-player variance. Pure and order-stable.
 pub fn genesis(world_seed: u64) -> Population {
+    let world = generate_world(world_seed);
     let mut pop = Population::default();
     pop.seed.reserve(POP_SIZE);
 
-    for (club_id, club) in CLUBS.iter().enumerate() {
+    for club in &world.clubs {
         for slot in 0..SQUAD_SIZE {
-            let pseed = player_seed(world_seed, club_id as u64, slot as u64);
+            let pseed = player_seed(world_seed, club.id as u64, slot as u64);
             let mut rng = GoatRng::new(pseed);
 
             let position = squad_position(slot);
@@ -135,8 +137,8 @@ pub fn genesis(world_seed: u64) -> Population {
             let potential_ovr = (base + variance).clamp(30, 99) as u8;
 
             pop.seed.push(pseed);
-            pop.club.push(club_id as u16);
-            pop.nation.push(club.nation as u8);
+            pop.club.push(club.id as u16);
+            pop.nation.push(club.nation);
             pop.position.push(position);
             pop.birth_age_weeks.push(birth_age_weeks);
             pop.potential_ovr.push(potential_ovr);
@@ -203,6 +205,7 @@ impl Population {
         idx: usize,
         elapsed_weeks: u32,
         name: impl Into<String>,
+        world: &GeneratedWorld,
     ) -> Option<PlayerView> {
         if self.is_retired(idx, elapsed_weeks) {
             return None;
@@ -210,10 +213,8 @@ impl Population {
         let choices = CreationChoices {
             name: name.into(),
             position: position_from_u8(self.position[idx]),
-            nationality: Nation::from_idx(self.nation[idx] as usize)
-                .map(|n| n.name())
-                .unwrap_or("England"),
-            club: CLUBS[self.club[idx] as usize].name,
+            nationality: nation_name(self.nation[idx]),
+            club: world.clubs[self.club[idx] as usize].name.clone(),
         };
         // generate_player gives the realistic per-attribute potential + shape + roles; we
         // overwrite current to the age-appropriate fraction of that potential.
@@ -270,16 +271,18 @@ mod tests {
     #[test]
     fn background_rederive_is_deterministic() {
         let pop = genesis(3);
+        let world = generate_world(3);
         assert_eq!(pop.current_ovr(100, 260), pop.current_ovr(100, 260));
-        let a = pop.promote(50, 6 * 52, "X").unwrap();
-        let b = pop.promote(50, 6 * 52, "X").unwrap();
+        let a = pop.promote(50, 6 * 52, "X", &world).unwrap();
+        let b = pop.promote(50, 6 * 52, "X", &world).unwrap();
         assert_eq!(a.current, b.current, "promote must be deterministic");
     }
 
     #[test]
     fn promoted_player_respects_talent_ceiling() {
         let pop = genesis(9);
-        let view = pop.promote(50, 8 * 52, "Prospect").unwrap();
+        let world = generate_world(9);
+        let view = pop.promote(50, 8 * 52, "Prospect", &world).unwrap();
         for i in 0..NUM_ATTRS {
             assert!(
                 view.current[i] <= view.potential[i],
@@ -291,12 +294,13 @@ mod tests {
     #[test]
     fn lazy_promote_never_resurrects_retired() {
         let pop = genesis(11);
+        let world = generate_world(11);
         let idx = 0;
         // Elapsed time that puts this player exactly at the retirement age.
         let elapsed = RETIRE_AGE_YEARS * 52 - pop.birth_age_weeks[idx];
         assert!(pop.is_retired(idx, elapsed));
         assert!(
-            pop.promote(idx, elapsed, "Veteran").is_none(),
+            pop.promote(idx, elapsed, "Veteran", &world).is_none(),
             "a retired player must never promote to an active view"
         );
     }

@@ -18,7 +18,7 @@ fn base_state() -> WorldState {
         name: "Test Legend".into(),
         position: Position::Forward,
         nationality: "England",
-        club: "Burnley",
+        club: "Burnley".into(),
     };
     let mut s = WorldState::new();
     s = reduce(
@@ -87,7 +87,7 @@ fn transfer_changes_club() {
             to_div_idx: 0,
             new_wage: 120,
             new_length: 3,
-            new_club_name: "Arsenal",
+            new_club_name: "Arsenal".into(),
             facilities_mult: Fixed::from_int(1),
             fee_bonus: 200,
         },

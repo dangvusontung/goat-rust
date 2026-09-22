@@ -4,6 +4,10 @@
 //! produce bit-for-bit the same population on every run and platform. Values frozen from
 //! the first green run — NEVER edit to "fix" a failing test; a break means genesis logic
 //! (or the SoA layout) changed.
+//!
+//! Re-frozen once for the World Scale-Up (Phase A): the world grew from 2 nations /
+//! 64 clubs to 50 nations / 2,544 clubs, so every fingerprint below legitimately changed.
+//! The invariants (determinism, both rival outcomes occurring) are unchanged.
 
 use goat_world::batch_tick::batch_tick_season;
 use goat_world::history::backfill_history;
@@ -14,9 +18,9 @@ use goat_world::rival::{crystallise_rival, RivalVerdict};
 fn genesis_fingerprint_is_stable() {
     // (world_seed, expected fingerprint) — frozen from first green run.
     let golden: [(u64, u64); 3] = [
-        (1, 0xed9c_5444_dde1_4f13),
-        (7, 0x6d56_a00b_a1d6_f25a),
-        (42, 0x2bce_efe7_611f_087d),
+        (1, 0xa7b1_c8fa_e756_caec),
+        (7, 0x1181_f2ef_3bac_6136),
+        (42, 0x9b7c_5862_6d20_42e4),
     ];
     for (seed, expected) in golden {
         assert_eq!(
@@ -44,7 +48,7 @@ fn batch_tick_world_fingerprint_is_stable() {
         pop.career_fingerprint()
     };
     assert_eq!(run(7), run(7), "batch-tick must be deterministic");
-    assert_eq!(run(7), 0x5b1e_8128_8c99_b478, "career fingerprint drifted");
+    assert_eq!(run(7), 0x3361_ae92_eacf_dd9e, "career fingerprint drifted");
 }
 
 /// The backfilled pre-history is a stable, derivable canon for a fixed seed. Frozen.
@@ -52,7 +56,7 @@ fn batch_tick_world_fingerprint_is_stable() {
 fn history_fingerprint_is_stable() {
     assert_eq!(
         backfill_history(7, 30).fingerprint(),
-        0xe0c9_3dbd_e1c4_720e,
+        0xa5ae_a09f_159d_5872,
         "history canon fingerprint drifted"
     );
 }
@@ -60,6 +64,11 @@ fn history_fingerprint_is_stable() {
 /// Rival crystallisation is deterministic and the weak-era branch is real: the pattern of
 /// who gets a rival vs who reigns alone is stable across a seed sweep. Frozen as a bitmask
 /// (bit i set = seed i produced a rival for a fixed mid-tier PC).
+///
+/// The PC record bar was recalibrated for the 50-nation world: with 159 divisions there
+/// are 159 league titles per season (not 4), so the old bar (200 goals / 5 titles) made
+/// every seed produce a rival — no variance. (250 goals / 6 titles) restores both
+/// outcomes.
 #[test]
 fn rival_verdict_pattern_is_stable() {
     let verdict = |seed: u64| -> bool {
@@ -68,7 +77,7 @@ fn rival_verdict_pattern_is_stable() {
             batch_tick_season(&mut pop, seed, s, s * 52);
         }
         matches!(
-            crystallise_rival(&pop, 16 * 52, 200, 5),
+            crystallise_rival(&pop, 16 * 52, 250, 6),
             RivalVerdict::Rival { .. }
         )
     };
@@ -83,5 +92,5 @@ fn rival_verdict_pattern_is_stable() {
         mask != 0 && mask != (1 << 24) - 1,
         "rivalry has no variance"
     );
-    assert_eq!(mask, 0x00a4_4108, "rival verdict pattern drifted");
+    assert_eq!(mask, 0x000c_9004, "rival verdict pattern drifted");
 }

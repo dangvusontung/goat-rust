@@ -26,7 +26,6 @@ pub use fixtures::{
 };
 pub use season::{sim_team_match, Table, TableEntry};
 pub use world::{
-    club_div_pos, club_division, clubs_for_nation, Club, ClubId, DivLevel, Nation, CLUBS,
-    CLUBS_PER_DIV, DIV_BRA_SEC, DIV_BRA_TOP, DIV_CLUBS, DIV_ENG_SEC, DIV_ENG_TOP, DIV_LEVELS,
-    DIV_NAMES, DIV_NATIONS, NUM_CLUBS, NUM_DIVISIONS,
+    club_div_pos, club_division, div_clubs, div_index, facilities_mult, nation_name, ClubId,
+    NationId, CLUBS_PER_DIV, NATION_BRAZIL, NATION_ENGLAND, NUM_CLUBS, NUM_DIVISIONS, NUM_NATIONS,
 };

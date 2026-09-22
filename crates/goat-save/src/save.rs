@@ -9,7 +9,10 @@ use std::io;
 use std::path::Path;
 
 pub const MAGIC: &[u8; 4] = b"GOAT";
-pub const VERSION: u32 = 7;
+/// Save format version. v8: the world is procedurally generated (50 nations /
+/// 2,544 clubs) — v7 club indices refer to the old 64-club const world and
+/// would silently load into the wrong clubs, so they are rejected.
+pub const VERSION: u32 = 8;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -231,11 +234,13 @@ fn decode_peers(blob: &[u8]) -> Vec<goat_core::state::PeerState> {
         cur += name_len;
         let nat_len = blob.get(cur).copied().unwrap_or(0) as usize;
         cur += 1;
-        let nationality = match std::str::from_utf8(blob.get(cur..cur + nat_len).unwrap_or(b"")) {
-            Ok("England") => "England",
-            Ok("Brazil") => "Brazil",
-            _ => "England",
-        };
+        let raw_nat =
+            std::str::from_utf8(blob.get(cur..cur + nat_len).unwrap_or(b"")).unwrap_or("England");
+        let nationality = goat_world::nations::NATIONS
+            .iter()
+            .find(|n| n.name == raw_nat)
+            .map(|n| n.name)
+            .unwrap_or("England");
         cur += nat_len;
         peers.push(PeerState {
             seed,
@@ -273,10 +278,12 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
     use goat_core::roles::FamiliarityTier;
     use goat_core::state::WorldState;
     use goat_core::week::{Intensity, Routine};
-    use goat_world::world::CLUBS;
+    use goat_world::world::{facilities_mult, nation_name};
+    use goat_world::worldgen::generate_world;
 
-    let club = CLUBS[data.pc_club_idx as usize];
-    let nationality = club.nation.name();
+    let world = generate_world(data.world_seed);
+    let club = &world.clubs[data.pc_club_idx as usize];
+    let nationality = nation_name(club.nation);
     let position = match data.pc_position {
         1 => Position::Midfielder,
         2 => Position::Forward,
@@ -286,7 +293,7 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
         name: data.pc_name.clone(),
         position,
         nationality,
-        club: club.name,
+        club: club.name.clone(),
     };
 
     // Regenerate from world seed to get original potentials.
@@ -335,13 +342,13 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
         focus_attrs,
         intensity,
     };
-    state.pc_club = club.name;
+    state.pc_club = club.name.clone();
     state.pc_nationality = nationality;
     state.pc_position = data.pc_position;
     state.world_seed = data.world_seed;
     state.pc_club_idx = data.pc_club_idx;
     state.pc_div_idx = data.pc_div_idx;
-    state.pc_facilities_mult = club.facilities_mult();
+    state.pc_facilities_mult = facilities_mult(club.strength);
     state.season_number = data.season_number;
     state.season_round = data.season_round;
     state.pc_form = goat_fixed::Fixed::raw(data.pc_form);

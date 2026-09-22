@@ -25,7 +25,7 @@ pub struct WorldState {
     pub pc_player_id: Option<PlayerId>,
     // ── Phase 3 ───────────────────────────────────────────────────────────────
     pub pc_routine: Routine,
-    pub pc_club: &'static str,
+    pub pc_club: String,
     pub pc_nationality: &'static str,
     /// Position as u8 (0=Defender, 1=Midfielder, 2=Forward) — saved for load reconstruct.
     pub pc_position: u8,
@@ -155,7 +155,7 @@ impl WorldState {
             players: PlayerStore::new(),
             pc_player_id: None,
             pc_routine: Routine::default(),
-            pc_club: "",
+            pc_club: String::new(),
             pc_nationality: "",
             pc_position: 2, // Forward default
             last_week_events: Vec::new(),
@@ -290,7 +290,7 @@ pub enum Intent {
         to_div_idx: u8,
         new_wage: i64,
         new_length: u32,
-        new_club_name: &'static str,
+        new_club_name: String,
         facilities_mult: Fixed,
         fee_bonus: i64, // fraction of fee paid to player (signing bonus)
     },
@@ -380,12 +380,11 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             view.age_weeks = START_AGE_WEEKS;
             view.energy = ENERGY_START;
             view.injury_weeks = 0;
-            let club = choices.club;
             let nationality = choices.nationality;
             let position = choices.position as u8;
             let id = state.players.push(view);
             state.pc_player_id = Some(id);
-            state.pc_club = club;
+            state.pc_club = choices.club.clone();
             state.pc_nationality = nationality;
             state.pc_position = position;
             state.last_week_events.clear();
@@ -917,7 +916,7 @@ mod tests {
         };
         let id = state.players.push(view);
         state.pc_player_id = Some(id);
-        state.pc_club = "Riverside Town";
+        state.pc_club = "Riverside Town".into();
         id
     }
 

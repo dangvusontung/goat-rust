@@ -253,7 +253,7 @@ mod tests {
             name: "T".into(),
             position: Position::Forward,
             nationality: "English",
-            club: "Local FC",
+            club: "Local FC".into(),
         };
         let players: Vec<_> = (0u64..5).map(|s| generate_player(s, &c)).collect();
         let ovrs: Vec<i32> = players
