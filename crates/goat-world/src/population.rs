@@ -288,6 +288,225 @@ impl Population {
         }
         Some(avg)
     }
+
+    // ── PA2 M1.5: formation-aware lineup + PC selection ──────────────────────
+
+    /// Top `slots.{0,1,2}` available players by current OVR within each position
+    /// group (D/M/F), skipping the retired. Deterministic and noise-free — this
+    /// is the *profile* lineup (team strength), not the selection drama.
+    pub fn lineup_indices_formation(
+        &self,
+        club_id: usize,
+        elapsed_weeks: u32,
+        slots: (usize, usize, usize),
+    ) -> Vec<usize> {
+        let mut out = Vec::with_capacity(slots.0 + slots.1 + slots.2);
+        for (pos, &n) in [slots.0, slots.1, slots.2].iter().enumerate() {
+            let mut group: Vec<usize> = (0..self.len())
+                .filter(|&i| {
+                    self.club[i] as usize == club_id
+                        && self.position[i] == pos as u8
+                        && !self.is_retired(i, elapsed_weeks)
+                })
+                .collect();
+            group.sort_by_key(|&i| std::cmp::Reverse(self.current_ovr(i, elapsed_weeks)));
+            group.truncate(n);
+            out.extend(group);
+        }
+        out
+    }
+
+    /// Formation-aware mean attributes of a club's lineup. When the PC starts,
+    /// `pc` is `Some((position, attrs))` and he takes one slot in his position
+    /// group (one fewer NPC is averaged there); when he is benched, `None`.
+    /// Returns `None` if the club cannot field the full split.
+    pub fn squad_avg_attrs_formation(
+        &self,
+        club_id: usize,
+        elapsed_weeks: u32,
+        world: &GeneratedWorld,
+        slots: (usize, usize, usize),
+        pc: Option<(u8, &[Fixed; NUM_ATTRS])>,
+    ) -> Option<[Fixed; NUM_ATTRS]> {
+        let npc_slots = match pc {
+            Some((pos, _)) => {
+                let mut s = slots;
+                match pos {
+                    0 => s.0 = s.0.saturating_sub(1),
+                    1 => s.1 = s.1.saturating_sub(1),
+                    _ => s.2 = s.2.saturating_sub(1),
+                }
+                s
+            }
+            None => slots,
+        };
+        let lineup = self.lineup_indices_formation(club_id, elapsed_weeks, npc_slots);
+        let want = npc_slots.0 + npc_slots.1 + npc_slots.2;
+        if lineup.len() < want {
+            return None;
+        }
+        let mut sums = [0i64; NUM_ATTRS];
+        let mut n = 0i64;
+        for idx in lineup {
+            let view = self.promote(
+                idx,
+                elapsed_weeks,
+                crate::history::name_from_seed(self.seed[idx]),
+                world,
+            )?;
+            for (a, s) in sums.iter_mut().enumerate() {
+                *s += view.current[a].to_raw() as i64;
+            }
+            n += 1;
+        }
+        if let Some((_, attrs)) = pc {
+            for (a, s) in sums.iter_mut().enumerate() {
+                *s += attrs[a].to_raw() as i64;
+            }
+            n += 1;
+        }
+        let mut avg = [Fixed::ZERO; NUM_ATTRS];
+        for (a, v) in avg.iter_mut().enumerate() {
+            *v = Fixed::raw((sums[a] / n) as i32);
+        }
+        Some(avg)
+    }
+
+    /// Decide whether the PC starts or is benched this week (PA2 M1.5). The PC
+    /// competes inside his position group for `group_slots` places; NPCs carry a
+    /// seeded weekly form noise (±10) and a ~3% availability exclusion, both
+    /// ephemeral (nothing is stored). A PC just below the cutoff gets a seeded
+    /// borderline roll where manager favor nudges the odds.
+    pub fn select_pc(
+        &self,
+        club_id: usize,
+        elapsed_weeks: u32,
+        group_slots: usize,
+        pc: &PcSelectionInput,
+        week_seed: u64,
+    ) -> SelectionOutcome {
+        if pc.unavailable || group_slots == 0 {
+            return SelectionOutcome::Benched;
+        }
+        let pc_score = pc_selection_score(pc);
+
+        let mut cand: Vec<(i32, bool)> = Vec::new(); // (score, is_pc)
+        for i in 0..self.len() {
+            if self.club[i] as usize != club_id
+                || self.position[i] != pc.position
+                || self.is_retired(i, elapsed_weeks)
+            {
+                continue;
+            }
+            let mut rng = GoatRng::new(self.seed[i] ^ week_seed);
+            if rng.next_range_u32(0, NPC_UNAVAILABLE_DIV) == 0 {
+                continue; // knocked/suspended this week — ephemeral abstraction
+            }
+            let noise = rng.next_range_u32(0, 2 * NPC_FORM_NOISE) as i32 - NPC_FORM_NOISE as i32;
+            cand.push((self.current_ovr(i, elapsed_weeks) as i32 + noise, false));
+        }
+        cand.push((pc_score, true));
+        // Stable sort, score descending: on ties the PC (pushed last) loses to NPCs.
+        cand.sort_by_key(|&(score, _)| std::cmp::Reverse(score));
+
+        let rank = cand.iter().position(|&(_, is_pc)| is_pc).unwrap();
+        if rank < group_slots {
+            return SelectionOutcome::Starts;
+        }
+        let cutoff = cand[group_slots - 1].0; // lowest selected score
+        let diff = pc_score - cutoff;
+        if diff < -(BORDERLINE_BAND as i32) {
+            return SelectionOutcome::Benched;
+        }
+        // Borderline: the manager hesitates — favor nudges the odds (±10).
+        let pct = (50 + diff * 10 + (pc.favor - 50) / 5).clamp(1, 99);
+        let mut roll = GoatRng::new(week_seed ^ BORDERLINE_SALT);
+        if roll.next_range_u32(1, 100) as i32 <= pct {
+            SelectionOutcome::Starts
+        } else {
+            SelectionOutcome::Benched
+        }
+    }
+}
+
+/// NPC unavailability divisor: `next_range(0, NPC_UNAVAILABLE_DIV) == 0` ⇒ out
+/// this week (~3%; knock/suspension abstraction, seeded per player-week, never stored).
+pub const NPC_UNAVAILABLE_DIV: u32 = 33;
+/// Weekly NPC form noise (±points on selection score).
+pub const NPC_FORM_NOISE: u32 = 10;
+/// Score band below the selection cutoff in which the borderline roll applies.
+pub const BORDERLINE_BAND: u32 = 5;
+/// Salt for the borderline roll stream (independent of availability/noise draws).
+const BORDERLINE_SALT: u64 = 0xB0DE_21A4_7C3F_55E1;
+
+/// Everything the selection formula needs from the PC — all sourced from existing
+/// `WorldState`/`PlayerView` fields (no new systems). See the task doc
+/// (`tasks/TASK-PA2-world-into-match.md`, M1.5) for the locked formula.
+#[derive(Debug, Clone, Copy)]
+pub struct PcSelectionInput {
+    /// Primary position: 0 = Defender, 1 = Midfielder, 2 = Forward.
+    pub position: u8,
+    /// Role rating at the PC's best role (familiarity multiplier already inside).
+    pub role_rating: i32,
+    /// Familiarity tier at that role (0=Awkward … 3=Natural) — tactical fit term.
+    pub familiarity_tier: u8,
+    pub form: i32,
+    pub trust: i32,
+    pub favor: i32,
+    /// Academy hype — only counts in the PC's first season at the club.
+    pub academy_hype: i32,
+    pub first_season_at_club: bool,
+    /// Annual wage (thousands) — top-earner proxy vs `club_strength * 3`.
+    pub wage_annual: i64,
+    pub club_strength: u8,
+    pub fan_rep: i32,
+    pub marketability: i32,
+    pub power_ladder: u8,
+    /// Energy 0–100.
+    pub energy: i32,
+    /// Hard exclusion: injured or suspended.
+    pub unavailable: bool,
+}
+
+/// The PC's multi-factor selection score (locked formula, M1.5):
+/// role rating + form/trust pulls + tactical fit + first-season hype +
+/// top-earner status + fan/market appeal − power-ladder rebellion − fatigue.
+pub fn pc_selection_score(pc: &PcSelectionInput) -> i32 {
+    let fit = [-6, -2, 0, 4][pc.familiarity_tier.min(3) as usize];
+    let hype = if pc.first_season_at_club {
+        (pc.academy_hype / 10).clamp(-5, 5)
+    } else {
+        0
+    };
+    let wage = if pc.wage_annual >= pc.club_strength as i64 * 3 {
+        5
+    } else {
+        0
+    };
+    let energy = if pc.energy < 40 {
+        -10
+    } else if pc.energy < 60 {
+        -4
+    } else {
+        0
+    };
+    pc.role_rating
+        + (pc.form - 50) * 3 / 10
+        + (pc.trust - 50) * 2 / 5
+        + fit
+        + hype
+        + wage
+        + (pc.fan_rep - 50) / 10
+        + if pc.marketability >= 70 { 3 } else { 0 }
+        - 8 * pc.power_ladder as i32
+        + energy
+}
+
+/// Whether the PC starts or watches from the bench this week.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionOutcome {
+    Starts,
+    Benched,
 }
 
 #[cfg(test)]
@@ -402,5 +621,134 @@ mod tests {
         let star = [Fixed::from_int(95); NUM_ATTRS];
         let with_pc = pop.squad_avg_attrs(2, 260, &world, Some(&star)).unwrap();
         assert!(with_pc[2] > a[2], "PC attrs must lift the squad mean");
+    }
+
+    fn pc_input(position: u8, role_rating: i32) -> PcSelectionInput {
+        PcSelectionInput {
+            position,
+            role_rating,
+            familiarity_tier: 3, // Natural
+            form: 50,
+            trust: 50,
+            favor: 50,
+            academy_hype: 0,
+            first_season_at_club: false,
+            wage_annual: 0,
+            club_strength: 50,
+            fan_rep: 50,
+            marketability: 50,
+            power_ladder: 0,
+            energy: 100,
+            unavailable: false,
+        }
+    }
+
+    #[test]
+    fn formation_lineup_respects_slots() {
+        let pop = genesis(7);
+        let slots = (5, 4, 2);
+        let lineup = pop.lineup_indices_formation(3, 260, slots);
+        assert_eq!(lineup.len(), 11);
+        for pos in 0..3u8 {
+            let want = [slots.0, slots.1, slots.2][pos as usize];
+            let got = lineup.iter().filter(|&&i| pop.position[i] == pos).count();
+            assert_eq!(got, want, "position {pos} must fill exactly its slots");
+        }
+        // Deterministic.
+        assert_eq!(lineup, pop.lineup_indices_formation(3, 260, slots));
+    }
+
+    #[test]
+    fn formation_avg_pc_occupies_his_group_slot() {
+        let pop = genesis(5);
+        let world = generate_world(5);
+        let slots = (4, 4, 3);
+        let without = pop
+            .squad_avg_attrs_formation(2, 260, &world, slots, None)
+            .unwrap();
+        let star = [Fixed::from_int(95); NUM_ATTRS];
+        let with_pc = pop
+            .squad_avg_attrs_formation(2, 260, &world, slots, Some((2, &star)))
+            .unwrap();
+        assert!(
+            with_pc[2] > without[2],
+            "a starting PC still lifts the squad mean under formation lineups"
+        );
+    }
+
+    #[test]
+    fn star_pc_always_starts_at_weak_club() {
+        let pop = genesis(7);
+        // Club 0's players cap near its strength; a 95-rated PC clears them all.
+        let pc = pc_input(2, 95);
+        for week in 0..40u64 {
+            let outcome = pop.select_pc(0, week as u32 * 7, 3, &pc, 0xA11CE ^ week);
+            assert_eq!(outcome, SelectionOutcome::Starts, "week {week}");
+        }
+    }
+
+    #[test]
+    fn hopeless_pc_is_benched_at_strong_club() {
+        let pop = genesis(7);
+        // A 20-rated PC at the strongest club should essentially never start.
+        let strong_club = {
+            let world = generate_world(7);
+            (0..world.clubs.len())
+                .max_by_key(|&c| world.clubs[c].strength)
+                .unwrap()
+        };
+        let pc = pc_input(1, 20);
+        let mut starts = 0;
+        for week in 0..60u64 {
+            if pop.select_pc(strong_club, week as u32 * 7, 4, &pc, 0xA11CE ^ week)
+                == SelectionOutcome::Starts
+            {
+                starts += 1;
+            }
+        }
+        assert!(
+            starts <= 6,
+            "20-rated PC started {starts}/60 at an elite club"
+        );
+    }
+
+    #[test]
+    fn selection_is_deterministic_and_unavailable_is_hard() {
+        let pop = genesis(3);
+        let pc = pc_input(0, 60);
+        let a = pop.select_pc(4, 260, 4, &pc, 0xBEEF);
+        let b = pop.select_pc(4, 260, 4, &pc, 0xBEEF);
+        assert_eq!(a, b, "same week ⇒ same decision");
+        let mut injured = pc;
+        injured.unavailable = true;
+        assert_eq!(
+            pop.select_pc(4, 260, 4, &injured, 0xBEEF),
+            SelectionOutcome::Benched,
+            "injury/suspension is a hard exclusion"
+        );
+    }
+
+    #[test]
+    fn npc_weekly_unavailability_is_rare() {
+        // ~1-in-33 per player-week: over 25 players × 200 weeks the outage count
+        // must land in a sane band around 150 (3%).
+        let pop = genesis(7);
+        let mut out = 0u32;
+        let mut total = 0u32;
+        for week in 0..200u64 {
+            let week_seed = 0xA11CE ^ week;
+            for i in 0..pop.len() {
+                if pop.club[i] as usize != 3 {
+                    continue;
+                }
+                total += 1;
+                let mut rng = GoatRng::new(pop.seed[i] ^ week_seed);
+                if rng.next_range_u32(0, NPC_UNAVAILABLE_DIV) == 0 {
+                    out += 1;
+                }
+            }
+        }
+        let pct = out * 100 / total;
+        assert!((1..=6).contains(&pct), "NPC outage {pct}% (target ~3%)");
     }
 }

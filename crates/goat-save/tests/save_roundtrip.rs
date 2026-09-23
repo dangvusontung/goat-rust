@@ -197,3 +197,28 @@ fn save_load_restores_phase10_economy_and_life() {
     assert_eq!(restored.pc_relationships, [40, 95, 12]);
     assert_eq!(restored.pc_character_rep, 37);
 }
+
+#[test]
+fn save_load_restores_manager_relation_v11() {
+    // Full byte path for the v11 manager trust/favor fields (PA2 M1.5).
+    let mut state = setup_state();
+    state.pc_manager_trust = 73;
+    state.pc_manager_favor = 21;
+    let pc_id = state.pc_player_id.unwrap();
+    let view = state.players.snapshot(pc_id);
+    let data = from_world_state(&state, &view);
+
+    let path = std::env::temp_dir().join("goat_save_manager_v11_roundtrip.gsav");
+    save_to_file(&data, &path).unwrap();
+    let restored = to_world_state(&load_from_file(&path).unwrap());
+    std::fs::remove_file(&path).ok();
+
+    assert_eq!(
+        restored.pc_manager_trust, 73,
+        "manager trust survives round-trip"
+    );
+    assert_eq!(
+        restored.pc_manager_favor, 21,
+        "manager favor survives round-trip"
+    );
+}

@@ -9,6 +9,7 @@ pub mod batch_tick;
 pub mod calendar;
 pub mod fixtures;
 pub mod history;
+pub mod manager;
 pub mod nations;
 pub mod population;
 pub mod rival;

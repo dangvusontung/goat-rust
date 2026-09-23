@@ -293,6 +293,32 @@ fn run_new_game(
                         &mut GoatRng::new(0),
                     );
 
+                    // PA2 M1.5: derive the club's manager and set the
+                    // trust/favor baseline for the PC's arrival.
+                    {
+                        let mgr = goat_world::manager::manager_for_club(seed, club_id, club.nation);
+                        let pc_age = state
+                            .players
+                            .snapshot(state.pc_player_id.unwrap())
+                            .age_weeks
+                            / 52;
+                        let (trust, favor) = manager_relation_base(&mgr, &state, pc_age);
+                        state = reduce(
+                            state,
+                            Intent::SetManagerRelation { trust, favor },
+                            &mut GoatRng::new(0),
+                        );
+                        writeln!(
+                            out,
+                            "  Manager: {} ({}) — trust {}, favor {}",
+                            mgr.name,
+                            mgr.personality.name(),
+                            state.pc_manager_trust,
+                            state.pc_manager_favor
+                        )
+                        .unwrap();
+                    }
+
                     // Seed peer cohort (Phase 9) from the generated world.
                     let peers = build_peer_cohort(seed, &world, div_idx);
                     state = reduce(state, Intent::InitPeers { peers }, &mut GoatRng::new(0));
@@ -602,7 +628,7 @@ fn run_next_round(
     // Find PC's fixture this round.
     let pc_fixture = fixture_for_round(world_seed, season, div_idx, pc_club_id, round);
 
-    let (pc_goals, pc_output, pc_result, match_result_opt) = match pc_fixture {
+    let (pc_goals, pc_output, pc_result, pc_scoreline) = match pc_fixture {
         Some(f) => {
             let is_home = f.home == pc_club_id;
             let opp_id = if is_home { f.away } else { f.home };
@@ -615,15 +641,68 @@ fn run_next_round(
 
             // PA2 M1: profiles from the real squads, not the static club scalar.
             // Rebuild the population pantheon-style (genesis + replay completed
-            // seasons so youth intake keeps squads fresh); the PC holds one
-            // starting slot, so his real attrs lift his own team's profile.
+            // seasons so youth intake keeps squads fresh).
             let elapsed_weeks = state.pc_epoch_day / 7;
             let mut pop = goat_world::population::genesis(world_seed);
             for s in 1..season {
                 goat_world::batch_tick::batch_tick_season(&mut pop, world_seed, s, s * 52);
             }
+
+            // PA2 M1.5: the club's manager (seed-derived) picks a formation by
+            // club style and a lineup by the multi-factor selection score — the
+            // PC can be benched for the whole match. The opponent stays simple
+            // top-11 OVR (locked).
+            let mgr = goat_world::manager::manager_for_club(
+                world_seed,
+                pc_club_id,
+                world.clubs[pc_club_id].nation,
+            );
+            let slots =
+                goat_core::tactical::TacticalProfile::derive(50, pc_club_id as u32, world_seed)
+                    .formation_slots();
+            let week_seed = match_seed ^ 0x5E1E_C710_A11C_E701u64;
+            let pc_role = best_role_for_position(state.pc_position);
+            let pc_fam = view.familiarity[pc_role as usize];
+            let sel_input = goat_world::population::PcSelectionInput {
+                position: state.pc_position,
+                role_rating: role_rating(&view.current, pc_role, pc_fam).to_int(),
+                familiarity_tier: pc_fam as u8,
+                form: state.pc_form.to_int(),
+                trust: state.pc_manager_trust,
+                favor: state.pc_manager_favor,
+                academy_hype: state.pc_academy_hype,
+                first_season_at_club: state.pc_seasons_played == 0,
+                wage_annual: state.pc_wage_annual,
+                club_strength: own_str,
+                fan_rep: state.pc_club_fan_rep,
+                marketability: state.pc_marketability,
+                power_ladder: state.pc_power_ladder,
+                energy: view.energy.to_int().clamp(0, 100),
+                unavailable: view.injury_weeks > 0,
+            };
+            let pc_group_slots = [slots.0, slots.1, slots.2][(state.pc_position as usize).min(2)];
+            let pc_starts = pop.select_pc(
+                pc_club_id,
+                elapsed_weeks,
+                pc_group_slots,
+                &sel_input,
+                week_seed,
+            ) == goat_world::population::SelectionOutcome::Starts;
+
+            // Own profile is formation-aware; a starting PC holds one slot in his
+            // position group, so his real attrs lift his team's profile (M1).
             let own_profile = pop
-                .squad_avg_attrs(pc_club_id, elapsed_weeks, &world, Some(&view.current))
+                .squad_avg_attrs_formation(
+                    pc_club_id,
+                    elapsed_weeks,
+                    &world,
+                    slots,
+                    if pc_starts {
+                        Some((state.pc_position, &view.current))
+                    } else {
+                        None
+                    },
+                )
                 .map(|avg| {
                     goat_core::tactical::TacticalProfile::from_squad(
                         &avg,
@@ -661,109 +740,230 @@ fn run_next_round(
                 RefPersonality::from_rng(&mut rp_rng)
             };
 
-            let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
-                player_role: best_role_for_position(state.pc_position),
-                player_attrs: view.current,
-                player_familiarity: view.familiarity,
-                own_profile,
-                opp_profile,
-                opp_name: static_name(&opp.name),
-                form: state.pc_form,
-                player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
-                    .to_int()
-                    .clamp(1, 99) as u8,
-                ref_personality,
-                dirty_rep: state.pc_discipline_rep,
-                player_traits: pc_traits,
-                staff_mods: goat_world::staff::club_staff_mods(own_str),
-            };
-
-            let result = if play_interactive {
-                let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
-                let mut shown_moments = 0usize;
-                while !ms.is_complete {
-                    // Commentary feed: auto-flow moments since the last decision.
-                    for m in ms
-                        .moments
-                        .iter()
-                        .skip(shown_moments)
-                        .filter(|m| !m.is_action)
-                    {
-                        writeln!(out, " {:>2}'  {}", m.minute, m.outcome_text).unwrap();
-                    }
-                    shown_moments = ms.moments.len();
-                    render_beat(out, &ms);
-                    if ms.final_result.is_some() {
-                        break;
-                    }
-                    let choice_idx = read_choice(
-                        lines,
-                        out,
-                        ms.current_beat().map(|b| b.choices.len()).unwrap_or(1),
-                    );
-                    ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
-                }
-                ms.final_result.unwrap_or_else(|| {
-                    auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
-                })
-            } else {
-                auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
-            };
-
-            render_match_result(out, &result, &opp.name);
-
-            // Show discipline outcome.
-            if result.red_card {
-                writeln!(out, "  🟥 RED CARD! You'll serve a suspension.").unwrap();
-            } else if result.yellow_cards > 0 {
+            if !pc_starts {
+                // PA2 M1.5 bench path: the PC watches the whole match. Quick-sim
+                // the fixture off the profile means; output 0 ⇒ no form/stat
+                // update (ApplyRoundResult gates on output > 0) and no trust
+                // change (locked) — favor still drifts toward its weekly base.
                 writeln!(
                     out,
-                    "  🟨 Yellow card ({} this season).",
-                    state.pc_yellow_cards_season + result.yellow_cards as u32
+                    "  {} ({}) names the XI — you're on the BENCH. (trust {}, favor {})",
+                    mgr.name,
+                    mgr.personality.name(),
+                    state.pc_manager_trust,
+                    state.pc_manager_favor
                 )
                 .unwrap();
-            }
-
-            let pc_goals = result
-                .moments
-                .iter()
-                .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
-                .count() as u32;
-            let pc_result: i8 = if result.goals_for > result.goals_against {
-                1
-            } else if result.goals_for < result.goals_against {
-                -1
+                let (hf, af) = if is_home {
+                    sim_team_match(
+                        profile_mean(&own_profile),
+                        profile_mean(&opp_profile),
+                        &mut match_rng,
+                    )
+                } else {
+                    sim_team_match(
+                        profile_mean(&opp_profile),
+                        profile_mean(&own_profile),
+                        &mut match_rng,
+                    )
+                };
+                let (gf, ga) = if is_home { (hf, af) } else { (af, hf) };
+                writeln!(
+                    out,
+                    "  Full time: {} {}–{} {}",
+                    world.clubs[f.home].name, hf, af, world.clubs[f.away].name
+                )
+                .unwrap();
+                let (_, favor_delta) = manager_round_drift(&mgr, &state, None);
+                if favor_delta != 0 {
+                    state = reduce(
+                        state,
+                        Intent::ApplyManagerRelation {
+                            trust_delta: 0,
+                            favor_delta,
+                        },
+                        &mut GoatRng::new(0),
+                    );
+                }
+                let pc_result: i8 = if gf > ga {
+                    1
+                } else if gf < ga {
+                    -1
+                } else {
+                    0
+                };
+                (0, 0, pc_result, Some((gf, ga)))
             } else {
-                0
-            };
+                writeln!(
+                    out,
+                    "  {} ({}) picks you in a {}-{}-{}. (trust {}, favor {})",
+                    mgr.name,
+                    mgr.personality.name(),
+                    slots.0,
+                    slots.1,
+                    slots.2,
+                    state.pc_manager_trust,
+                    state.pc_manager_favor
+                )
+                .unwrap();
 
-            // Apply match effects (familiarity XP + energy cost).
-            state = reduce(
-                state,
-                Intent::ApplyMatchResult {
-                    familiarity_xp: result.familiarity_xp,
-                    energy_cost: Fixed::from_int(25),
-                    injury_weeks: None,
-                },
-                &mut GoatRng::new(0),
-            );
+                let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
+                    player_role: best_role_for_position(state.pc_position),
+                    player_attrs: view.current,
+                    player_familiarity: view.familiarity,
+                    own_profile,
+                    opp_profile,
+                    opp_name: static_name(&opp.name),
+                    form: state.pc_form,
+                    player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
+                        .to_int()
+                        .clamp(1, 99) as u8,
+                    ref_personality,
+                    dirty_rep: state.pc_discipline_rep,
+                    player_traits: pc_traits,
+                    staff_mods: goat_world::staff::club_staff_mods(own_str),
+                };
 
-            // Apply card result (updates suspensions and discipline rep).
-            if result.yellow_cards > 0 || result.red_card {
+                let result = if play_interactive {
+                    let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
+                    let mut shown_moments = 0usize;
+                    while !ms.is_complete {
+                        // Commentary feed: auto-flow moments since the last decision.
+                        for m in ms
+                            .moments
+                            .iter()
+                            .skip(shown_moments)
+                            .filter(|m| !m.is_action)
+                        {
+                            writeln!(out, " {:>2}'  {}", m.minute, m.outcome_text).unwrap();
+                        }
+                        shown_moments = ms.moments.len();
+                        render_beat(out, &ms);
+                        if ms.final_result.is_some() {
+                            break;
+                        }
+                        let choice_idx = read_choice(
+                            lines,
+                            out,
+                            ms.current_beat().map(|b| b.choices.len()).unwrap_or(1),
+                        );
+                        ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
+                    }
+                    ms.final_result.unwrap_or_else(|| {
+                        auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
+                    })
+                } else {
+                    auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
+                };
+
+                render_match_result(out, &result, &opp.name);
+
+                // Show discipline outcome.
+                if result.red_card {
+                    writeln!(out, "  🟥 RED CARD! You'll serve a suspension.").unwrap();
+                } else if result.yellow_cards > 0 {
+                    writeln!(
+                        out,
+                        "  🟨 Yellow card ({} this season).",
+                        state.pc_yellow_cards_season + result.yellow_cards as u32
+                    )
+                    .unwrap();
+                }
+
+                let pc_goals = result
+                    .moments
+                    .iter()
+                    .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+                    .count() as u32;
+                let pc_result: i8 = if result.goals_for > result.goals_against {
+                    1
+                } else if result.goals_for < result.goals_against {
+                    -1
+                } else {
+                    0
+                };
+
+                // Apply match effects (familiarity XP + energy cost).
                 state = reduce(
                     state,
-                    Intent::ApplyCardResult {
-                        yellow_cards: result.yellow_cards as u32,
-                        red_card: result.red_card,
+                    Intent::ApplyMatchResult {
+                        familiarity_xp: result.familiarity_xp,
+                        energy_cost: Fixed::from_int(25),
+                        injury_weeks: None,
                     },
                     &mut GoatRng::new(0),
                 );
-            } else {
-                // Clean match: slowly recover dirty rep.
-                state.pc_discipline_rep = (state.pc_discipline_rep - 1).max(0);
-            }
 
-            (pc_goals, result.player_output, pc_result, Some(result))
+                // Apply card result (updates suspensions and discipline rep).
+                if result.yellow_cards > 0 || result.red_card {
+                    state = reduce(
+                        state,
+                        Intent::ApplyCardResult {
+                            yellow_cards: result.yellow_cards as u32,
+                            red_card: result.red_card,
+                        },
+                        &mut GoatRng::new(0),
+                    );
+                } else {
+                    // Clean match: slowly recover dirty rep.
+                    state.pc_discipline_rep = (state.pc_discipline_rep - 1).max(0);
+                }
+
+                // PA2 M1.5: after a red card the press demands a reaction — this
+                // finally wires the previously orphaned RespondToMedia intent.
+                // Auto-sim weeks (play_interactive == false) skip the prompt.
+                if result.red_card && play_interactive {
+                    writeln!(out, "  The press wants a reaction to the red card.").unwrap();
+                    writeln!(out, "  [C] Contrite   [D] Defiant").unwrap();
+                    write!(out, "  > ").unwrap();
+                    out.flush().unwrap();
+                    let contrite =
+                        !matches!(lines.next(), Some(Ok(l)) if l.trim().eq_ignore_ascii_case("D"));
+                    state = reduce(
+                        state,
+                        Intent::RespondToMedia { contrite },
+                        &mut GoatRng::new(0),
+                    );
+                    if contrite {
+                        writeln!(out, "  You apologise and take responsibility.").unwrap();
+                    } else {
+                        writeln!(out, "  You stand your ground. The manager notes it.").unwrap();
+                        let shock = goat_world::manager::media_defiant_favor_delta(&mgr);
+                        if shock != 0 {
+                            state = reduce(
+                                state,
+                                Intent::ApplyManagerRelation {
+                                    trust_delta: 0,
+                                    favor_delta: shock,
+                                },
+                                &mut GoatRng::new(0),
+                            );
+                        }
+                    }
+                }
+
+                // Manager reacts to the week: output + training attitude move trust;
+                // favor drifts toward its recomputed base.
+                let (trust_delta, favor_delta) =
+                    manager_round_drift(&mgr, &state, Some(result.player_output));
+                if trust_delta != 0 || favor_delta != 0 {
+                    state = reduce(
+                        state,
+                        Intent::ApplyManagerRelation {
+                            trust_delta,
+                            favor_delta,
+                        },
+                        &mut GoatRng::new(0),
+                    );
+                }
+
+                (
+                    pc_goals,
+                    result.player_output,
+                    pc_result,
+                    Some((result.goals_for, result.goals_against)),
+                )
+            }
         }
         None => (0, 0, 0i8, None),
     };
@@ -777,11 +977,11 @@ fn run_next_round(
     for f in &all_fixtures {
         let is_pc_match = f.home == pc_club_id || f.away == pc_club_id;
         let (gf, ga) = if is_pc_match {
-            if let Some(ref r) = match_result_opt {
+            if let Some((pc_gf, pc_ga)) = pc_scoreline {
                 if f.home == pc_club_id {
-                    (r.goals_for, r.goals_against)
+                    (pc_gf, pc_ga)
                 } else {
-                    (r.goals_against, r.goals_for)
+                    (pc_ga, pc_gf)
                 }
             } else {
                 (0, 0)
@@ -840,6 +1040,67 @@ fn club_div_pos_in(div_idx: usize, club_id: usize) -> usize {
         .iter()
         .position(|&c| c == club_id)
         .expect("club in division")
+}
+
+// ── PA2 M1.5: manager relationship helpers ────────────────────────────────────
+
+/// Favor inputs from current state (nationality match is name-compared: both
+/// sides are `NATIONS` entries, so `&'static str` equality is exact).
+fn favor_inputs(
+    mgr: &goat_world::manager::ManagerProfile,
+    state: &WorldState,
+) -> goat_world::manager::FavorInputs {
+    goat_world::manager::FavorInputs {
+        same_nation: nation_name(mgr.nation) == state.pc_nationality,
+        marketability: state.pc_marketability,
+        fan_rep: state.pc_club_fan_rep,
+        character_rep: state.pc_character_rep,
+        discipline_rep: state.pc_discipline_rep,
+        lifestyle: state.pc_lifestyle,
+    }
+}
+
+/// Trust/favor baseline on arrival at a club (new game / transfer).
+fn manager_relation_base(
+    mgr: &goat_world::manager::ManagerProfile,
+    state: &WorldState,
+    pc_age_years: u32,
+) -> (i32, i32) {
+    (
+        goat_world::manager::trust_base(mgr, pc_age_years),
+        goat_world::manager::favor_base(mgr, &favor_inputs(mgr, state)),
+    )
+}
+
+/// Per-round drift: trust moves on match output (played weeks only) plus the
+/// week's training attitude; favor drifts one point toward its recomputed base.
+/// Benched weeks pass `match_output: None` — no trust change (locked design).
+fn manager_round_drift(
+    mgr: &goat_world::manager::ManagerProfile,
+    state: &WorldState,
+    match_output: Option<i32>,
+) -> (i32, i32) {
+    let trust_delta = match match_output {
+        Some(output) => {
+            goat_world::manager::trust_match_delta(mgr, output)
+                + goat_world::manager::trust_training_delta(
+                    mgr,
+                    state.pc_week_training_done,
+                    state.pc_routine.intensity,
+                )
+        }
+        None => 0,
+    };
+    let favor_delta = goat_world::manager::favor_drift(
+        state.pc_manager_favor,
+        goat_world::manager::favor_base(mgr, &favor_inputs(mgr, state)),
+    );
+    (trust_delta, favor_delta)
+}
+
+/// Mean line strength of a tactical profile — the scalar a quick sim needs.
+fn profile_mean(p: &goat_core::tactical::TacticalProfile) -> u8 {
+    ((p.attack as u32 + p.midfield as u32 + p.defense as u32) / 3).clamp(1, 99) as u8
 }
 
 // ── Personal staff (Phase C) ──────────────────────────────────────────────────
@@ -1567,6 +1828,25 @@ fn run_transfer_window(
                     },
                     &mut GoatRng::new(0),
                 );
+                // PA2 M1.5: new club, new manager — reset trust/favor to the
+                // arrival baseline derived from the new manager's profile.
+                let mgr =
+                    goat_world::manager::manager_for_club(state.world_seed, club_id, club.nation);
+                let (trust, favor) = manager_relation_base(&mgr, &state, view.age_weeks / 52);
+                state = reduce(
+                    state,
+                    Intent::SetManagerRelation { trust, favor },
+                    &mut GoatRng::new(0),
+                );
+                writeln!(
+                    out,
+                    "  New manager: {} ({}) — trust {}, favor {}",
+                    mgr.name,
+                    mgr.personality.name(),
+                    state.pc_manager_trust,
+                    state.pc_manager_favor
+                )
+                .unwrap();
             }
         }
     }
@@ -1578,7 +1858,11 @@ fn run_contract_negotiation(
     out: &mut impl Write,
     mut state: WorldState,
 ) -> WorldState {
-    let new_wage = state.pc_wage_annual + (state.pc_form.to_int() as i64 / 10) * 5;
+    // PA2 M1.5: the manager's trust feeds the renewal offer — a trusted player
+    // is one the club wants to keep (±10k at the extremes).
+    let new_wage = state.pc_wage_annual
+        + (state.pc_form.to_int() as i64 / 10) * 5
+        + (state.pc_manager_trust as i64 - 50) / 5;
     let new_length = 2u32;
 
     writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
