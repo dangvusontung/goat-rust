@@ -11,6 +11,7 @@ pub mod fixtures;
 pub mod history;
 pub mod manager;
 pub mod nations;
+pub mod orbit;
 pub mod population;
 pub mod rival;
 pub mod scout;

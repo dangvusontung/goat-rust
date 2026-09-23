@@ -258,3 +258,44 @@ directions — "Isolated out wide: just you and Viktor Adeyemi.", "You receive w
 your back to goal, Viktor Adeyemi tight on you.", and in career-sim's stub-sheet
 feed "A lightning break — L. Ferreira applies the finishing touch. GOAL!",
 "J. Hartley beats you clean — and it ends up in your net."
+
+## PA2 M3 — NPC stat accumulation + real NPC form (save v12)
+
+M3 makes the deep orbit leave real individual residue (commit after this entry):
+the engine attributes every goal (`goal_credits`: PC / specific population NPC),
+the live loop persists one credit line per starter per PC match
+(`WorldState::orbit_records`, save v12), the population rebuild replays them
+(career goals/apps + a form EMA), the batch tick credits orbit divisions only
+the REMAINDER (no double counting — a fully orbit-covered starter ends ~30
+apps/season with his real goals, not a phantom share), and lineup selection
+(`select_pc` + own-club `lineup_indices_formation`) ranks NPCs by
+`ovr + (form−50)×3/10` with the seeded noise halved (±10 → ±5) — closing the
+feedback loop: play well → form ↑ → selected more → more residue.
+
+**Golden seed 42 NOT re-frozen — by design.** Credits are pure bookkeeping over
+draws the commentary already made; no RNG draw was added/moved. All 13 golden
+tests pass byte-identical, which IS the flow-neutrality proof. match-batch
+below confirms it on 100k matches.
+
+| Metric (match-batch 100k, seed 0xBA7C4) | M2 | M3 |
+|---|---|---|
+| W / D / L % | 39.5 / 25.4 / 35.1 | 39.5 / 25.4 / 35.1 |
+| Goals/match (for–against) | 3.02 (1.55–1.47) | 3.02 (1.55–1.47) |
+| Clean sheets | 16.6% | 16.6% |
+| Starred-in-defeat (≥70 & L / ≥80 & L) | 4.68% / 0.76% | 4.68% / 0.76% |
+| Carried-to-win (≤45 & W) | 1.95% | 1.95% |
+| Rating 90–100 / pile at 100 (star band) | 2.2% / 0.00% | 2.2% / 0.00% |
+| Mean rating | 61.3 | 61.3 |
+| **PC 2+ goals & L** | **3.39%** | **1.56%** |
+
+**The one honest shift — PC-goal measurement.** Every engine stat is
+byte-identical (same matches, same scorelines, same ratings). What moved is the
+PC-goals column: pre-M3 it counted every interactive `GoalFor` — including
+`att_assist` ("{scorer} finishes it off!", a TEAMMATE's goal) — as a PC goal.
+Post-M3 it counts credits with `scorer == Pc`. "PC scored 2+ but team LOST"
+halves (3.39% → 1.56%) because roughly half of those braces were actually one
+PC goal + one assisted teammate goal. SiD itself is output-based and unmoved;
+match-sim star striker SiD: **2.04/2.40/2.72%** — identical to M2, mid-band.
+
+Live-loop smoke (TUI, real population): 5 auto rounds, table + world screen
+(orbit-aware rebuild) fine, save written at **v12** and reloaded cleanly.

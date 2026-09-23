@@ -357,9 +357,11 @@ fn main() {
             format!("{}Y", r.yellow_cards)
         };
         let player_goals = r
-            .moments
+            .goal_credits
             .iter()
-            .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+            .filter(|c| {
+                c.event == ScoreEvent::GoalFor && c.scorer == goat_match::beats::GoalActor::Pc
+            })
             .count();
         println!("  {}", "─".repeat(52));
         println!(
@@ -499,9 +501,11 @@ fn main() {
             }
 
             let goals = r
-                .moments
+                .goal_credits
                 .iter()
-                .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+                .filter(|c| {
+                    c.event == ScoreEvent::GoalFor && c.scorer == goat_match::beats::GoalActor::Pc
+                })
                 .count() as u32;
             let (gf, ga) = (r.goals_for, r.goals_against);
             let res_int: i8 = match gf.cmp(&ga) {

@@ -641,12 +641,11 @@ fn run_next_round(
 
             // PA2 M1: profiles from the real squads, not the static club scalar.
             // Rebuild the population pantheon-style (genesis + replay completed
-            // seasons so youth intake keeps squads fresh).
+            // seasons so youth intake keeps squads fresh) WITH the orbit
+            // residue replayed (PA2 M3: real NPC career stats + form).
             let elapsed_weeks = state.pc_epoch_day / 7;
-            let mut pop = goat_world::population::genesis(world_seed);
-            for s in 1..season {
-                goat_world::batch_tick::batch_tick_season(&mut pop, world_seed, s, s * 52);
-            }
+            let pop =
+                goat_world::orbit::rebuild_population(world_seed, season, &state.orbit_records);
 
             // PA2 M1.5: the club's manager (seed-derived) picks a formation by
             // club style and a lineup by the multi-factor selection score — the
@@ -765,6 +764,7 @@ fn run_next_round(
                             position: pop.position[idx],
                             attrs: v.current,
                             is_pc: false,
+                            id: Some(idx as u32),
                         });
                     }
                 }
@@ -774,6 +774,7 @@ fn run_next_round(
                         position: state.pc_position,
                         attrs: v.current,
                         is_pc: true,
+                        id: None,
                     });
                 }
                 goat_match::squad::SquadSheet { players }
@@ -841,6 +842,24 @@ fn run_next_round(
                 } else {
                     0
                 };
+                // PA2 M3: even with the PC watching, the 21 starters left real
+                // residue (apps + result-based form; goal scorers are unknown
+                // in the quick-sim — no goal credits).
+                state = reduce(
+                    state,
+                    Intent::RecordOrbitMatch {
+                        record: build_orbit_record(
+                            season,
+                            round as u32,
+                            div_idx,
+                            &own_lineup,
+                            &opp_lineup,
+                            &[],
+                            pc_result,
+                        ),
+                    },
+                    &mut GoatRng::new(0),
+                );
                 (0, 0, pc_result, Some((gf, ga)))
             } else {
                 writeln!(
@@ -921,10 +940,16 @@ fn run_next_round(
                     .unwrap();
                 }
 
+                // PA2 M3: the PC's goals are the credits marked Pc — team goals
+                // finished by a named teammate (incl. off the PC's delivery) no
+                // longer inflate his tally.
                 let pc_goals = result
-                    .moments
+                    .goal_credits
                     .iter()
-                    .filter(|m| matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+                    .filter(|c| {
+                        c.event == ScoreEvent::GoalFor
+                            && c.scorer == goat_match::beats::GoalActor::Pc
+                    })
                     .count() as u32;
                 let pc_result: i8 = if result.goals_for > result.goals_against {
                     1
@@ -933,6 +958,25 @@ fn run_next_round(
                 } else {
                     0
                 };
+
+                // PA2 M3: persist the individual residue of this match — every
+                // starter's appearance, the real scorers' goals, and the form
+                // update that feeds next week's selection.
+                state = reduce(
+                    state,
+                    Intent::RecordOrbitMatch {
+                        record: build_orbit_record(
+                            season,
+                            round as u32,
+                            div_idx,
+                            &own_lineup,
+                            &opp_lineup,
+                            &result.goal_credits,
+                            pc_result,
+                        ),
+                    },
+                    &mut GoatRng::new(0),
+                );
 
                 // Apply match effects (familiarity XP + energy cost).
                 state = reduce(
@@ -1091,6 +1135,52 @@ fn club_div_pos_in(div_idx: usize, club_id: usize) -> usize {
         .iter()
         .position(|&c| c == club_id)
         .expect("club in division")
+}
+
+/// PA2 M3: assemble the individual residue of one deep-simmed PC match — one
+/// credit line per starter on each side (an appearance + result for the form
+/// EMA), with goals/assists mapped off the engine's goal credits. `own_result`
+/// is from the PC's club's perspective; the opponent's lines get the mirror.
+fn build_orbit_record(
+    season: u32,
+    round: u32,
+    div_idx: usize,
+    own_lineup: &[usize],
+    opp_lineup: &[usize],
+    goal_credits: &[goat_match::beats::GoalCredit],
+    own_result: i8,
+) -> goat_core::state::OrbitMatchRecord {
+    use goat_match::beats::GoalActor;
+    let mut contributions: std::collections::HashMap<u32, (u8, u8)> =
+        std::collections::HashMap::new();
+    for gc in goal_credits {
+        if let GoalActor::Npc(Some(id)) = gc.scorer {
+            contributions.entry(id).or_insert((0, 0)).0 += 1;
+        }
+        if let Some(GoalActor::Npc(Some(id))) = gc.assist {
+            contributions.entry(id).or_insert((0, 0)).1 += 1;
+        }
+    }
+    let mut credits = Vec::with_capacity(own_lineup.len() + opp_lineup.len());
+    for (&idx, result) in own_lineup
+        .iter()
+        .map(|i| (i, own_result))
+        .chain(opp_lineup.iter().map(|i| (i, -own_result)))
+    {
+        let (goals, assists) = contributions.get(&(idx as u32)).copied().unwrap_or((0, 0));
+        credits.push(goat_core::state::NpcMatchCredit {
+            pop_idx: idx as u32,
+            goals,
+            assists,
+            result,
+        });
+    }
+    goat_core::state::OrbitMatchRecord {
+        season,
+        round,
+        div: div_idx as u8,
+        credits,
+    }
 }
 
 // ── PA2 M1.5: manager relationship helpers ────────────────────────────────────
@@ -2438,12 +2528,10 @@ fn render_world_screen(out: &mut impl Write, state: &WorldState) {
         .unwrap();
     }
 
-    // Your generation: batch-tick the cohort up to now, then crystallise.
-    let mut pop = goat_world::population::genesis(seed);
+    // Your generation: batch-tick the cohort up to now (orbit residue replayed,
+    // PA2 M3 — the rival race sees real deep-sim stats), then crystallise.
     let seasons = state.season_number.max(1);
-    for s in 1..=seasons {
-        goat_world::batch_tick::batch_tick_season(&mut pop, seed, s, s * 52);
-    }
+    let pop = goat_world::orbit::rebuild_population(seed, seasons + 1, &state.orbit_records);
     writeln!(out, "\n  YOUR GENERATION").unwrap();
     match crystallise_rival(&pop, 16 * 52, state.pc_career_goals, state.pc_league_titles) {
         RivalVerdict::Rival {

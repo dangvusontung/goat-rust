@@ -23,8 +23,8 @@ use goat_rng::RngSource;
 use goat_traits::PlayerTraits;
 
 use crate::beats::{
-    DisciplineEvent, GeneratedBeat, GeneratedChoice, GeneratedOutcome, HeadspaceDelta, Possession,
-    ScoreEvent,
+    DisciplineEvent, GeneratedBeat, GeneratedChoice, GeneratedOutcome, GoalActor, GoalCredit,
+    HeadspaceDelta, Possession, ScoreEvent,
 };
 use crate::beats_data::{RawAction, RawBeatLibrary, RawOutcome, RawSituation};
 use crate::contest::{auto_pick_generated_choice, resolve_contest};
@@ -340,19 +340,23 @@ impl BeatLibrary {
         let (own_squad, opp_squad) = (&setup.own_squad, &setup.opp_squad);
         let matchup = pick_matchup(opp_squad, lens.side, lens.zone, rng);
         let opponent_name = matchup.map(|m| m.name.as_str()).unwrap_or("their man");
-        let teammate = own_squad
-            .pick_teammate(rng)
+        let teammate = own_squad.pick_teammate(rng);
+        let assist_pick = own_squad.pick_teammate(rng);
+        let teammate_name = teammate
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "a teammate".into());
-        let assist = own_squad
-            .pick_teammate(rng)
+        let assist = assist_pick
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "a teammate".into());
+        // M3 goal-credit actors for this cast (identity rides along with the
+        // names; no extra RNG draws).
+        let teammate_actor = GoalActor::Npc(teammate.and_then(|p| p.id));
+        let matchup_actor = GoalActor::Npc(matchup.and_then(|m| m.id));
         // On the defensive side, the man who beats you IS the scorer.
         let scorer = if lens.side == Possession::Opp {
             opponent_name.to_string()
         } else {
-            teammate
+            teammate_name
         };
 
         let family = role_family_str(ROLE_POSITION_FAMILY[role as usize]);
@@ -392,6 +396,34 @@ impl BeatLibrary {
             ) else {
                 continue;
             };
+            // M3: attribute the goal BEFORE slot fill erases the raw text.
+            // `{scorer}` in a goal_for text = the teammate finishes (PC assists);
+            // no slot = the PC scored himself. goal_against = the matchup scored.
+            let credit_of = |o: &GeneratedOutcome| {
+                o.score_event.map(|event| match event {
+                    ScoreEvent::GoalFor => {
+                        if o.text.contains("{scorer}") {
+                            GoalCredit {
+                                event,
+                                scorer: teammate_actor,
+                                assist: Some(GoalActor::Pc),
+                            }
+                        } else {
+                            GoalCredit {
+                                event,
+                                scorer: GoalActor::Pc,
+                                assist: None,
+                            }
+                        }
+                    }
+                    ScoreEvent::GoalAgainst => GoalCredit {
+                        event,
+                        scorer: matchup_actor,
+                        assist: None,
+                    },
+                })
+            };
+            let (success_credit, failure_credit) = (credit_of(&success), credit_of(&failure));
             success.text = fill_slots(&success.text, opponent_name, &scorer, &assist);
             failure.text = fill_slots(&failure.text, opponent_name, &scorer, &assist);
             choices.push(GeneratedChoice {
@@ -408,6 +440,8 @@ impl BeatLibrary {
                 foul_serious: raw_action.foul_serious,
                 success,
                 failure,
+                success_credit,
+                failure_credit,
             });
         }
         if choices.is_empty() {
@@ -505,6 +539,9 @@ pub struct MatchResult {
     pub familiarity_xp: [Fixed; NUM_ROLES],
     pub yellow_cards: u8,
     pub red_card: bool,
+    /// Attribution of every goal scored (PA2 M3) — the live game persists
+    /// these against real population players.
+    pub goal_credits: Vec<GoalCredit>,
 }
 
 /// Live match state, advanced tick by tick through the flow.
@@ -523,6 +560,8 @@ pub struct ActiveMatchState {
     pub yellow_cards: u8,
     pub red_card: bool,
     pub moments: Vec<MomentSummary>,
+    /// Attribution of every goal so far (PA2 M3).
+    pub goal_credits: Vec<GoalCredit>,
     pub familiarity_xp: [Fixed; NUM_ROLES],
     pub is_complete: bool,
     pub final_result: Option<MatchResult>,
@@ -576,6 +615,7 @@ pub fn start_match(
         yellow_cards: 0,
         red_card: false,
         moments: Vec::new(),
+        goal_credits: Vec::new(),
         familiarity_xp: [Fixed::ZERO; NUM_ROLES],
         is_complete: false,
         final_result: None,
@@ -859,7 +899,7 @@ fn involved(ms: &ActiveMatchState, rng: &mut impl RngSource) -> bool {
 /// when the possessing side is deep in attacking territory.
 fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) {
     let (possession, zone) = (ms.possession, ms.zone);
-    let (beat_id, mut text, opp_name, scorer_name, assist_name) = {
+    let (beat_id, mut text, opp_name, scorer_name, assist_name, scorer_actor) = {
         let situation = {
             let lens = make_lens(ms);
             lib.pick_situation(&lens, rng)
@@ -875,8 +915,9 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
             Possession::Own => os,
             Possession::Opp => ot,
         };
-        let sc = acting
-            .pick_teammate(rng)
+        let scorer_pick = acting.pick_teammate(rng);
+        let scorer_actor = GoalActor::Npc(scorer_pick.and_then(|p| p.id));
+        let sc = scorer_pick
             .map(|p| p.name.clone())
             .unwrap_or_else(|| "a teammate".into());
         let as_ = acting
@@ -887,7 +928,7 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
         let text = situation
             .map(|s| fill_slots(&s.text, &on, &sc, &as_))
             .unwrap_or_default();
-        (id, text, on, sc, as_)
+        (id, text, on, sc, as_, scorer_actor)
     };
 
     let attacking = matches!(
@@ -957,6 +998,11 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
                 text = fill_slots(&t, &opp_name, &scorer_name, &assist_name);
             }
             goal_event = Some(ev);
+            ms.goal_credits.push(GoalCredit {
+                event: ev,
+                scorer: scorer_actor,
+                assist: None,
+            });
         }
     }
 
@@ -1042,6 +1088,14 @@ fn resolve_choice(
         match ev {
             ScoreEvent::GoalFor => ms.goals_for += 1,
             ScoreEvent::GoalAgainst => ms.goals_against += 1,
+        }
+        let credit = if success {
+            choice.success_credit
+        } else {
+            choice.failure_credit
+        };
+        if let Some(c) = credit {
+            ms.goal_credits.push(c);
         }
         // Kickoff: the side that conceded restarts with the ball (real-football
         // rule — and a natural decoupler: PC goals hand the initiative to the
@@ -1141,6 +1195,7 @@ fn build_result(ms: &ActiveMatchState) -> MatchResult {
         familiarity_xp: ms.familiarity_xp,
         yellow_cards: ms.yellow_cards,
         red_card: ms.red_card,
+        goal_credits: ms.goal_credits.clone(),
     }
 }
 
