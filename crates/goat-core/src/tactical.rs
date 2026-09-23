@@ -129,15 +129,20 @@ impl TacticalProfile {
         .unwrap_or(TacticalStyle::Pressing)
     }
 
-    /// Outfield slot split (defenders, midfielders, forwards — sums to 11) implied
+    /// Outfield slot split (defenders, midfielders, forwards — sums to 10) implied
     /// by the club's dominant style (PA2 M1.5: formation follows club identity):
-    /// Pressing 4-3-4 · Possession 4-5-2 · Counter 5-4-2 · WingPlay 4-4-3.
+    /// Pressing 4-3-3 · Possession 3-5-2 · Counter 5-4-1 · WingPlay 3-4-3.
+    ///
+    /// The population has no goalkeeper entity (positions are D/M/F only), so the
+    /// 11th man is an implicit abstract GK who contributes nothing to the line
+    /// means — they are *averages*, so a 10-outfield mean stays comparable to the
+    /// opponent's top-11-OVR mean.
     pub fn formation_slots(&self) -> (usize, usize, usize) {
         match self.dominant_style() {
-            TacticalStyle::Pressing => (4, 3, 4),
-            TacticalStyle::Possession => (4, 5, 2),
-            TacticalStyle::Counter => (5, 4, 2),
-            TacticalStyle::WingPlay => (4, 4, 3),
+            TacticalStyle::Pressing => (4, 3, 3),
+            TacticalStyle::Possession => (3, 5, 2),
+            TacticalStyle::Counter => (5, 4, 1),
+            TacticalStyle::WingPlay => (3, 4, 3),
         }
     }
 }
@@ -213,19 +218,23 @@ mod tests {
     }
 
     #[test]
-    fn formation_slots_sum_to_eleven_and_follow_dominant_style() {
+    fn formation_slots_sum_to_ten_and_follow_dominant_style() {
         for seed in 0..50 {
             let p = TacticalProfile::derive(50, seed, 7);
             let (d, m, f) = p.formation_slots();
-            assert_eq!(d + m + f, 11, "formation must fill all 11 slots");
-            assert!(d >= 3 && m >= 2 && f >= 1, "sane minimums per line");
+            assert_eq!(
+                d + m + f,
+                10,
+                "formation counts outfield slots only (GK is abstract)"
+            );
+            assert!(d >= 3 && m >= 3 && f >= 1, "sane minimums per line");
             // The dominant style decides the shape: pressing loads the front line,
             // counter loads the back line.
             match p.dominant_style() {
-                TacticalStyle::Pressing => assert_eq!((d, m, f), (4, 3, 4)),
-                TacticalStyle::Possession => assert_eq!((d, m, f), (4, 5, 2)),
-                TacticalStyle::Counter => assert_eq!((d, m, f), (5, 4, 2)),
-                TacticalStyle::WingPlay => assert_eq!((d, m, f), (4, 4, 3)),
+                TacticalStyle::Pressing => assert_eq!((d, m, f), (4, 3, 3)),
+                TacticalStyle::Possession => assert_eq!((d, m, f), (3, 5, 2)),
+                TacticalStyle::Counter => assert_eq!((d, m, f), (5, 4, 1)),
+                TacticalStyle::WingPlay => assert_eq!((d, m, f), (3, 4, 3)),
             }
         }
     }
