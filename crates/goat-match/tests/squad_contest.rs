@@ -63,6 +63,7 @@ fn setup_with_opp_strength(opp_attr: i32) -> MatchSetup {
         staff_mods: goat_core::staff::StaffMods::NEUTRAL,
         own_squad,
         opp_squad,
+        sub_context: None,
     }
 }
 

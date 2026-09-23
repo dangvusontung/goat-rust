@@ -19,7 +19,7 @@ use goat_core::roles::{
 use goat_core::tactical::{TacticalProfile, TacticalStyle};
 use goat_core::tuning::{FAM_XP_IMP_PER_WEEK, FAM_XP_KEY_PER_WEEK, W_IMP, W_KEY};
 use goat_fixed::Fixed;
-use goat_rng::RngSource;
+use goat_rng::{GoatRng, RngSource};
 use goat_traits::PlayerTraits;
 
 use crate::beats::{
@@ -486,6 +486,26 @@ impl BeatLibrary {
 
 // ── Public types ──────────────────────────────────────────────────────────────
 
+/// Substitution inputs the engine needs (PA2 M4). All manager concepts arrive
+/// as plain numbers — goat-match stays world-independent. `seed` drives a
+/// SIDE-STREAM RNG for every sub decision: the match RNG is never consumed,
+/// so a match with `sub_context: None` (all harnesses/golden) is untouched and
+/// a match with one differs ONLY by the substitution itself.
+#[derive(Debug, Clone, Copy)]
+pub struct SubContext {
+    /// Side-stream seed (caller derives it, e.g. `match_seed ^ salt`).
+    pub seed: u64,
+    /// True when the manager left the PC on the bench at kickoff (M1.5 selection).
+    pub pc_starts_on_bench: bool,
+    /// 0–100. High trust: earlier sub-on, later hook.
+    pub manager_trust: i32,
+    /// 0–100. Low patience (Strict): hooks a misfiring starter early.
+    pub manager_patience: i32,
+    /// Tùng's post-injury cameo: just back from injury and not starting → a few
+    /// closing minutes to find his legs, whatever the scoreline says.
+    pub pc_returning_from_injury: bool,
+}
+
 /// Everything the match engine needs to run a match.
 #[derive(Debug, Clone)]
 pub struct MatchSetup {
@@ -513,6 +533,10 @@ pub struct MatchSetup {
     /// of each PC contest (MATCH.md A.5) and the names behind {opponent} and
     /// conceded-goal {scorer}.
     pub opp_squad: SquadSheet,
+    /// Substitution context (PA2 M4). `None` = the PC plays the whole match and
+    /// is never subbed — every harness and the golden match take this path, so
+    /// their output is byte-identical to pre-M4.
+    pub sub_context: Option<SubContext>,
 }
 
 /// Summary of a single flow moment for the commentary feed / post-match recap.
@@ -542,6 +566,9 @@ pub struct MatchResult {
     /// Attribution of every goal scored (PA2 M3) — the live game persists
     /// these against real population players.
     pub goal_credits: Vec<GoalCredit>,
+    /// Minutes the PC was actually on the pitch (PA2 M4). 90 for every
+    /// `sub_context: None` match; 0 = never came on (M1.5 bench semantics).
+    pub minutes_played: u32,
 }
 
 /// Live match state, advanced tick by tick through the flow.
@@ -562,6 +589,20 @@ pub struct ActiveMatchState {
     pub moments: Vec<MomentSummary>,
     /// Attribution of every goal so far (PA2 M3).
     pub goal_credits: Vec<GoalCredit>,
+    // ── PA2 M4 substitutions ─────────────────────────────────────────────────
+    /// False while the PC is off the pitch (benched at kickoff and not yet on,
+    /// or hooked/sent off). Off-pitch ticks are pure auto-beats.
+    pub pc_on_pitch: bool,
+    /// True if he was in the starting XI (a sub who came on is never hooked).
+    pc_started_match: bool,
+    /// Once subbed off he does not re-enter.
+    sub_exhausted: bool,
+    /// Minutes accumulated on the pitch (closed at each flip + at finalise).
+    minutes_played: u32,
+    /// Kickoff/sub-on minute of the current on-pitch stint.
+    last_on_minute: Option<u32>,
+    /// Side-stream RNG for sub decisions — never the match RNG (golden-safe).
+    sub_rng: Option<GoatRng>,
     pub familiarity_xp: [Fixed; NUM_ROLES],
     pub is_complete: bool,
     pub final_result: Option<MatchResult>,
@@ -603,6 +644,29 @@ pub fn start_match(
     };
     let mut ms = ActiveMatchState {
         headspace,
+        pc_on_pitch: setup
+            .sub_context
+            .as_ref()
+            .map(|c| !c.pc_starts_on_bench)
+            .unwrap_or(true),
+        pc_started_match: setup
+            .sub_context
+            .as_ref()
+            .map(|c| !c.pc_starts_on_bench)
+            .unwrap_or(true),
+        sub_exhausted: false,
+        minutes_played: 0,
+        last_on_minute: if setup
+            .sub_context
+            .as_ref()
+            .map(|c| !c.pc_starts_on_bench)
+            .unwrap_or(true)
+        {
+            Some(0)
+        } else {
+            None
+        },
+        sub_rng: setup.sub_context.as_ref().map(|c| GoatRng::new(c.seed)),
         setup,
         minute: 0,
         possession,
@@ -648,7 +712,7 @@ pub fn advance_beat(
     }
 
     // Red mist: extreme frustration can produce a card without any tactical choice.
-    if !ms.red_card {
+    if ms.pc_on_pitch && !ms.red_card {
         if let Some(card) = red_mist_roll(
             ms.headspace.frustration,
             ms.setup.player_aggression,
@@ -707,6 +771,9 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
     // 1. Clock.
     ms.minute = (ms.minute + rng.next_range_u32(TICK_MIN_MINUTES, TICK_MAX_MINUTES)).min(FULL_TIME);
 
+    // 1.5 Substitutions (PA2 M4): side-stream rolls only — never the match RNG.
+    maybe_substitute(ms);
+
     // 2. Momentum decays toward zero; the conceding side's surge winds down.
     ms.momentum -= ms.momentum / MOMENTUM_DECAY_DIV;
     ms.response_ticks = ms.response_ticks.saturating_sub(1);
@@ -734,8 +801,8 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
     // 4. Zone drift for the possessing side.
     drift_zone(ms, rng);
 
-    // 5. Frustration override: a reckless beat hijacks the tick.
-    if ms.force_reckless {
+    // 5. Frustration override: a reckless beat hijacks the tick (on-pitch only).
+    if ms.pc_on_pitch && ms.force_reckless {
         ms.force_reckless = false;
         ms.possession = Possession::Opp;
         ms.zone = PitchZone::Defense;
@@ -748,7 +815,8 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
     }
 
     // 6. Player involvement — the camera (and the ball) comes to the protagonist.
-    if involved(ms, rng) {
+    //    Only while he is actually on the pitch (PA2 M4).
+    if ms.pc_on_pitch && involved(ms, rng) {
         let role = ms.setup.player_role;
         // Pull the action to his zone most of the time; possession follows the
         // role's natural side (a forward is found up front, a defender is mostly
@@ -795,6 +863,105 @@ fn mercy_flags(ms: &ActiveMatchState) -> (bool, bool) {
         ms.goals_for >= ms.goals_against + MERCY_LEAD,
         ms.goals_against >= ms.goals_for + MERCY_LEAD,
     )
+}
+
+// ── Substitutions (PA2 M4) ────────────────────────────────────────────────────
+
+/// Earliest minute the manager considers throwing a benched PC on.
+const SUB_ON_EARLIEST: u32 = 50;
+/// Base sub-on chance per tick (percent) once the window opens.
+const SUB_ON_BASE: u32 = 12;
+/// Extra sub-on chance per goal behind (cap 3) — chasing managers act earlier.
+const SUB_ON_TRAIL: u32 = 8;
+/// Earliest minute a misfiring starter can be hooked.
+const SUB_HOOK_EARLIEST: u32 = 55;
+/// Hook chance per tick once the output is below the manager's threshold.
+const SUB_HOOK_CHANCE: u32 = 12;
+/// Post-injury cameo: earliest minute for the "find his legs" run-out.
+const SUB_CAMEO_EARLIEST: u32 = 80;
+
+/// Push a non-action commentary moment (sub on/off) into the feed.
+fn push_sub_moment(ms: &mut ActiveMatchState, text: String) {
+    ms.moments.push(MomentSummary {
+        beat_id: "sub".to_string(),
+        minute: ms.minute,
+        choice_idx: 0,
+        success: false,
+        setup_text: text.clone(),
+        outcome_text: text,
+        goal_event: None,
+        is_action: false,
+    });
+}
+
+fn sub_pc_on(ms: &mut ActiveMatchState, text: &str) {
+    ms.pc_on_pitch = true;
+    ms.last_on_minute = Some(ms.minute);
+    push_sub_moment(ms, text.to_string());
+}
+
+fn sub_pc_off(ms: &mut ActiveMatchState, text: &str) {
+    ms.pc_on_pitch = false;
+    if let Some(on) = ms.last_on_minute.take() {
+        ms.minutes_played += ms.minute.saturating_sub(on);
+    }
+    ms.sub_exhausted = true;
+    push_sub_moment(ms, text.to_string());
+}
+
+/// The manager's substitution decision, evaluated once per tick on the
+/// SIDE-STREAM RNG (`sub_rng`) — the match RNG never sees these rolls, so the
+/// underlying match is identical with or without the substitution layer.
+fn maybe_substitute(ms: &mut ActiveMatchState) {
+    let (Some(ctx), Some(srng)) = (&ms.setup.sub_context, ms.sub_rng.as_mut()) else {
+        return;
+    };
+    let minute = ms.minute;
+    if ms.pc_on_pitch {
+        // Hook rule: starters only, playing below the manager's bar.
+        if ms.pc_started_match && minute >= SUB_HOOK_EARLIEST {
+            let threshold = 45 + (50 - ctx.manager_patience) / 10 - (ctx.manager_trust - 50) / 10;
+            if ms.player_output < threshold && srng.next_range_u32(1, 100) <= SUB_HOOK_CHANCE {
+                sub_pc_off(
+                    ms,
+                    "Your number goes up. The manager has seen enough — you're coming off.",
+                );
+            }
+        }
+        return;
+    }
+    if ms.sub_exhausted {
+        return;
+    }
+    // Post-injury cameo: gentle closing minutes, whatever the scoreline.
+    // A returning player is NEVER thrown on earlier by the normal rule — the
+    // manager is protecting his fitness (Tùng's locked note).
+    if ctx.pc_returning_from_injury {
+        if minute >= SUB_CAMEO_EARLIEST {
+            sub_pc_on(
+                ms,
+                "Gentle minutes to find your legs again — you're on for the closing stages.",
+            );
+        }
+        return;
+    }
+    if minute < SUB_ON_EARLIEST {
+        return;
+    }
+    let behind = (ms.goals_against as i32 - ms.goals_for as i32).clamp(0, 3) as u32;
+    let lead = ms.goals_for as i32 - ms.goals_against as i32;
+    let mut chance = (SUB_ON_BASE + behind * SUB_ON_TRAIL) as i32 + (ctx.manager_trust - 50) / 5;
+    if lead >= 2 {
+        chance /= 2; // comfortable lead — the manager rests him
+    }
+    // Guarantees: chasing sides act by 72', level games by 78', anything but a
+    // big lead by 84'. A comfortable lead to the end can mean a DNP.
+    if (minute >= 72 && behind > 0) || (minute >= 78 && lead == 0) || (minute >= 84 && lead <= 1) {
+        chance = 100;
+    }
+    if chance > 0 && srng.next_range_u32(1, 100) <= chance.max(1) as u32 {
+        sub_pc_on(ms, "The board goes up — your number. You're on.");
+    }
 }
 
 /// A goal was just scored: the conceding side surges for the next few ticks.
@@ -1175,6 +1342,14 @@ fn apply_card(ms: &mut ActiveMatchState, card: DisciplineEvent) {
         DisciplineEvent::YellowCard => ms.yellow_cards += 1,
         DisciplineEvent::RedCard => {
             ms.red_card = true;
+            // Sent off: his minutes close here and he is done for the day.
+            if ms.pc_on_pitch {
+                ms.pc_on_pitch = false;
+                if let Some(on) = ms.last_on_minute.take() {
+                    ms.minutes_played += ms.minute.saturating_sub(on);
+                }
+                ms.sub_exhausted = true;
+            }
             finalize(ms);
         }
     }
@@ -1187,8 +1362,23 @@ fn finalize(ms: &mut ActiveMatchState) {
 }
 
 fn build_result(ms: &ActiveMatchState) -> MatchResult {
+    // Close any open on-pitch stint (full time, or whatever stopped the match).
+    let mut minutes = ms.minutes_played;
+    if ms.pc_on_pitch {
+        minutes += ms.minute.saturating_sub(ms.last_on_minute.unwrap_or(0));
+    }
+    let minutes_played = minutes.min(FULL_TIME);
+    // Linear opportunity weighting (PA2 M4, locked): a player can only move his
+    // rating while on the pitch — the minutes he missed blend him back toward
+    // the neutral 50. Gated on sub_context so harness/golden matches (always
+    // 90') stay byte-identical even when a red card ends them early.
+    let player_output = if ms.setup.sub_context.is_some() && minutes_played < FULL_TIME {
+        50 + (ms.player_output - 50) * minutes_played as i32 / FULL_TIME as i32
+    } else {
+        ms.player_output
+    };
     MatchResult {
-        player_output: ms.player_output,
+        player_output,
         goals_for: ms.goals_for,
         goals_against: ms.goals_against,
         moments: ms.moments.clone(),
@@ -1196,6 +1386,7 @@ fn build_result(ms: &ActiveMatchState) -> MatchResult {
         yellow_cards: ms.yellow_cards,
         red_card: ms.red_card,
         goal_credits: ms.goal_credits.clone(),
+        minutes_played,
     }
 }
 

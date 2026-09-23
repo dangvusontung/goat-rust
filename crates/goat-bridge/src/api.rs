@@ -820,6 +820,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
                 match_seed ^ 0x5A06_0002,
                 (4, 3, 3),
             ),
+            sub_context: None,
         };
 
         let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
@@ -1502,6 +1503,7 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
                 match_seed ^ 0x5A07_0002,
                 (4, 3, 3),
             ),
+            sub_context: None,
         };
 
         let ms = with_beat_lib(|lib| start_match(lib, setup, &mut rng));

@@ -220,6 +220,7 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                     match_seed ^ 0x5A05_0002,
                     (4, 3, 3),
                 ),
+                sub_context: None,
             };
 
             let result = auto_play_match(beat_lib, setup, &mut GoatRng::new(match_seed));
