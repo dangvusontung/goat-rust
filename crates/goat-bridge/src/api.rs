@@ -808,6 +808,18 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
             dirty_rep: state.pc_discipline_rep,
             player_traits: PlayerTraits::default(),
             staff_mods: goat_world::staff::club_staff_mods(own_str),
+            // M2: the bridge keeps its static-profile path for now; synthetic
+            // sheets until the client milestone wires real squads (CLIENT-IMPL).
+            own_squad: goat_match::squad::SquadSheet::stub(
+                own_str,
+                match_seed ^ 0x5A06_0001,
+                (4, 3, 3),
+            ),
+            opp_squad: goat_match::squad::SquadSheet::stub(
+                opp.strength,
+                match_seed ^ 0x5A06_0002,
+                (4, 3, 3),
+            ),
         };
 
         let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
@@ -1479,6 +1491,17 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
             dirty_rep: s.pc_discipline_rep,
             player_traits: PlayerTraits::default(),
             staff_mods: goat_world::staff::club_staff_mods(own_str),
+            // M2: synthetic sheets until the client milestone wires real squads.
+            own_squad: goat_match::squad::SquadSheet::stub(
+                own_str,
+                match_seed ^ 0x5A07_0001,
+                (4, 3, 3),
+            ),
+            opp_squad: goat_match::squad::SquadSheet::stub(
+                opp.strength,
+                match_seed ^ 0x5A07_0002,
+                (4, 3, 3),
+            ),
         };
 
         let ms = with_beat_lib(|lib| start_match(lib, setup, &mut rng));

@@ -4,9 +4,10 @@
 **Scope (this task):** milestones **M1** (done) and **M1.5** (this round) — roster-derived
 tactical profiles + the manager/selection model. Milestones M2/M3/M4 are listed under
 "Roadmap" for context but are NOT this task.
-**Status:** M1 ✅ (2026-09-23, commit `b9361ed`). M1.5 ✅ IMPLEMENTED (2026-09-23) —
-manager derive + trust/favor (save v11) + formation + selection/bench path + hooks;
-`scripts/test.sh` fully green; no `goat-match`/golden diff.
+**Status:** M1 ✅ (commit `b9361ed`) · M1.5 ✅ (`f1ef256`, formation fix `2005f3a`) ·
+M2 ✅ IMPLEMENTED (2026-09-23) — SquadSheet + matchup-driven contests (A.5) +
+real-name commentary; golden seed 42 re-frozen 52/2-2 → 57/1-1 (justified in
+`golden_match.rs` + sim-analysis); `scripts/test.sh` green; match-batch re-validated.
 **Relationship to prior design:** PA2 design thread (2026-09-23, Tùng + assistant). Engine tuning rounds 2/3 (commits `177dc98`, `09869f1`, `f8f7e6c`) are orthogonal — M1 must not invalidate them.
 
 ---
@@ -231,3 +232,115 @@ suspension path kept for suspensions).
   club (5-4-1 after the outfield-only fix) has a single forward slot, so forwards there
   are benched more often —
   realistic, but M4 (late-game sub cameos) is the intended pressure valve.
+
+---
+
+# M2 — Individuals in the contest + real-name commentary
+
+**Approved by Tùng (2026-09-23).** This IS an engine change: golden seed 42 will be
+re-frozen (justification required) and match-batch re-validated. Counter stays 5-4-1
+(locked). M1.5b (display-only names) is parked — M2 supersedes it.
+
+## Verified current state (read before touching anything)
+
+- `MatchSetup` (`goat-match/src/sim.rs:428`) has no NPC slot; the engine reads only the
+  3 line scalars + 4 style weights. 9 construction sites: `golden_match.rs` (2),
+  `match_batch.rs` (1), `career_sim.rs` (3), `main.rs` (2 — first-team + academy),
+  `goat-bridge/api.rs` (2), `goat-tui/tests/full_sim.rs` (1).
+- Contest difficulty: `scaled_difficulty` (`sim.rs:1196`) — authored base +
+  `(line_stat − 50)/2` where line_stat is opp.attack/defense/mid by the action attr's
+  family. No individual is ever read (violates MATCH.md A.5's locked principle).
+- Generic text lives in `beats.json`: `att_assist` ("your teammate finishes it off!"),
+  `auto_goal_for_header` ("your teammate rises highest"), `auto_goal_against_header`
+  ("Their forward meets the cross"), plus "their forward/winger/full-back/midfielder/
+  striker" in several situations and "him/he" in outcomes (`att_beat_man`, `att_won_fk`,
+  `def_beaten_wide`, `def_dragged_out`).
+- Texts are stored verbatim into `MomentSummary.setup_text/outcome_text` at beat-build /
+  auto-beat time — the slot fill must happen there, not at render.
+- `beats_test.json` is referenced only by docs — no code loads it; left alone.
+- goat-match must NOT depend on goat-world (layering): squads arrive as data; the real
+  names (`history::name_from_seed`) are resolved by the *caller* (goat-tui).
+- Live loop already computes everything a SquadSheet needs: formation lineup indices
+  (M1.5) + `Population::promote` (full attrs) + `name_from_seed`.
+- Bridge (`goat-bridge/api.rs:792,1463`) builds its own static-profile setups for the
+  Flutter client — out of M2's gameplay scope; it gets stub squads to compile (real
+  squads there are a client milestone, see docs/CLIENT-IMPL.md).
+
+## Design (locked)
+
+### (c) SquadSheet — `goat-match/src/squad.rs` (new)
+
+```rust
+pub struct SquadPlayer { pub name: String, pub position: u8 /*0=D,1=M,2=F*/,
+                         pub attrs: [Fixed; NUM_ATTRS], pub is_pc: bool }
+pub struct SquadSheet { pub players: Vec<SquadPlayer> }  // starting XI
+```
+
+`MatchSetup` gains `own_squad: SquadSheet, opp_squad: SquadSheet` (mandatory — no
+dual code path). `SquadSheet::stub(strength, seed)` gives deterministic synthetic
+sheets for harnesses/tests/academy/bridge (attrs centred on strength with seeded
+variance; names from a small built-in pool — goat-match stays world-independent).
+The live loop (goat-tui) builds REAL sheets from the M1.5 lineup: own = formation
+lineup (PC flagged `is_pc`) via `lineup_indices_formation`, opp = top-11 OVR via
+`lineup_indices`; each promoted with `name_from_seed(pop.seed[idx])`.
+
+### (a) Contest-level individuals (MATCH.md A.5)
+
+In `build_beat`, the PC's contest now has a specific opponent on the far side:
+
+- **Matchup pool** from `opp_squad`: side=attack → opp defenders (midfield zone →
+  midfielders); side=defend → opp forwards (midfield zone → midfielders). Fallback:
+  whole squad. One seeded draw per beat.
+- **Counter-stat**: by the action attr's family, read off the matchup's real attrs —
+  PC attacking attrs (shoot/pass/dribble) → his mean(DEFENDING); PC defending attrs →
+  his mean(SHOOTING+DRIBBLING); others → mean of those groups.
+- **Blend (locked 50/50):** effective stat = `(line_stat + matchup_stat) / 2`, then the
+  existing `(stat − 50)/2` difficulty scaling applies unchanged. Squad quality stays
+  felt through BOTH the team line and the specific man — a 90-rated CB is genuinely
+  harder to beat than his 60-rated partner on the same team.
+- The matchup's name also fills `{opponent}` in this beat's texts — the man you beat
+  (or who beat you) is named consistently.
+
+### (b) Template slots in beats.json
+
+- `{opponent}` — the beat's matchup (both directions).
+- `{scorer}` — goal outcomes: PC-action attack goal where the teammate finishes → own
+  NPC (position-weighted pick FWD3/MID2/DEF1, PC excluded); defend-side `goal_against`
+  → the matchup himself; auto `goal_for` → own NPC forward-weighted; auto
+  `goal_against` → opp NPC forward-weighted.
+- `{assist}` — own NPC (mid/forward pick).
+- Rewritten texts: `att_assist`, `att_beat_man`, `att_won_fk`, `def_beaten_goal`,
+  `def_beaten_wide`, `def_dragged_out`, all 6 `auto_goal_*`, and the situations with
+  "their forward/winger/full-back/midfielder/striker".
+- Filled at build/auto-beat time via a per-beat cast (matchup + scorer + assist, 3
+  seeded draws), stored pre-filled in `MomentSummary`.
+
+### Golden + validation
+
+- Golden seed 42 re-freeze EXPECTED: new RNG draws (matchup/name picks) + the 50/50
+  difficulty blend change contest math. Flow rules (possession/zone/momentum/auto-goal)
+  are untouched. Justification goes in the commit message + sim-analysis.
+- match-batch 100k before (already logged, post-M1.5 run) vs after — distribution must
+  stay sane (W/D/L, goals, clean sheets, SiD, rating dist); mean rating may move
+  slightly from matchup variance.
+- Harnesses (`match-batch`, `career-sim`, `full_sim`) use `SquadSheet::stub` centred on
+  their controlled strengths; `golden_match.rs` uses fixed sheets with const names.
+
+## Out of scope (M2)
+
+- Actor-swap contests (A.4: you pass → HIS finishing resolves) — bigger content/beat
+  change, future milestone.
+- NPC stat accumulation / real NPC form (M3), substitutions (M4).
+- Bridge real squads (client milestone).
+
+## DoD (M2)
+
+- [x] `squad.rs` + `MatchSetup` fields; all 9 construction sites updated; stub sheets
+      deterministic.
+- [x] Matchup-driven difficulty (50/50 blend) — a strong CB measurably harder to beat
+      than his weak partner (unit test `strong_matchup_harder_than_weak_partner`).
+- [x] beats.json fully templated; no "your teammate"/"their forward" survives in
+      commentary output; `{scorer}/{opponent}/{assist}` filled from real squads in the
+      live game (TUI smoke shows real names).
+- [x] Golden re-frozen with justification; `scripts/test.sh` green.
+- [x] match-batch 100k before/after table in docs/sim-analysis.md.

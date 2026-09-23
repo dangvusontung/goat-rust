@@ -218,3 +218,43 @@ Smoke-run observations (TUI, seed 7): fresh 64-OVR 16yo benched 8/8 at a 5★ cl
 Strict manager; starts at a Third Division club until skipped training erodes trust. A
 live-loop season harness (drive `run_next_round` headless, tally W/D/L + bench rate + trust
 trajectory) is the missing measurement tool — candidate follow-up before M2.
+
+## PA2 M2 — individuals in the contest + real-name commentary (engine change)
+
+M2 brought the 22 real individuals into the match (commit after this entry):
+`SquadSheet` (names + full attrs) on `MatchSetup`, a specific matchup opponent per
+PC beat whose real counter-attrs blend 50/50 with the team line into difficulty
+(MATCH.md A.5), and `{scorer}/{opponent}/{assist}` template slots in beats.json
+filled from the sheets. Harnesses use `SquadSheet::stub` centred on their controlled
+strengths, so this batch measures the A.5 difficulty change (not the live loop's
+real squads, which no batch harness exercises — same caveat as M1/M1.5).
+
+**Golden seed 42 re-frozen (52/2-2 → 57/1-1, 25 moments):** intentional — matchup
+draws + name picks consume match RNG and the 50/50 blend shifts contest math.
+Flow rules (possession/zone/momentum/auto-goal/mercy/response) untouched. The
+12 non-value golden behaviour tests (chains cap, role zones, stronger-team,
+headspace bounds, ref/aggression…) all pass unchanged.
+
+| Metric (match-batch 100k, seed 0xBA7C4) | Pre-M2 (post-M1.5) | M2 |
+|---|---|---|
+| W / D / L % | 39.7 / 25.4 / 34.9 | 39.5 / 25.4 / 35.1 |
+| Goals/match (for–against) | 3.01 (1.55–1.46) | 3.02 (1.55–1.47) |
+| Clean sheets | 17.1% | 16.6% |
+| PC 2+ goals & L | 3.24% | 3.39% |
+| Starred-in-defeat (≥70 & L / ≥80 & L) | 4.37% / 0.68% | 4.68% / 0.76% |
+| Carried-to-win (≤45 & W) | 1.97% | 1.95% |
+| Rating 90–100 / pile at 100 (star band) | 2.3% / 0.00% | 2.2% / 0.00% |
+| Mean rating | 61.2 | 61.3 |
+
+match-sim star striker (N=5000, seeds 7/11/23): starred-in-defeat **2.04/2.40/2.72%**
+(was 2.40/2.18/2.52) — still mid-band on the 2–4% target.
+
+Read: the 50/50 individual blend adds per-beat difficulty variance (starred-in-defeat
++0.3pp, 2+-goals-and-lost +0.15pp — slightly more decoupling, in the right direction)
+without touching team-level balance. No new rail pile-ups; per-position splits stable.
+
+Live-game smoke (TUI, real population squads): commentary names real players both
+directions — "Isolated out wide: just you and Viktor Adeyemi.", "You receive with
+your back to goal, Viktor Adeyemi tight on you.", and in career-sim's stub-sheet
+feed "A lightning break — L. Ferreira applies the finishing touch. GOAL!",
+"J. Hartley beats you clean — and it ends up in your net."

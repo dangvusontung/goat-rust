@@ -734,6 +734,55 @@ fn run_next_round(
                     )
                 });
 
+            // PA2 M2: the 22 real individuals on the pitch — names + full
+            // attribute sets for contest matchups (A.5) and real-name
+            // commentary. Own sheet = the M1.5 formation lineup (PC flagged
+            // when he starts); opp sheet = top-11 OVR (locked simple).
+            let npc_slots = if pc_starts {
+                let mut s = slots;
+                match state.pc_position {
+                    0 => s.0 = s.0.saturating_sub(1),
+                    1 => s.1 = s.1.saturating_sub(1),
+                    _ => s.2 = s.2.saturating_sub(1),
+                }
+                s
+            } else {
+                slots
+            };
+            let build_sheet = |lineup: &[usize],
+                               pc: Option<&goat_core::player::PlayerView>|
+             -> goat_match::squad::SquadSheet {
+                let mut players = Vec::with_capacity(lineup.len() + 1);
+                for &idx in lineup {
+                    if let Some(v) = pop.promote(
+                        idx,
+                        elapsed_weeks,
+                        goat_world::history::name_from_seed(pop.seed[idx]),
+                        &world,
+                    ) {
+                        players.push(goat_match::squad::SquadPlayer {
+                            name: v.name.clone(),
+                            position: pop.position[idx],
+                            attrs: v.current,
+                            is_pc: false,
+                        });
+                    }
+                }
+                if let Some(v) = pc {
+                    players.push(goat_match::squad::SquadPlayer {
+                        name: v.name.clone(),
+                        position: state.pc_position,
+                        attrs: v.current,
+                        is_pc: true,
+                    });
+                }
+                goat_match::squad::SquadSheet { players }
+            };
+            let own_lineup = pop.lineup_indices_formation(pc_club_id, elapsed_weeks, npc_slots);
+            let own_squad = build_sheet(&own_lineup, if pc_starts { Some(&view) } else { None });
+            let opp_lineup = pop.lineup_indices(opp_id, elapsed_weeks, 11);
+            let opp_squad = build_sheet(&opp_lineup, None);
+
             // Ref personality: seeded from match seed (deterministic, not consuming match RNG).
             let ref_personality = {
                 let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
@@ -822,6 +871,8 @@ fn run_next_round(
                     dirty_rep: state.pc_discipline_rep,
                     player_traits: pc_traits,
                     staff_mods: goat_world::staff::club_staff_mods(own_str),
+                    own_squad: own_squad.clone(),
+                    opp_squad: opp_squad.clone(),
                 };
 
                 let result = if play_interactive {
@@ -1282,6 +1333,18 @@ fn run_academy_round(
         dirty_rep: state.pc_discipline_rep,
         player_traits: pc_traits,
         staff_mods: goat_world::staff::club_staff_mods(own_u21),
+        // M2: academy matches get synthetic U21 sheets (real U21 rosters are
+        // not modelled — the population tracks first-team squads only).
+        own_squad: goat_match::squad::SquadSheet::stub(
+            own_u21,
+            match_seed ^ 0xACAD_0001,
+            (4, 3, 3),
+        ),
+        opp_squad: goat_match::squad::SquadSheet::stub(
+            opp_u21,
+            match_seed ^ 0xACAD_0002,
+            (4, 3, 3),
+        ),
     };
 
     let result = if play_interactive {
