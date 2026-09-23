@@ -234,6 +234,60 @@ impl Population {
         view.age_weeks = (self.birth_age_weeks[idx] + elapsed_weeks as i64).max(0) as u32;
         Some(view)
     }
+
+    /// Indices of a club's match-day lineup (PA2 M1): the top `count` available
+    /// squad members by current OVR at `elapsed_weeks`, skipping the retired.
+    /// Deterministic — ties broken by population index (insertion order).
+    pub fn lineup_indices(&self, club_id: usize, elapsed_weeks: u32, count: usize) -> Vec<usize> {
+        let mut squad: Vec<usize> = (0..self.len())
+            .filter(|&i| self.club[i] as usize == club_id && !self.is_retired(i, elapsed_weeks))
+            .collect();
+        squad.sort_by_key(|&i| std::cmp::Reverse(self.current_ovr(i, elapsed_weeks)));
+        squad.truncate(count);
+        squad
+    }
+
+    /// Mean current attributes of a club's lineup (PA2 M1), optionally plus one
+    /// external player (the PC occupies a starting slot, so his real attrs lift
+    /// the team profile). Returns `None` if the club cannot field a full side.
+    pub fn squad_avg_attrs(
+        &self,
+        club_id: usize,
+        elapsed_weeks: u32,
+        world: &GeneratedWorld,
+        extra: Option<&[Fixed; NUM_ATTRS]>,
+    ) -> Option<[Fixed; NUM_ATTRS]> {
+        let n_npc = 11 - usize::from(extra.is_some());
+        let lineup = self.lineup_indices(club_id, elapsed_weeks, n_npc);
+        if lineup.len() < n_npc {
+            return None;
+        }
+        let mut sums = [0i64; NUM_ATTRS];
+        let mut n = 0i64;
+        for idx in lineup {
+            let view = self.promote(
+                idx,
+                elapsed_weeks,
+                crate::history::name_from_seed(self.seed[idx]),
+                world,
+            )?;
+            for (a, s) in sums.iter_mut().enumerate() {
+                *s += view.current[a].to_raw() as i64;
+            }
+            n += 1;
+        }
+        if let Some(attrs) = extra {
+            for (a, s) in sums.iter_mut().enumerate() {
+                *s += attrs[a].to_raw() as i64;
+            }
+            n += 1;
+        }
+        let mut avg = [Fixed::ZERO; NUM_ATTRS];
+        for (a, v) in avg.iter_mut().enumerate() {
+            *v = Fixed::raw((sums[a] / n) as i32);
+        }
+        Some(avg)
+    }
 }
 
 #[cfg(test)]
@@ -312,5 +366,41 @@ mod tests {
             pop.promote(idx, elapsed, "Veteran", &world).is_none(),
             "a retired player must never promote to an active view"
         );
+    }
+
+    #[test]
+    fn lineup_picks_highest_ovr_and_skips_retired() {
+        let pop = genesis(7);
+        let lineup = pop.lineup_indices(3, 260, 11);
+        assert_eq!(lineup.len(), 11);
+        // Every picked player outranks every unpicked squad mate.
+        let min_picked = lineup
+            .iter()
+            .map(|&i| pop.current_ovr(i, 260))
+            .min()
+            .unwrap();
+        for i in 0..pop.len() {
+            if pop.club[i] as usize == 3 && !lineup.contains(&i) && !pop.is_retired(i, 260) {
+                assert!(pop.current_ovr(i, 260) <= min_picked);
+            }
+        }
+        // Late enough that the oldest squad members are retired → they can't be picked.
+        let late = pop.lineup_indices(3, 22 * 52, 11);
+        for &i in &late {
+            assert!(!pop.is_retired(i, 22 * 52));
+        }
+    }
+
+    #[test]
+    fn squad_avg_attrs_deterministic_and_pc_lifts_profile() {
+        let pop = genesis(5);
+        let world = generate_world(5);
+        let a = pop.squad_avg_attrs(2, 260, &world, None).unwrap();
+        let b = pop.squad_avg_attrs(2, 260, &world, None).unwrap();
+        assert_eq!(a, b, "lineup attrs must be deterministic");
+        // A superstar PC in the side raises every group mean.
+        let star = [Fixed::from_int(95); NUM_ATTRS];
+        let with_pc = pop.squad_avg_attrs(2, 260, &world, Some(&star)).unwrap();
+        assert!(with_pc[2] > a[2], "PC attrs must lift the squad mean");
     }
 }

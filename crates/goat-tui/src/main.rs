@@ -613,6 +613,48 @@ fn run_next_round(
             let match_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
             let mut match_rng = GoatRng::new(match_seed);
 
+            // PA2 M1: profiles from the real squads, not the static club scalar.
+            // Rebuild the population pantheon-style (genesis + replay completed
+            // seasons so youth intake keeps squads fresh); the PC holds one
+            // starting slot, so his real attrs lift his own team's profile.
+            let elapsed_weeks = state.pc_epoch_day / 7;
+            let mut pop = goat_world::population::genesis(world_seed);
+            for s in 1..season {
+                goat_world::batch_tick::batch_tick_season(&mut pop, world_seed, s, s * 52);
+            }
+            let own_profile = pop
+                .squad_avg_attrs(pc_club_id, elapsed_weeks, &world, Some(&view.current))
+                .map(|avg| {
+                    goat_core::tactical::TacticalProfile::from_squad(
+                        &avg,
+                        pc_club_id as u32,
+                        world_seed,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    goat_core::tactical::TacticalProfile::derive(
+                        own_str,
+                        pc_club_id as u32,
+                        world_seed,
+                    )
+                });
+            let opp_profile = pop
+                .squad_avg_attrs(opp_id, elapsed_weeks, &world, None)
+                .map(|avg| {
+                    goat_core::tactical::TacticalProfile::from_squad(
+                        &avg,
+                        opp_id as u32,
+                        world_seed,
+                    )
+                })
+                .unwrap_or_else(|| {
+                    goat_core::tactical::TacticalProfile::derive(
+                        opp.strength,
+                        opp_id as u32,
+                        world_seed,
+                    )
+                });
+
             // Ref personality: seeded from match seed (deterministic, not consuming match RNG).
             let ref_personality = {
                 let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
@@ -623,16 +665,8 @@ fn run_next_round(
                 player_role: best_role_for_position(state.pc_position),
                 player_attrs: view.current,
                 player_familiarity: view.familiarity,
-                own_profile: goat_core::tactical::TacticalProfile::derive(
-                    own_str,
-                    pc_club_id as u32,
-                    world_seed,
-                ),
-                opp_profile: goat_core::tactical::TacticalProfile::derive(
-                    opp.strength,
-                    opp_id as u32,
-                    world_seed,
-                ),
+                own_profile,
+                opp_profile,
                 opp_name: static_name(&opp.name),
                 form: state.pc_form,
                 player_aggression: view.current[goat_core::attrs::AttrId::Aggression as usize]
