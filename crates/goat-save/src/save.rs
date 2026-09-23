@@ -15,7 +15,9 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// v9: academy arc fields (Phase B) — appended, v8 saves load with defaults.
 /// v10: personal staff (Phase C) — appended, older saves load with vacancies.
 /// v11: manager relationship (PA2 M1.5) — appended, older saves load neutral (50/50).
-pub const VERSION: u32 = 11;
+/// v12: orbit individual residue (PA2 M3) — appended, older saves load with an
+/// empty overlay (pure M1.5 world, no deep-sim individual stats).
+pub const VERSION: u32 = 12;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -97,6 +99,9 @@ pub struct SaveData {
     // ── PA2 M1.5 manager relationship (v11+) ─────────────────────────────────
     pub pc_manager_trust: i32,
     pub pc_manager_favor: i32,
+    // ── PA2 M3 orbit individual residue (v12+) ───────────────────────────────
+    /// Append-only log of individual NPC stats from deep-simmed PC matches.
+    pub orbit_records: Vec<goat_core::state::OrbitMatchRecord>,
 }
 
 #[derive(Debug)]
@@ -203,6 +208,7 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         }),
         pc_manager_trust: state.pc_manager_trust,
         pc_manager_favor: state.pc_manager_favor,
+        orbit_records: state.orbit_records.clone(),
     }
 }
 
@@ -415,6 +421,7 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
     state.pc_academy_hype = data.pc_academy_hype;
     state.pc_manager_trust = data.pc_manager_trust;
     state.pc_manager_favor = data.pc_manager_favor;
+    state.orbit_records = data.orbit_records.clone();
     for (i, &(q, w)) in data.pc_personal_staff.iter().enumerate() {
         state.pc_personal_staff[i] = goat_core::staff::PersonalStaff {
             quality: q,
@@ -523,6 +530,20 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
     // PA2 M1.5 manager relationship (v11+)
     push_i32(&mut v, d.pc_manager_trust);
     push_i32(&mut v, d.pc_manager_favor);
+    // PA2 M3 orbit individual residue (v12+)
+    push_u32(&mut v, d.orbit_records.len() as u32);
+    for rec in &d.orbit_records {
+        push_u32(&mut v, rec.season);
+        push_u32(&mut v, rec.round);
+        v.push(rec.div);
+        push_u32(&mut v, rec.credits.len() as u32);
+        for c in &rec.credits {
+            push_u32(&mut v, c.pop_idx);
+            v.push(c.goals);
+            v.push(c.assists);
+            v.push(c.result as u8);
+        }
+    }
     v
 }
 
@@ -652,6 +673,43 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     // PA2 M1.5 manager relationship (v11+; older saves load neutral)
     let pc_manager_trust = read_i32(b, &mut cur).unwrap_or(50);
     let pc_manager_favor = read_i32(b, &mut cur).unwrap_or(50);
+    // PA2 M3 orbit individual residue (v12+; older saves have no deep-sim stats)
+    let mut orbit_records = Vec::new();
+    if let Ok(n_records) = read_u32(b, &mut cur) {
+        for _ in 0..n_records {
+            let (Ok(season), Ok(round), Ok(div), Ok(n_credits)) = (
+                read_u32(b, &mut cur),
+                read_u32(b, &mut cur),
+                read_u8(b, &mut cur),
+                read_u32(b, &mut cur),
+            ) else {
+                break;
+            };
+            let mut credits = Vec::with_capacity(n_credits as usize);
+            for _ in 0..n_credits {
+                let (Ok(pop_idx), Ok(goals), Ok(assists), Ok(result)) = (
+                    read_u32(b, &mut cur),
+                    read_u8(b, &mut cur),
+                    read_u8(b, &mut cur),
+                    read_u8(b, &mut cur),
+                ) else {
+                    break;
+                };
+                credits.push(goat_core::state::NpcMatchCredit {
+                    pop_idx,
+                    goals,
+                    assists,
+                    result: result as i8,
+                });
+            }
+            orbit_records.push(goat_core::state::OrbitMatchRecord {
+                season,
+                round,
+                div,
+                credits,
+            });
+        }
+    }
 
     Ok(SaveData {
         world_seed,
@@ -714,6 +772,7 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_personal_staff,
         pc_manager_trust,
         pc_manager_favor,
+        orbit_records,
     })
 }
 

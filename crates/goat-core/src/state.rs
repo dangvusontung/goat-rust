@@ -155,6 +155,11 @@ pub struct WorldState {
     pub pc_epoch_day: u32,
     /// Calendar flashpoints (window openings) surfaced by the most recent week tick.
     pub last_week_flashpoints: Vec<CalendarFlashpoint>,
+    // ── PA2 M3 — orbit individual residue ────────────────────────────────────
+    /// Append-only log of individual NPC stats from deep-simmed PC matches,
+    /// replayed into the population (career goals/apps + form) on every
+    /// rebuild. Persisted in the save (v12+).
+    pub orbit_records: Vec<OrbitMatchRecord>,
 }
 
 /// Batch-ticked career state for one cohort peer (Phase 9).
@@ -172,6 +177,33 @@ pub struct PeerState {
     pub avg_output: u8,
     /// League titles (batch-ticked).
     pub titles: u32,
+}
+
+// ── PA2 M3 — orbit individual residue ─────────────────────────────────────────
+
+/// One NPC's individual line in one deep-simmed PC match. An appearance is one
+/// credit line (starters only — no substitutions until M4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NpcMatchCredit {
+    /// Population index (stable per world_seed across genesis + season replay).
+    pub pop_idx: u32,
+    pub goals: u8,
+    pub assists: u8,
+    /// His club's result from his side: 1 win, 0 draw, -1 loss (feeds form).
+    pub result: i8,
+}
+
+/// The individual residue of one deep-simmed PC match: every starter of both
+/// squads gets one credit. Path-dependent (the match RNG chose the scorers), so
+/// these records are persisted in the save and replayed into the population on
+/// every rebuild — everything NOT touched by a PC match stays purely derived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrbitMatchRecord {
+    pub season: u32,
+    pub round: u32,
+    /// Division the fixture belonged to (PC may change divisions between seasons).
+    pub div: u8,
+    pub credits: Vec<NpcMatchCredit>,
 }
 
 impl WorldState {
@@ -240,6 +272,7 @@ impl WorldState {
             pc_week_training_done: false,
             pc_epoch_day: 0,
             last_week_flashpoints: Vec::new(),
+            orbit_records: Vec::new(),
         }
     }
 }
@@ -409,6 +442,10 @@ pub enum Intent {
         /// `div_pos` is the 0-based club index within DIV_CLUBS[pc_div_idx].
         round_results: Vec<(u8, u8, u32, u32)>,
     },
+
+    /// Record the individual NPC residue of one deep-simmed PC match (PA2 M3).
+    /// Append-only; replayed into the population on rebuild.
+    RecordOrbitMatch { record: OrbitMatchRecord },
 }
 
 /// Advance the simulation by one intent.
@@ -886,6 +923,11 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
 
             let _ = (pc_result, pc_div_pos); // pc_result used by TUI display only
             state.season_round += 1;
+            state
+        }
+
+        Intent::RecordOrbitMatch { record } => {
+            state.orbit_records.push(record);
             state
         }
     }

@@ -31,6 +31,10 @@ pub struct SquadPlayer {
     /// True for the PC's own entry in his team's sheet (excluded from
     /// teammate-name draws — he is "you", never "{scorer}").
     pub is_pc: bool,
+    /// Population index when the sheet is built from the real world (PA2 M3) —
+    /// the key goal credits are persisted against. `None` for stub sheets and
+    /// for the PC (his stats live in WorldState, not the population).
+    pub id: Option<u32>,
 }
 
 /// A starting XI. The engine only ever reads it; all picks are made through the
@@ -90,6 +94,7 @@ impl SquadSheet {
                     position: pos,
                     attrs,
                     is_pc: false,
+                    id: None,
                 });
                 name_idx += 1;
             }

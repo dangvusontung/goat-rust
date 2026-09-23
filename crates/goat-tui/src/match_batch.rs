@@ -16,7 +16,6 @@ use goat_core::{
 };
 use goat_fixed::Fixed;
 use goat_match::{
-    beats::ScoreEvent,
     discipline::RefPersonality,
     sim::{auto_play_match, BeatLibrary, MatchSetup},
 };
@@ -130,12 +129,15 @@ fn main() {
         };
         let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
 
-        // PC goals = goals from beats the PC actually acted in (auto commentary
-        // goals belong to the team, not the player).
+        // PC goals = goals CREDITED to the PC (PA2 M3) — team goals finished by
+        // a teammate (incl. off the PC's delivery = his assists) don't count.
         let pc_goals = r
-            .moments
+            .goal_credits
             .iter()
-            .filter(|m| m.is_action && matches!(m.goal_event, Some(ScoreEvent::GoalFor)))
+            .filter(|c| {
+                c.event == goat_match::beats::ScoreEvent::GoalFor
+                    && c.scorer == goat_match::beats::GoalActor::Pc
+            })
             .count() as u64;
 
         match r.goals_for.cmp(&r.goals_against) {

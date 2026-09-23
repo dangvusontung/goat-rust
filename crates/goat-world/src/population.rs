@@ -52,6 +52,11 @@ pub struct Population {
     pub career_apps: Vec<u32>,
     /// League titles won (player's club finished top of its division that season).
     pub career_titles: Vec<u32>,
+    /// Slow-moving individual form 0–100 (PA2 M3), fed ONLY by deep-simmed PC
+    /// matches via the orbit overlay (EMA of synthetic match ratings). Players
+    /// never touched by the orbit keep the neutral 50. Path-dependent — but not
+    /// stored itself: it is replayed from `WorldState::orbit_records` on rebuild.
+    pub form: Vec<i16>,
 }
 
 impl Population {
@@ -153,6 +158,7 @@ pub fn genesis(world_seed: u64) -> Population {
             pop.career_goals.push(0);
             pop.career_apps.push(0);
             pop.career_titles.push(0);
+            pop.form.push(50);
         }
     }
 
@@ -291,9 +297,19 @@ impl Population {
 
     // ── PA2 M1.5: formation-aware lineup + PC selection ──────────────────────
 
-    /// Top `slots.{0,1,2}` available players by current OVR within each position
-    /// group (D/M/F), skipping the retired. Deterministic and noise-free — this
-    /// is the *profile* lineup (team strength), not the selection drama.
+    /// Blended selection score for an NPC (PA2 M3): current OVR + the real
+    /// form pull — the same `(form − 50) × 3/10` weight the PC's own selection
+    /// formula uses. Players untouched by the orbit sit at form 50 and score
+    /// exactly their OVR (pre-M3 behaviour).
+    fn npc_selection_score(&self, idx: usize, elapsed_weeks: u32) -> i32 {
+        self.current_ovr(idx, elapsed_weeks) as i32 + (self.form[idx] as i32 - 50) * 3 / 10
+    }
+
+    /// Top `slots.{0,1,2}` available players within each position group (D/M/F),
+    /// skipping the retired, ranked by the form-blended selection score (PA2 M3:
+    /// a teammate in a hot streak holds his shirt; form 50 = pure OVR order).
+    /// Deterministic and noise-free — this is the *profile* lineup (team
+    /// strength), not the selection drama.
     ///
     /// `slots` counts OUTFIELD players only (real football convention: the
     /// formation's numbers sum to 10). The population has no goalkeeper entity,
@@ -314,7 +330,7 @@ impl Population {
                         && !self.is_retired(i, elapsed_weeks)
                 })
                 .collect();
-            group.sort_by_key(|&i| std::cmp::Reverse(self.current_ovr(i, elapsed_weeks)));
+            group.sort_by_key(|&i| std::cmp::Reverse(self.npc_selection_score(i, elapsed_weeks)));
             group.truncate(n);
             out.extend(group);
         }
@@ -382,10 +398,11 @@ impl Population {
     }
 
     /// Decide whether the PC starts or is benched this week (PA2 M1.5). The PC
-    /// competes inside his position group for `group_slots` places; NPCs carry a
-    /// seeded weekly form noise (±10) and a ~3% availability exclusion, both
-    /// ephemeral (nothing is stored). A PC just below the cutoff gets a seeded
-    /// borderline roll where manager favor nudges the odds.
+    /// competes inside his position group for `group_slots` places; NPCs carry
+    /// their REAL accumulated form (PA2 M3 — orbit overlay EMA, neutral 50 when
+    /// untouched) plus a small seeded weekly noise (±5) and a ~3% availability
+    /// exclusion, both ephemeral (nothing is stored). A PC just below the
+    /// cutoff gets a seeded borderline roll where manager favor nudges the odds.
     pub fn select_pc(
         &self,
         club_id: usize,
@@ -412,7 +429,7 @@ impl Population {
                 continue; // knocked/suspended this week — ephemeral abstraction
             }
             let noise = rng.next_range_u32(0, 2 * NPC_FORM_NOISE) as i32 - NPC_FORM_NOISE as i32;
-            cand.push((self.current_ovr(i, elapsed_weeks) as i32 + noise, false));
+            cand.push((self.npc_selection_score(i, elapsed_weeks) + noise, false));
         }
         cand.push((pc_score, true));
         // Stable sort, score descending: on ties the PC (pushed last) loses to NPCs.
@@ -441,8 +458,9 @@ impl Population {
 /// NPC unavailability divisor: `next_range(0, NPC_UNAVAILABLE_DIV) == 0` ⇒ out
 /// this week (~3%; knock/suspension abstraction, seeded per player-week, never stored).
 pub const NPC_UNAVAILABLE_DIV: u32 = 33;
-/// Weekly NPC form noise (±points on selection score).
-pub const NPC_FORM_NOISE: u32 = 10;
+/// Weekly NPC form noise (±points on selection score). Halved at M3: the real
+/// accumulated form now carries the signal, noise only keeps weeks alive.
+pub const NPC_FORM_NOISE: u32 = 5;
 /// Score band below the selection cutoff in which the borderline roll applies.
 pub const BORDERLINE_BAND: u32 = 5;
 /// Salt for the borderline roll stream (independent of availability/noise draws).

@@ -13,6 +13,7 @@ use crate::sim_team_match;
 use crate::world::{div_clubs, ClubId, NUM_CLUBS, NUM_DIVISIONS};
 use crate::worldgen::generate_world;
 use goat_rng::{GoatRng, RngSource};
+use std::collections::HashMap;
 
 /// League appearances credited to a regular (top-OVR) squad member per season.
 const SEASON_APPS_STARTER: u32 = 30;
@@ -39,6 +40,34 @@ pub struct SeasonResult {
     /// Population index of the division's top scorer this season.
     pub top_scorer_idx: usize,
     pub top_scorer_goals: u32,
+}
+
+/// Individual stats already credited by the deep-simmed orbit for one season
+/// (PA2 M3). When a division the PC played in is batch-ticked, each player's
+/// season apps/goals become the REMAINDER after his real orbit residue — no
+/// double counting, and the division's top scorer is the man who actually
+/// scored in the deep-simmed matches.
+#[derive(Debug, Clone, Default)]
+pub struct OrbitSeasonOverlay {
+    /// Divisions the PC played in this season (normally one; two across a
+    /// mid-season transfer).
+    pub divs: Vec<usize>,
+    /// pop_idx → orbit appearances this season (one per PC match started).
+    pub apps: HashMap<u32, u32>,
+    /// pop_idx → orbit goals this season.
+    pub goals: HashMap<u32, u32>,
+}
+
+impl OrbitSeasonOverlay {
+    fn covers(&self, div: usize) -> bool {
+        self.divs.contains(&div)
+    }
+    fn apps_of(&self, idx: usize) -> u32 {
+        self.apps.get(&(idx as u32)).copied().unwrap_or(0)
+    }
+    fn goals_of(&self, idx: usize) -> u32 {
+        self.goals.get(&(idx as u32)).copied().unwrap_or(0)
+    }
 }
 
 /// Build `club_id -> Vec<population index>` for the whole population (one pass).
@@ -92,6 +121,7 @@ fn youth_intake(pop: &mut Population, world_seed: u64, season: u32, elapsed_week
         pop.career_goals[idx] = 0;
         pop.career_apps[idx] = 0;
         pop.career_titles[idx] = 0;
+        pop.form[idx] = 50; // a fresh identity — any orbit residue died with the retiree
         count += 1;
     }
     count
@@ -106,6 +136,20 @@ pub fn batch_tick_season(
     season: u32,
     elapsed_weeks: u32,
 ) -> Vec<SeasonResult> {
+    batch_tick_season_orbit(pop, world_seed, season, elapsed_weeks, None)
+}
+
+/// Orbit-aware variant (PA2 M3): divisions listed in `orbit` credit each player
+/// only the REMAINDER of his season apps/goal share after his real deep-simmed
+/// residue, and the top-scorer race counts orbit goals — the division's scoring
+/// chart reflects what actually happened in the PC's matches.
+pub fn batch_tick_season_orbit(
+    pop: &mut Population,
+    world_seed: u64,
+    season: u32,
+    elapsed_weeks: u32,
+    orbit: Option<&OrbitSeasonOverlay>,
+) -> Vec<SeasonResult> {
     let squads = squads_by_club(pop);
     let strengths: Vec<u8> = (0..NUM_CLUBS)
         .map(|c| club_strength(pop, &squads[c], elapsed_weeks))
@@ -114,6 +158,7 @@ pub fn batch_tick_season(
     let mut results = Vec::with_capacity(NUM_DIVISIONS);
 
     for div in 0..NUM_DIVISIONS {
+        let orbit_div = orbit.is_some_and(|o| o.covers(div));
         let div_clubs = div_clubs(div);
         // Resolve the division season via the shared fixture + match machinery.
         let mut table = Table::new(div_clubs);
@@ -139,24 +184,34 @@ pub fn batch_tick_season(
                 continue;
             }
 
-            // Appearances: top-OVR members start, the rest are fringe.
+            // Appearances: top-OVR members start, the rest are fringe. Orbit
+            // divisions credit only what the deep sim did NOT already record.
             let mut by_ovr: Vec<usize> = squad.clone();
             by_ovr.sort_by_key(|&i| std::cmp::Reverse(pop.current_ovr(i, elapsed_weeks)));
             for (rank, &idx) in by_ovr.iter().enumerate() {
                 if pop.is_retired(idx, elapsed_weeks) {
                     continue;
                 }
-                pop.career_apps[idx] += if rank < STARTERS_PER_CLUB {
+                let season_apps = if rank < STARTERS_PER_CLUB {
                     SEASON_APPS_STARTER
                 } else {
                     SEASON_APPS_FRINGE
                 };
+                let remainder = if orbit_div {
+                    season_apps.saturating_sub(orbit.map_or(0, |o| o.apps_of(idx)))
+                } else {
+                    season_apps
+                };
+                pop.career_apps[idx] += remainder;
                 if club == champion_club {
                     pop.career_titles[idx] += 1;
                 }
             }
 
             // Goals: share the club's GF across the squad by position weight × current OVR.
+            // Orbit divisions scale the share down to the UNRECORDED matches only:
+            // a player whose orbit apps already cover his whole season quota has
+            // no phantom fixtures left to score in — his real goals stand alone.
             let total_w: u32 = squad
                 .iter()
                 .filter(|&&i| !pop.is_retired(i, elapsed_weeks))
@@ -167,16 +222,34 @@ pub fn batch_tick_season(
             if total_w == 0 {
                 continue;
             }
+            // Starter/fringe quota per player (same ranking as the apps pass).
             for &idx in squad {
                 if pop.is_retired(idx, elapsed_weeks) {
                     continue;
                 }
+                let rank = by_ovr.iter().position(|&i| i == idx).unwrap_or(usize::MAX);
+                let season_apps = if rank < STARTERS_PER_CLUB {
+                    SEASON_APPS_STARTER
+                } else {
+                    SEASON_APPS_FRINGE
+                };
                 let w =
                     goal_weight_x10(pop.position[idx]) * pop.current_ovr(idx, elapsed_weeks) as u32;
-                let goals = entry.gf * w / total_w;
-                pop.career_goals[idx] += goals;
-                if goals > div_top_goals {
-                    div_top_goals = goals;
+                let share = entry.gf * w / total_w;
+                let (remainder_apps, orbit_goals) = if orbit_div {
+                    (
+                        season_apps.saturating_sub(orbit.map_or(0, |o| o.apps_of(idx))),
+                        orbit.map_or(0, |o| o.goals_of(idx)),
+                    )
+                } else {
+                    (season_apps, 0)
+                };
+                let remainder_goals = share * remainder_apps / season_apps.max(1);
+                pop.career_goals[idx] += remainder_goals;
+                // The scoring chart sees the real total: orbit goals + remainder.
+                let season_goals = orbit_goals + remainder_goals;
+                if season_goals > div_top_goals {
+                    div_top_goals = season_goals;
                     div_top_idx = idx;
                 }
             }

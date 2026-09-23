@@ -47,6 +47,27 @@ pub enum ScoreEvent {
     GoalAgainst,
 }
 
+// ── Goal credits (PA2 M3) ─────────────────────────────────────────────────────
+
+/// Who a goal is attributed to. `Npc(None)` = a named squad player whose
+/// population identity is unknown (stub sheets in harnesses).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GoalActor {
+    Pc,
+    Npc(Option<u32>),
+}
+
+/// Attribution of one scored goal — pure bookkeeping derived from draws the
+/// commentary already makes (adding this never touches the RNG stream, so the
+/// match flow is unchanged).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GoalCredit {
+    pub event: ScoreEvent,
+    pub scorer: GoalActor,
+    /// `Some(Pc)` when the PC's delivery was finished by a teammate.
+    pub assist: Option<GoalActor>,
+}
+
 // ── Headspace delta ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -87,6 +108,10 @@ pub struct GeneratedChoice {
     pub foul_serious: bool,
     pub success: GeneratedOutcome,
     pub failure: GeneratedOutcome,
+    /// Goal attribution when the success/failure outcome carries a score event
+    /// (PA2 M3). Computed at beat-build time from the raw (pre-slot-fill) text.
+    pub success_credit: Option<GoalCredit>,
+    pub failure_credit: Option<GoalCredit>,
 }
 
 #[derive(Debug, Clone)]

@@ -344,3 +344,140 @@ In `build_beat`, the PC's contest now has a specific opponent on the far side:
       live game (TUI smoke shows real names).
 - [x] Golden re-frozen with justification; `scripts/test.sh` green.
 - [x] match-batch 100k before/after table in docs/sim-analysis.md.
+
+---
+
+# M3 — NPC stat accumulation + real NPC form (save v12)
+
+**Approved by Tùng (2026-09-23).** Deep change across goat-match (goal credits with
+identity), goat-world (orbit overlay → population columns, form-based selection),
+goat-core (state + intent) and goat-save (v12). Bridge/Flutter client explicitly
+parked. Engine change must be **flow-neutral**: no RNG draw added/moved, so the
+golden seed 42 match must pass WITHOUT re-freeze — that is the proof.
+
+## Verified current state (read before touching anything)
+
+- `pc_goals` is over-credited in the live loop (`main.rs:924`): it counts EVERY
+  `GoalFor` moment — auto-beat team goals (a teammate is literally named in the
+  text) and `att_assist` ("{scorer} finishes it off!") all land in the PC's
+  career tally. `match_batch.rs:135` / `career_sim.rs:362,504` have the same
+  flaw through `is_action && GoalFor` (counts `att_assist` as a PC goal).
+- beats.json score-event inventory (all 10): `att_goal_clean`/`att_goal_scramble`
+  (attack success, no `{scorer}` → PC goal), `att_assist` (attack success with
+  `{scorer}` → teammate goal, PC assist), `def_beaten_goal` (defend failure,
+  `{scorer}` = the matchup → opponent goal), 6× `auto_goal_*` (drawn `{scorer}`
+  from the possessing squad, no assist). No text uses `{assist}`.
+- `SquadPlayer` has no identity — names only, so credits cannot reach the
+  population. `build_beat`/`auto_beat` discard the picked `&SquadPlayer` after
+  cloning the name.
+- Population career columns (`career_goals/apps/titles`) are fed ONLY by
+  `batch_tick_season`, which credits ALL divisions including the PC's — orbit
+  individuals get season-abstraction stats regardless of what actually happened
+  in deep-simmed PC matches. The deep orbit (weekly `sim_team_match` for every
+  division fixture) produces no individual residue at all.
+- NPC "form" in selection is `NPC_FORM_NOISE` ±10 seeded ephemeral
+  (`population.rs:414`) — nothing persists, no feedback loop.
+  `lineup_indices_formation` is pure top-OVR per group (deterministic).
+- Population is rebuilt pantheon-style at two sites (`main.rs:646`, `main.rs:2442`)
+  from genesis + `batch_tick_season(1..season)`. Save stores only `world_seed`
+  for the world side.
+
+## Design (locked)
+
+### 1. Engine: goal credits with identity (goat-match) — flow-neutral
+
+- `SquadPlayer` gains `id: Option<u32>` — population index when the sheet is
+  built from the real world; `None` for stubs and for the PC entry.
+- New types (beats.rs): `GoalActor { Pc, Npc(Option<u32>) }`,
+  `GoalCredit { event: ScoreEvent, scorer: GoalActor, assist: Option<GoalActor> }`.
+- `GeneratedChoice` gains `success_credit`/`failure_credit: Option<GoalCredit>`,
+  computed in `build_beat` from the RAW outcome text (before slot fill):
+  `goal_for` + text contains `{scorer}` → scorer = drawn teammate, assist = Pc;
+  `goal_for` without `{scorer}` → scorer = Pc; `goal_against` → scorer = the
+  matchup. `auto_beat` credits the drawn scorer of the possessing squad.
+- `ActiveMatchState` accumulates `goal_credits: Vec<GoalCredit>`;
+  `MatchResult` exposes it. **No RNG draw is added, removed or reordered** —
+  credits are pure bookkeeping over draws that already happen for commentary.
+- Golden seed 42 must pass byte-identical (no re-freeze). match-batch 100k
+  before/after must be identical on engine stats; the PC-goal-derived columns
+  (pc_goals_hist, SiD, carried) SHIFT because the measurement becomes honest
+  (assists no longer count as PC goals) — logged as a measurement fix.
+
+### 2. Orbit overlay (goat-world, new `orbit.rs`)
+
+- Record types live in goat-core (headless-safe: only u32/u8 fields):
+  `NpcMatchCredit { pop_idx, goals: u8, assists: u8, result: i8 }`,
+  `OrbitMatchRecord { season, round, div: u8, credits: Vec<NpcMatchCredit> }`.
+  One credit per starter per PC match (an appearance is one record line).
+- `Population` gains `form: Vec<i16>` (default 50; orbit players only).
+  Per record: `career_apps += 1`, `career_goals += goals`, and form EMA
+  `form = form*65/100 + rating*35/100` with synthetic rating
+  `(58 + 14*goals + 9*assists + 6*result).clamp(30, 95)` — deterministic,
+  no extra RNG.
+- **No double counting**: `batch_tick_season` gains an orbit overlay parameter
+  (new `batch_tick_season_orbit`, old signature delegates with `None`). When
+  crediting a division the PC played in that season, per-player batch credits
+  become the REMAINDER: `apps += max(0, season_apps − orbit_apps)`,
+  `goals += share − orbit_goals (min 0)`. Totals stay consistent with the old
+  abstraction (a starter ends ~30 apps/season) but the goals land on the real
+  scorers. Titles still credit normally.
+- Replay: `rebuild_population(world_seed, season, records)` =
+  genesis → for s in 1..season { apply records@s; batch_tick_season_orbit(s,
+  overlay@s) } → apply records@current season. Records are grouped by their
+  stored `div`, so PC transfers across divisions stay correct.
+- Only NPCs who actually appeared in a PC match ever get orbit records —
+  the rest of the 63,600 population stays pure derive. This is the persist-vs-
+  derive line: records are path-dependent (match RNG decided the scorers) so
+  they MUST be saved; everything else stays replayed.
+
+### 3. Real form in selection (goat-world)
+
+- `select_pc`: NPC candidate score = `current_ovr + (form − 50)*3/10 + noise`,
+  with `NPC_FORM_NOISE` 10 → **5** (form now carries the real signal; a small
+  seeded term keeps week-to-week selection alive). Same form weight the PC
+  formula uses. Closes the loop: play well → form ↑ → selected more → more
+  records. NPCs untouched by the orbit keep form 50 = old behaviour ±5.
+- `lineup_indices_formation` (own club only — opponent stays locked top-11 OVR
+  via `lineup_indices`) ranks by `ovr + (form − 50)*3/10`, deterministic (no
+  noise) so the sheet/profile stay stable within a week.
+
+### 4. Core + save v12
+
+- `WorldState` gains `orbit_records: Vec<OrbitMatchRecord>` (append-only) +
+  `Intent::RecordOrbitMatch { record }` (pushes; nothing else).
+- Save v12: appended orbit blob (count, then per record season/round/div +
+  credit lines). v11 and older load with an empty overlay = pure M1.5 world.
+- Live loop (`main.rs`): both population rebuilds go through
+  `rebuild_population`; after every PC match (interactive, auto, AND bench
+  quick-sim — starters get appearances + result-based form there too, goals
+  unknown → 0) the TUI sends `RecordOrbitMatch` with credits built from
+  `result.goal_credits` (Some(id) scorers only) over both lineups.
+- `pc_goals` honesty fix everywhere: count `goal_credits` with `scorer == Pc`
+  (live loop, career_sim ×2, match_batch) instead of counting GoalFor moments.
+
+## Out of scope (M3)
+
+- Assists column in Population (assists feed form only; no `career_assists`).
+- Opponent lineup selection beyond top-11 OVR (locked since M1.5).
+- Substitutions / minutes weighting (M4 — incl. the post-injury "few minutes
+  to find his feet" cameo Tùng specified: small minutes ⇒ small rating/outcome
+  weight via `minutes_played`).
+- Bridge/Flutter real squads (client milestone).
+- Actor-swap contests (A.4).
+
+## DoD (M3)
+
+- [x] `goal_credits` in `MatchResult`; golden seed 42 passes UNCHANGED
+      (flow-neutrality proof); unit tests: att_assist → teammate goal + PC
+      assist; auto goal → named NPC credit; PC goal → Pc actor.
+- [x] `rebuild_population` + orbit-aware batch tick: no double counting
+      (starter apps ≈ 30/season with full orbit coverage), real scorer's
+      career_goals reflect his deep-simmed goals (unit test).
+- [x] `select_pc`/`lineup_indices_formation` use the form column; feedback
+      loop covered by a multi-week unit test (hot NPC rises, cold NPC sinks).
+- [x] Save v12 round-trip incl. orbit blob; v11 save loads with empty overlay.
+- [x] Live loop records every PC match (all 3 paths); `pc_goals` counts only
+      real PC goals.
+- [x] `scripts/test.sh` green; match-batch 100k + career-sim before/after
+      logged in docs/sim-analysis.md (engine stats identical, PC-goal
+      measurement shift explained).
