@@ -749,25 +749,25 @@ fn run_next_round(
                 slots
             };
             let build_sheet = |lineup: &[usize],
+                               bench: &[usize],
                                pc: Option<&goat_core::player::PlayerView>|
              -> goat_match::squad::SquadSheet {
-                let mut players = Vec::with_capacity(lineup.len() + 1);
-                for &idx in lineup {
-                    if let Some(v) = pop.promote(
+                let to_player = |idx: usize| {
+                    pop.promote(
                         idx,
                         elapsed_weeks,
                         goat_world::history::name_from_seed(pop.seed[idx]),
                         &world,
-                    ) {
-                        players.push(goat_match::squad::SquadPlayer {
-                            name: v.name.clone(),
-                            position: pop.position[idx],
-                            attrs: v.current,
-                            is_pc: false,
-                            id: Some(idx as u32),
-                        });
-                    }
-                }
+                    )
+                    .map(|v| goat_match::squad::SquadPlayer {
+                        name: v.name.clone(),
+                        position: pop.position[idx],
+                        attrs: v.current,
+                        is_pc: false,
+                        id: Some(idx as u32),
+                    })
+                };
+                let mut players: Vec<_> = lineup.iter().filter_map(|&i| to_player(i)).collect();
                 if let Some(v) = pc {
                     players.push(goat_match::squad::SquadPlayer {
                         name: v.name.clone(),
@@ -777,12 +777,18 @@ fn run_next_round(
                         id: None,
                     });
                 }
-                goat_match::squad::SquadSheet { players }
+                // Opposition bench (M4 follow-up): the next-best OVR names at
+                // the club, there for the chasing-game substitution rule. The
+                // PC's own team needs no bench — HE is the substitute.
+                let bench = bench.iter().filter_map(|&i| to_player(i)).collect();
+                goat_match::squad::SquadSheet { players, bench }
             };
             let own_lineup = pop.lineup_indices_formation(pc_club_id, elapsed_weeks, npc_slots);
-            let own_squad = build_sheet(&own_lineup, if pc_starts { Some(&view) } else { None });
-            let opp_lineup = pop.lineup_indices(opp_id, elapsed_weeks, 11);
-            let opp_squad = build_sheet(&opp_lineup, None);
+            let own_squad =
+                build_sheet(&own_lineup, &[], if pc_starts { Some(&view) } else { None });
+            let opp_indices = pop.lineup_indices(opp_id, elapsed_weeks, 16);
+            let opp_lineup = &opp_indices[..opp_indices.len().min(11)];
+            let opp_squad = build_sheet(opp_lineup, &opp_indices[opp_lineup.len()..], None);
 
             // Ref personality: seeded from match seed (deterministic, not consuming match RNG).
             let ref_personality = {
@@ -936,7 +942,8 @@ fn run_next_round(
                             round as u32,
                             div_idx,
                             &own_lineup,
-                            &opp_lineup,
+                            opp_lineup,
+                            &result.opp_subs_on,
                             &result.goal_credits,
                             pc_result,
                         ),
@@ -1122,12 +1129,14 @@ fn club_div_pos_in(div_idx: usize, club_id: usize) -> usize {
 /// credit line per starter on each side (an appearance + result for the form
 /// EMA), with goals/assists mapped off the engine's goal credits. `own_result`
 /// is from the PC's club's perspective; the opponent's lines get the mirror.
+#[allow(clippy::too_many_arguments)]
 fn build_orbit_record(
     season: u32,
     round: u32,
     div_idx: usize,
     own_lineup: &[usize],
     opp_lineup: &[usize],
+    opp_subs_on: &[u32],
     goal_credits: &[goat_match::beats::GoalCredit],
     own_result: i8,
 ) -> goat_core::state::OrbitMatchRecord {
@@ -1142,7 +1151,7 @@ fn build_orbit_record(
             contributions.entry(id).or_insert((0, 0)).1 += 1;
         }
     }
-    let mut credits = Vec::with_capacity(own_lineup.len() + opp_lineup.len());
+    let mut credits = Vec::with_capacity(own_lineup.len() + opp_lineup.len() + opp_subs_on.len());
     for (&idx, result) in own_lineup
         .iter()
         .map(|i| (i, own_result))
@@ -1154,6 +1163,17 @@ fn build_orbit_record(
             goals,
             assists,
             result,
+        });
+    }
+    // Opposition subs who actually came on (M4 follow-up): they earned an
+    // appearance and any goals/assists, but are not in the starting-XI list.
+    for &id in opp_subs_on {
+        let (goals, assists) = contributions.get(&id).copied().unwrap_or((0, 0));
+        credits.push(goat_core::state::NpcMatchCredit {
+            pop_idx: id,
+            goals,
+            assists,
+            result: -own_result,
         });
     }
     goat_core::state::OrbitMatchRecord {
