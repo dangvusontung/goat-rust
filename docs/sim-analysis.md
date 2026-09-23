@@ -188,3 +188,33 @@ match-sim star striker: output max 100 → 93–97, 80+ bucket 11–13% → 9.7�
 starred-in-defeat **2.0–2.3% → 2.4/2.2/2.5%** — mid-band on the fixed scale.
 Star band (role rating ≥ 65, n=25k): 90–100 bucket 8.8% — of which rating **exactly 100: 1.96%**
 (a clamp pile: 22% of the top bucket sits on the rail) · starred-in-defeat 4.94% (15.9% of losses).
+
+## PA2 M1+M1.5 — engine no-op verification (roster profiles + manager/selection)
+
+M1 (commit `b9361ed`) and M1.5 (`f1ef256`) changed WHERE the live game gets its
+`TacticalProfile`s (real squads, formation, manager trust/favor, PC benching) — all in
+goat-core/goat-world/goat-tui's live loop. The engine (`goat-match`) was not touched, and
+the harnesses build their own controlled profiles (`TacticalProfile::derive(75, 1000,
+seed)`), so this round must be a bit-for-bit no-op — and is:
+
+| Metric (match-batch 100k, seed 0xBA7C4) | After 3b | After M1+M1.5 |
+|---|---|---|
+| W / D / L % | 39.7 / 25.4 / 34.9 | 39.7 / 25.4 / 34.9 (identical) |
+| Goals/match (for–against) | 3.01 (1.55–1.46) | 3.01 (1.55–1.46) |
+| Clean sheets | 17.1% | 17.1% |
+| PC 2+ goals & L | 3.24% | 3.24% |
+| Starred-in-defeat (≥70 & L / ≥80 & L) | 4.37% / 0.68% | 4.37% / 0.68% |
+| Carried-to-win (≤45 & W) | 1.97% | 1.97% |
+| Rating 90–100 / pile at 100 (star band) | 2.3% / 0.00% | 2.3% / 0.00% |
+| Mean rating | 61.2 | 61.2 |
+
+match-sim star striker (N=5000, seeds 7/11/23): starred-in-defeat **2.40/2.18/2.52%** —
+identical to 3b (2.4/2.2/2.5).
+
+**Caveat (measurement gap):** match-batch/career-sim cannot see M1/M1.5's actual gameplay
+effect — which profiles the live loop feeds the engine, how often the PC is benched, or how
+trust drifts. Those live in `run_next_round` (goat-tui), which no batch harness exercises.
+Smoke-run observations (TUI, seed 7): fresh 64-OVR 16yo benched 8/8 at a 5★ club under a
+Strict manager; starts at a Third Division club until skipped training erodes trust. A
+live-loop season harness (drive `run_next_round` headless, tally W/D/L + bench rate + trust
+trajectory) is the missing measurement tool — candidate follow-up before M2.
