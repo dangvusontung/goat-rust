@@ -8,9 +8,11 @@
 //! arise (stat-driven picking instead of flat random) and to scale contest
 //! difficulty by the opponent's relevant stat.
 
+use crate::attrs::{DEFENDING_ATTRS, DRIBBLING_ATTRS, NUM_ATTRS, PASSING_ATTRS, SHOOTING_ATTRS};
 use crate::tuning::{
     NOISE_SALT, TACTICAL_JITTER, TACTICAL_STYLE_BASE, TACTICAL_STYLE_DOM_BOOST, TACTICAL_STYLE_SPAN,
 };
+use goat_fixed::Fixed;
 use goat_rng::{GoatRng, RngSource};
 
 /// The four team styles a profile mixes. Order is load-bearing (indexed draws).
@@ -81,6 +83,29 @@ impl TacticalProfile {
         }
     }
 
+    /// Derive a profile from an actual lineup's attributes (PA2 M1): the lines are
+    /// the mean of the starters' real attribute groups — attack from
+    /// shooting/dribbling, midfield from passing, defense from defending — so a
+    /// club's playing strength on the pitch reflects its roster, not a static
+    /// scalar. Style weights still come from `derive` (club identity is
+    /// seed-stable and strength-independent).
+    pub fn from_squad(avg_attrs: &[Fixed; NUM_ATTRS], club_id: u32, world_seed: u64) -> Self {
+        let mean = |groups: &[&[usize]]| -> u8 {
+            let (sum, n) = groups.iter().fold((0i32, 0i32), |(s, n), g| {
+                (
+                    s + g.iter().map(|&a| avg_attrs[a].to_int()).sum::<i32>(),
+                    n + g.len() as i32,
+                )
+            });
+            (sum / n.max(1)).clamp(1, 99) as u8
+        };
+        let mut lines = Self::derive(50, club_id, world_seed); // styles only
+        lines.attack = mean(&[SHOOTING_ATTRS, DRIBBLING_ATTRS]);
+        lines.midfield = mean(&[PASSING_ATTRS]);
+        lines.defense = mean(&[DEFENDING_ATTRS]);
+        lines
+    }
+
     /// Weight of one style in this profile.
     pub fn style(&self, s: TacticalStyle) -> u8 {
         match s {
@@ -131,5 +156,34 @@ mod tests {
         let max = *styles.iter().max().unwrap();
         assert!(max >= TACTICAL_STYLE_BASE + TACTICAL_STYLE_DOM_BOOST.min(99));
         assert_eq!(styles.iter().filter(|&&w| w == max).count(), 1);
+    }
+
+    #[test]
+    fn from_squad_lines_reflect_attrs() {
+        let weak = [Fixed::from_int(30); NUM_ATTRS];
+        let strong = [Fixed::from_int(90); NUM_ATTRS];
+        let w = TacticalProfile::from_squad(&weak, 7, 42);
+        let s = TacticalProfile::from_squad(&strong, 7, 42);
+        assert!(s.attack > w.attack + 40, "attack should track roster attrs");
+        assert!(s.midfield > w.midfield + 40);
+        assert!(s.defense > w.defense + 40);
+        // Styles are club identity — identical for the same club regardless of roster.
+        assert_eq!(w.pressing, s.pressing);
+        assert_eq!(w.possession, s.possession);
+        assert_eq!(w.counter, s.counter);
+        assert_eq!(w.wing_play, s.wing_play);
+    }
+
+    #[test]
+    fn from_squad_is_deterministic_and_bounded() {
+        let attrs = [Fixed::from_int(60); NUM_ATTRS];
+        let a = TacticalProfile::from_squad(&attrs, 3, 42);
+        let b = TacticalProfile::from_squad(&attrs, 3, 42);
+        assert_eq!(a, b);
+        for line in [a.attack, a.midfield, a.defense] {
+            assert!((1..=99).contains(&line));
+        }
+        // Uniform 60s across all groups → every line lands on 60.
+        assert_eq!((a.attack, a.midfield, a.defense), (60, 60, 60));
     }
 }
