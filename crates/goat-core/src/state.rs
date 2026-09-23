@@ -160,6 +160,10 @@ pub struct WorldState {
     /// replayed into the population (career goals/apps + form) on every
     /// rebuild. Persisted in the save (v12+).
     pub orbit_records: Vec<OrbitMatchRecord>,
+    // ── PA2 M4 — substitutions ───────────────────────────────────────────────
+    /// Week (epoch_weeks) the PC's injury last ran out. Drives the post-injury
+    /// cameo rule: just back and not starting → a few closing minutes.
+    pub pc_injury_return_week: Option<u32>,
 }
 
 /// Batch-ticked career state for one cohort peer (Phase 9).
@@ -273,6 +277,7 @@ impl WorldState {
             pc_epoch_day: 0,
             last_week_flashpoints: Vec::new(),
             orbit_records: Vec::new(),
+            pc_injury_return_week: None,
         }
     }
 }
@@ -941,6 +946,7 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
 
     // Snapshot current attrs to compute growth delta for TUI display.
     let before: [Fixed; NUM_ATTRS] = core::array::from_fn(|a| state.players.get_current(pc_id, a));
+    let injury_before = state.players.get_injury_weeks(pc_id);
 
     // Lifestyle modifier: Professional +10% growth; Flashy −10%.
     let lifestyle_mult = match state.pc_lifestyle {
@@ -965,6 +971,12 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
         state.pc_staff_mods.injury_duration_pct,
         rng,
     );
+
+    // PA2 M4: mark the week an injury ran out — the manager may ease him back
+    // with a late cameo instead of a full start.
+    if injury_before > 0 && state.players.get_injury_weeks(pc_id) == 0 {
+        state.pc_injury_return_week = Some(state.pc_epoch_day / 7);
+    }
 
     // Record per-attribute delta.
     state.last_week_growth =

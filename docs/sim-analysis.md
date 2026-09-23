@@ -299,3 +299,48 @@ match-sim star striker SiD: **2.04/2.40/2.72%** — identical to M2, mid-band.
 
 Live-loop smoke (TUI, real population): 5 auto rounds, table + world screen
 (orbit-aware rebuild) fine, save written at **v12** and reloaded cleanly.
+
+## PA2 M4 — substitutions (pc_on_pitch, minutes weighting)
+
+M4 finishes the arc (commit after this entry): the PC can start on the bench and
+be subbed on (55–70' when chasing, guarantees by 72'/78'/84', possible DNP when
+coasting), a misfiring starter can be hooked by an impatient manager (60–75'),
+and a player just back from injury gets Tùng's short "find his legs" cameo at
+80'+. Every sub decision rolls on a SIDE-STREAM RNG (`SubContext.seed` =
+`match_seed ^ salt`, same precedent as `RefPersonality`) — the match RNG never
+sees these rolls, so `sub_context: None` matches (all harnesses, the golden
+match) are byte-identical to pre-M4. `MatchResult.minutes_played` drives a
+linear opportunity weighting: `output = 50 + (raw − 50) × minutes/90` — a cameo
+counts proportionally less for form and manager trust, exactly the post-injury
+rule. The M1.5 quick-sim bench path is gone: every week runs the real engine,
+so orbit records (M3) now capture REAL scorers even when the PC is benched.
+Save v13 carries `pc_injury_return_week`.
+
+**Golden seed 42 NOT re-frozen (third milestone in a row left intact):** the
+frozen match has `sub_context: None` — no side stream is even created, no draw
+is consumed, and rating normalisation is gated on the same flag.
+
+| Metric (match-batch 100k, seed 0xBA7C4) | M3 | M4 |
+|---|---|---|
+| W / D / L % | 39.5 / 25.4 / 35.1 | 39.5 / 25.4 / 35.1 |
+| Goals/match (for–against) | 3.02 (1.55–1.47) | 3.02 (1.55–1.47) |
+| Clean sheets | 16.6% | 16.6% |
+| Starred-in-defeat (≥70 & L / ≥80 & L) | 4.68% / 0.76% | 4.68% / 0.76% |
+| Carried-to-win (≤45 & W) | 1.95% | 1.95% |
+| PC 2+ goals & L | 1.56% | 1.56% |
+| Mean rating | 61.3 | 61.3 |
+
+Byte-identical across the board — expected: match-batch builds
+`SquadSheet::stub` setups with `sub_context: None`, exercising exactly the
+pre-M4 code path. The live-only substitution layer is covered instead by
+scenario tests (`crates/goat-match/tests/substitutions.rs`): benched → subbed
+on (~55–70') → a star scores in a cameo; Strict manager hooks a 25-rated day in
+the 60–75' window with commentary; post-injury cameo ≤10' with the rating held
+within ±6 of neutral; `sub_context: None` ⇒ always 90'.
+
+Live-game smoke (TUI, real population, Strict manager): a weak 16-year-old was
+benched 6 weeks running with minutes 0/11/35/39/2/0 — sub-on earlier when the
+team chased, a 2-minute leg-finder, two DNPs that froze trust (the drops came
+from skipped training, the M1.5 rule). Interactive bench-watching verified:
+commentary-only until "82' The board goes up — your number. You're on." and the
+beat prompts begin from that minute. Save written at v13 and reloaded cleanly.

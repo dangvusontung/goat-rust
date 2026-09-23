@@ -81,6 +81,7 @@ fn balanced_setup() -> MatchSetup {
         staff_mods: goat_core::staff::StaffMods::NEUTRAL,
         own_squad: test_sheet(true),
         opp_squad: test_sheet(false),
+        sub_context: None,
     }
 }
 

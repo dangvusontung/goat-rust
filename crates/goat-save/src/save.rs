@@ -17,7 +17,9 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// v11: manager relationship (PA2 M1.5) — appended, older saves load neutral (50/50).
 /// v12: orbit individual residue (PA2 M3) — appended, older saves load with an
 /// empty overlay (pure M1.5 world, no deep-sim individual stats).
-pub const VERSION: u32 = 12;
+/// v13: injury-return week (PA2 M4 substitutions) — appended, older saves load
+/// with None (no cameo rule until the next injury ends).
+pub const VERSION: u32 = 13;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -102,6 +104,8 @@ pub struct SaveData {
     // ── PA2 M3 orbit individual residue (v12+) ───────────────────────────────
     /// Append-only log of individual NPC stats from deep-simmed PC matches.
     pub orbit_records: Vec<goat_core::state::OrbitMatchRecord>,
+    // ── PA2 M4 substitutions (v13+) ──────────────────────────────────────────
+    pub pc_injury_return_week: Option<u32>,
 }
 
 #[derive(Debug)]
@@ -209,6 +213,7 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_manager_trust: state.pc_manager_trust,
         pc_manager_favor: state.pc_manager_favor,
         orbit_records: state.orbit_records.clone(),
+        pc_injury_return_week: state.pc_injury_return_week,
     }
 }
 
@@ -422,6 +427,7 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
     state.pc_manager_trust = data.pc_manager_trust;
     state.pc_manager_favor = data.pc_manager_favor;
     state.orbit_records = data.orbit_records.clone();
+    state.pc_injury_return_week = data.pc_injury_return_week;
     for (i, &(q, w)) in data.pc_personal_staff.iter().enumerate() {
         state.pc_personal_staff[i] = goat_core::staff::PersonalStaff {
             quality: q,
@@ -544,6 +550,8 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
             v.push(c.result as u8);
         }
     }
+    // PA2 M4 substitutions (v13+): 0 = None
+    push_u32(&mut v, d.pc_injury_return_week.unwrap_or(0));
     v
 }
 
@@ -710,6 +718,11 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
             });
         }
     }
+    // PA2 M4 substitutions (v13+; older saves: no cameo until next injury ends)
+    let pc_injury_return_week = match read_u32(b, &mut cur).unwrap_or(0) {
+        0 => None,
+        w => Some(w),
+    };
 
     Ok(SaveData {
         world_seed,
@@ -773,6 +786,7 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_manager_trust,
         pc_manager_favor,
         orbit_records,
+        pc_injury_return_week,
     })
 }
 

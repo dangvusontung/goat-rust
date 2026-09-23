@@ -790,78 +790,11 @@ fn run_next_round(
                 RefPersonality::from_rng(&mut rp_rng)
             };
 
-            if !pc_starts {
-                // PA2 M1.5 bench path: the PC watches the whole match. Quick-sim
-                // the fixture off the profile means; output 0 ⇒ no form/stat
-                // update (ApplyRoundResult gates on output > 0) and no trust
-                // change (locked) — favor still drifts toward its weekly base.
-                writeln!(
-                    out,
-                    "  {} ({}) names the XI — you're on the BENCH. (trust {}, favor {})",
-                    mgr.name,
-                    mgr.personality.name(),
-                    state.pc_manager_trust,
-                    state.pc_manager_favor
-                )
-                .unwrap();
-                let (hf, af) = if is_home {
-                    sim_team_match(
-                        profile_mean(&own_profile),
-                        profile_mean(&opp_profile),
-                        &mut match_rng,
-                    )
-                } else {
-                    sim_team_match(
-                        profile_mean(&opp_profile),
-                        profile_mean(&own_profile),
-                        &mut match_rng,
-                    )
-                };
-                let (gf, ga) = if is_home { (hf, af) } else { (af, hf) };
-                writeln!(
-                    out,
-                    "  Full time: {} {}–{} {}",
-                    world.clubs[f.home].name, hf, af, world.clubs[f.away].name
-                )
-                .unwrap();
-                let (_, favor_delta) = manager_round_drift(&mgr, &state, None);
-                if favor_delta != 0 {
-                    state = reduce(
-                        state,
-                        Intent::ApplyManagerRelation {
-                            trust_delta: 0,
-                            favor_delta,
-                        },
-                        &mut GoatRng::new(0),
-                    );
-                }
-                let pc_result: i8 = if gf > ga {
-                    1
-                } else if gf < ga {
-                    -1
-                } else {
-                    0
-                };
-                // PA2 M3: even with the PC watching, the 21 starters left real
-                // residue (apps + result-based form; goal scorers are unknown
-                // in the quick-sim — no goal credits).
-                state = reduce(
-                    state,
-                    Intent::RecordOrbitMatch {
-                        record: build_orbit_record(
-                            season,
-                            round as u32,
-                            div_idx,
-                            &own_lineup,
-                            &opp_lineup,
-                            &[],
-                            pc_result,
-                        ),
-                    },
-                    &mut GoatRng::new(0),
-                );
-                (0, 0, pc_result, Some((gf, ga)))
-            } else {
+            // PA2 M4: benched or starting, the week now runs through the real
+            // engine — a benched PC watches (interactive: commentary only) and
+            // can be subbed on. The manager's sub decisions ride a side-stream
+            // RNG (never the match RNG).
+            if pc_starts {
                 writeln!(
                     out,
                     "  {} ({}) picks you in a {}-{}-{}. (trust {}, favor {})",
@@ -874,7 +807,29 @@ fn run_next_round(
                     state.pc_manager_favor
                 )
                 .unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "  {} ({}) names the XI — you're on the BENCH. (trust {}, favor {})",
+                    mgr.name,
+                    mgr.personality.name(),
+                    state.pc_manager_trust,
+                    state.pc_manager_favor
+                )
+                .unwrap();
+            }
+            let returning_from_injury = state
+                .pc_injury_return_week
+                .is_some_and(|w| (state.pc_epoch_day / 7).saturating_sub(w) <= 1);
+            let sub_context = goat_match::sim::SubContext {
+                seed: match_seed ^ 0x5DB5_5EED_5EED_5EED,
+                pc_starts_on_bench: !pc_starts,
+                manager_trust: state.pc_manager_trust,
+                manager_patience: mgr.personality.patience(),
+                pc_returning_from_injury: returning_from_injury && !pc_starts,
+            };
 
+            {
                 let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
                     player_role: best_role_for_position(state.pc_position),
                     player_attrs: view.current,
@@ -892,6 +847,7 @@ fn run_next_round(
                     staff_mods: goat_world::staff::club_staff_mods(own_str),
                     own_squad: own_squad.clone(),
                     opp_squad: opp_squad.clone(),
+                    sub_context: Some(sub_context),
                 };
 
                 let result = if play_interactive {
@@ -908,16 +864,23 @@ fn run_next_round(
                             writeln!(out, " {:>2}'  {}", m.minute, m.outcome_text).unwrap();
                         }
                         shown_moments = ms.moments.len();
-                        render_beat(out, &ms);
                         if ms.final_result.is_some() {
                             break;
                         }
-                        let choice_idx = read_choice(
-                            lines,
-                            out,
-                            ms.current_beat().map(|b| b.choices.len()).unwrap_or(1),
-                        );
-                        ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
+                        if ms.current_beat().is_some() {
+                            render_beat(out, &ms);
+                            let choice_idx = read_choice(
+                                lines,
+                                out,
+                                ms.current_beat().map(|b| b.choices.len()).unwrap_or(1),
+                            );
+                            ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
+                        } else {
+                            // PA2 M4 watching-from-the-bench: no decision to
+                            // make — the flow runs on until he's subbed on (or
+                            // full time).
+                            ms = advance_beat(ms, 0, beat_lib, &mut match_rng);
+                        }
                     }
                     ms.final_result.unwrap_or_else(|| {
                         auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
@@ -927,6 +890,9 @@ fn run_next_round(
                 };
 
                 render_match_result(out, &result, &opp.name);
+                if result.minutes_played < 90 {
+                    writeln!(out, "  ({} minutes on the pitch)", result.minutes_played).unwrap();
+                }
 
                 // Show discipline outcome.
                 if result.red_card {
@@ -978,30 +944,36 @@ fn run_next_round(
                     &mut GoatRng::new(0),
                 );
 
-                // Apply match effects (familiarity XP + energy cost).
-                state = reduce(
-                    state,
-                    Intent::ApplyMatchResult {
-                        familiarity_xp: result.familiarity_xp,
-                        energy_cost: Fixed::from_int(25),
-                        injury_weeks: None,
-                    },
-                    &mut GoatRng::new(0),
-                );
-
-                // Apply card result (updates suspensions and discipline rep).
-                if result.yellow_cards > 0 || result.red_card {
+                // PA2 M4: match effects scale with minutes. A DNP (benched all
+                // game) keeps M1.5 semantics: no form/stat gain, no match
+                // counted, no energy cost, trust untouched (favor still drifts).
+                if result.minutes_played > 0 {
+                    // Apply match effects (familiarity XP + energy cost).
+                    let energy_cost = Fixed::from_int(25 * result.minutes_played as i32 / 90);
                     state = reduce(
                         state,
-                        Intent::ApplyCardResult {
-                            yellow_cards: result.yellow_cards as u32,
-                            red_card: result.red_card,
+                        Intent::ApplyMatchResult {
+                            familiarity_xp: result.familiarity_xp,
+                            energy_cost,
+                            injury_weeks: None,
                         },
                         &mut GoatRng::new(0),
                     );
-                } else {
-                    // Clean match: slowly recover dirty rep.
-                    state.pc_discipline_rep = (state.pc_discipline_rep - 1).max(0);
+
+                    // Apply card result (updates suspensions and discipline rep).
+                    if result.yellow_cards > 0 || result.red_card {
+                        state = reduce(
+                            state,
+                            Intent::ApplyCardResult {
+                                yellow_cards: result.yellow_cards as u32,
+                                red_card: result.red_card,
+                            },
+                            &mut GoatRng::new(0),
+                        );
+                    } else {
+                        // Clean match: slowly recover dirty rep.
+                        state.pc_discipline_rep = (state.pc_discipline_rep - 1).max(0);
+                    }
                 }
 
                 // PA2 M1.5: after a red card the press demands a reaction — this
@@ -1038,9 +1010,11 @@ fn run_next_round(
                 }
 
                 // Manager reacts to the week: output + training attitude move trust;
-                // favor drifts toward its recomputed base.
-                let (trust_delta, favor_delta) =
-                    manager_round_drift(&mgr, &state, Some(result.player_output));
+                // favor drifts toward its recomputed base. The output here is the
+                // minutes-normalised rating (PA2 M4), so a short cameo barely moves
+                // him — and a DNP passes None (trust frozen, locked M1.5 rule).
+                let output_seen = (result.minutes_played > 0).then_some(result.player_output);
+                let (trust_delta, favor_delta) = manager_round_drift(&mgr, &state, output_seen);
                 if trust_delta != 0 || favor_delta != 0 {
                     state = reduce(
                         state,
@@ -1052,9 +1026,16 @@ fn run_next_round(
                     );
                 }
 
+                // M4: DNP weeks report output 0 so ApplyRoundResult skips the
+                // form EMA and the appearance count (M1.5 bench semantics).
+                let pc_output = if result.minutes_played > 0 {
+                    result.player_output
+                } else {
+                    0
+                };
                 (
                     pc_goals,
-                    result.player_output,
+                    pc_output,
                     pc_result,
                     Some((result.goals_for, result.goals_against)),
                 )
@@ -1237,11 +1218,6 @@ fn manager_round_drift(
         goat_world::manager::favor_base(mgr, &favor_inputs(mgr, state)),
     );
     (trust_delta, favor_delta)
-}
-
-/// Mean line strength of a tactical profile — the scalar a quick sim needs.
-fn profile_mean(p: &goat_core::tactical::TacticalProfile) -> u8 {
-    ((p.attack as u32 + p.midfield as u32 + p.defense as u32) / 3).clamp(1, 99) as u8
 }
 
 // ── Personal staff (Phase C) ──────────────────────────────────────────────────
@@ -1435,6 +1411,7 @@ fn run_academy_round(
             match_seed ^ 0xACAD_0002,
             (4, 3, 3),
         ),
+        sub_context: None,
     };
 
     let result = if play_interactive {

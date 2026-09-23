@@ -126,6 +126,7 @@ fn main() {
             staff_mods: goat_core::staff::StaffMods::NEUTRAL,
             own_squad: goat_match::squad::SquadSheet::stub(75, seed ^ 0x5A04_0001, (4, 3, 3)),
             opp_squad: goat_match::squad::SquadSheet::stub(opp_str, seed ^ 0x5A04_0002, (4, 3, 3)),
+            sub_context: None,
         };
         let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
 

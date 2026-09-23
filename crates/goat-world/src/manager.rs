@@ -41,6 +41,17 @@ impl ManagerPersonality {
             ManagerPersonality::StarLover => "StarLover",
         }
     }
+
+    /// Substitution patience 0–100 (PA2 M4): how long the manager tolerates a
+    /// misfiring starter before hooking him. Strict hooks early, a StarLover
+    /// waits for his star to play himself into form.
+    pub fn patience(self) -> i32 {
+        match self {
+            ManagerPersonality::Strict => 30,
+            ManagerPersonality::Balanced => 55,
+            ManagerPersonality::StarLover => 75,
+        }
+    }
 }
 
 /// A club's manager, fully derived from `(world_seed, club_id)`.

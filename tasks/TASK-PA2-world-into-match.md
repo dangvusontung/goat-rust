@@ -481,3 +481,115 @@ golden seed 42 match must pass WITHOUT re-freeze — that is the proof.
 - [x] `scripts/test.sh` green; match-batch 100k + career-sim before/after
       logged in docs/sim-analysis.md (engine stats identical, PC-goal
       measurement shift explained).
+
+---
+
+# M4 — substitutions (pc_on_pitch, sub on/off, minutes weighting)
+
+**Approved by Tùng (2026-09-23).** Final PA2 milestone. Golden seed 42 must stay
+UNFROZEN — the sub decision runs on a SIDE-STREAM RNG that never touches the
+match RNG (precedent: `RefPersonality::from_rng(match_seed ^ 0xBADCAFE)`), and
+harness setups opt out via `sub_context: None`.
+
+## Verified current state (read before touching anything)
+
+- `tick()` (`sim.rs:706`): clock → momentum decay → possession → zone drift →
+  force_reckless → `involved()` → build_beat, else `auto_beat`. No concept of
+  the PC being off the pitch — he is always involved-eligible.
+- M1.5 bench path (`main.rs`): a benched week is quick-simmed by
+  `sim_team_match` on profile means — no engine, no scorers, output 0.
+- `advance_beat` runs red-mist + frustration injection + headspace tick after
+  each resolved beat (only reachable when a beat was pending, i.e. on-pitch).
+- `MatchResult` has no minutes concept; `player_output` accumulates beat deltas
+  from 50 regardless of how long the PC played.
+- Manager personality (Strict/Balanced/StarLover) + `pc_manager_trust` exist
+  (M1.5). Injury: `view.injury_weeks > 0` benches the PC; nothing records WHEN
+  an injury ended (needed for the post-injury cameo rule).
+
+## Design (locked)
+
+### 1. `pc_on_pitch` + `SubContext` (goat-match)
+
+```rust
+pub struct SubContext {
+    pub seed: u64,                    // side-stream seed (caller: match_seed ^ salt)
+    pub pc_starts_on_bench: bool,
+    pub manager_trust: i32,           // 0-100
+    pub manager_patience: i32,        // 0-100 (Strict 30 / Balanced 55 / StarLover 75)
+    pub pc_returning_from_injury: bool,
+}
+MatchSetup::sub_context: Option<SubContext>   // None = plays 90, never subbed (all harnesses)
+```
+
+`ActiveMatchState` gains `pc_on_pitch`, `pc_started_match`, `sub_exhausted`,
+`minutes_played`, `last_on_minute`, `sub_rng: Option<GoatRng>` (side stream,
+created from `SubContext.seed` — the match RNG is NEVER consumed for subs).
+`tick()` gates force_reckless + `involved()`/build_beat on `pc_on_pitch`;
+off-pitch ticks are pure `auto_beat`. `advance_beat` guards red-mist on the flag.
+A red card closes the PC's minutes (he is off, permanently).
+
+### 2. Sub rules (side-stream rolls, evaluated per tick)
+
+- **Sub-on** (benched start), from minute 50: `chance = 12 + 8×goals_behind(cap 3)
+  + (trust−50)/5` percent/tick, halved when leading by 2+ (rest him). Guarantees:
+  trailing at 72' → on; level at 78' → on; anything but a big lead at 84' → on.
+  A big lead to the end can mean a DNP (minutes_played = 0) — the M1.5
+  benched-whole-match outcome survives. Window lands ~55–70' when trailing.
+- **Hook** (starting PC only — a sub who came on stays), from minute 55:
+  `output < 45 + (50−patience)/10 − (trust−50)/10` → 12%/tick → ~60–75'. Strict
+  managers hook at ≤47, StarLovers only below ~40; high trust protects.
+  Once hooked, `sub_exhausted` — no re-entry.
+- **Post-injury cameo** (Tùng's locked note): `pc_returning_from_injury` and
+  not selected to start → thrown on at 80'+ for closing minutes regardless of
+  scoreline ("find his legs"). Few minutes ⇒ tiny rating/trust weight via §3.
+
+### 3. `minutes_played` + linear opportunity weighting
+
+`MatchResult.minutes_played`. When `sub_context` is present and minutes < 90:
+`player_output = 50 + (raw − 50) × minutes/90` — you can only move your rating
+while on the pitch; the minutes you missed blend you back toward the neutral
+baseline. Linear (not sqrt): a 25-minute cameo SHOULD count ~3× less than a
+full shift — this is exactly the "đá ít phút → trọng số nhỏ" rule for the
+post-injury cameo. Form EMA and manager trust read the normalised output
+unchanged. `minutes_played == 0` keeps M1.5 semantics: pc_output = 0 → no form
+gain, no match counted, trust untouched, no energy cost. Goals scored in a
+cameo still count full (a sub's goal is a goal). Normalisation is gated on
+`sub_context.is_some()` so harness/golden setups are byte-identical.
+
+### 4. Commentary (3 texts, pushed as non-action moments)
+
+- Sub-on: "The board goes up — your number. You're on." 
+- Cameo: "Gentle minutes to find your legs again — you're on for the closing stages."
+- Hook: "Your number goes up. The manager has seen enough — you're coming off."
+
+### 5. Live loop (goat-tui)
+
+- The M1.5 quick-sim bench path is REPLACED by the engine: every week runs the
+  real match with `sub_context: Some(...)` (bench-start when benched). Bonus:
+  orbit records now get REAL scorers even when the PC is benched.
+- Interactive "watching from the bench": render commentary moments only, no
+  beat prompt while `current_beat()` is `None`; prompts begin the moment he is
+  subbed on. Auto (K) path needs nothing new.
+- `WorldState.pc_injury_return_week: Option<u32>` (save **v13**, appended):
+  set when `injury_weeks` ticks down to 0; the live loop treats a return within
+  the last week as `pc_returning_from_injury` (bench-start only — if the
+  manager picks him to start, he starts).
+- Energy cost scales with minutes (`25 × minutes/90`).
+
+## Out of scope (M4)
+
+- NPC substitutions / tactical subs for the AI sides (sheets stay static).
+- Multiple subs, injury-time subs, extra time.
+- Rating normalisation inside pure harnesses (sub_context None there).
+
+## DoD (M4)
+
+- [x] `pc_on_pitch` gating + side-stream sub RNG; golden seed 42 UNCHANGED
+      (sub_context None everywhere in harnesses; no match-RNG consumption).
+- [x] Scenario test: benched → subbed on (~55–70') → can score; hook test
+      (strict manager, low output → off 60–75'); cameo test (80'+, small
+      minutes → output pulled toward 50).
+- [x] Interactive bench-watching branch; 3 commentary texts render.
+- [x] Save v13 round-trip with `pc_injury_return_week`.
+- [x] `scripts/test.sh` green; match-batch 100k byte-identical on engine stats
+      (sub_context None) — logged in docs/sim-analysis.md.
