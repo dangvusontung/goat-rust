@@ -385,3 +385,50 @@ path is covered by scenario tests (`substitutions.rs`: chasing side uses its
 bench, empty bench inert, streamless bench byte-identical) and a live TUI
 smoke (5 opposition subs across 8 interactive matches, all 80–89', e.g.
 "Paulo Larsson replaces Mateus Bauer" — distinct real names both sides).
+
+---
+
+## match-batch `--m1-squad` — does the M1 squad-derived profile close the CB gap?
+
+**Question (Tùng):** per-position W/D/L shows CBs losing 45.1% vs STs 23.4%
+despite the second-highest avg rating (62.2). Is the batch pessimistic because
+`own_profile` is the position-independent `TacticalProfile::derive(75, …)`
+instead of the M1 live mechanism (squad average with the PC occupying his own
+position slot)?
+
+**Method:** new measurement-only flag `match-batch 100000 0xBA7C4 --m1-squad`:
+the PC replaces the first stub squad player of HIS position group and
+`own_profile = TacticalProfile::from_squad(squad_average)` — the same math as
+`Population::squad_avg_attrs(.., extra = PC)` in the live loop. Default mode
+byte-identical (verified: identical per-position table to the M4 baseline).
+
+| Per-position | fixed-75 profile (baseline) | M1 squad-derived |
+|---|---|---|
+| ST  W/D/L | 51.9 / 24.7 / 23.4 | 48.5 / 25.1 / 26.4 |
+| W   W/D/L | 38.3 / 25.2 / 36.4 | 35.4 / 24.8 / 39.8 |
+| CAM W/D/L | 38.1 / 25.6 / 36.3 | 34.8 / 25.5 / 39.8 |
+| CM  W/D/L | 39.5 / 25.8 / 34.7 | 36.5 / 25.6 / 37.9 |
+| CB  W/D/L | 29.2 / 25.7 / 45.1 | 26.0 / 26.0 / 48.1 |
+| Overall W/D/L | 39.5 / 25.4 / 35.1 | 36.3 / 25.4 / 38.3 |
+| Mean rating | 61.3 | 61.3 |
+
+**Answer: the gap does NOT narrow — it widens slightly and uniformly.** The
+driver is not profile composition:
+
+1. In the baseline the own profile is identical for every position, yet ST
+   still wins 51.9% vs CB 29.2% — the gap is produced entirely inside the flow
+   (DEF_PULL_OPP_PCT = 70 pulling defending PCs into defend-side beats, zone
+   pulls, momentum swing from PC contest outcomes). That is the locked design
+   ("defenders feel the game at the back"), not a measurement artifact.
+2. The M1 variant makes every position ~3 points WORSE, uniformly: the batch
+   PC is usually a fresh-gen player (role rating ~50) replacing a 75-strength
+   stub teammate, so the squad average drops — a CB's 29-rated shooting drags
+   the attack line down exactly as an ST's weak defending drags the defense
+   line. In the real game this effect is roughly neutral (the PC plays for a
+   club near his own level); the fixed-75 batch profile was actually
+   flattering fresh PCs.
+3. Ratings are unchanged (61.3 both) — output comes from contests, not lines.
+
+Conclusion: no game-logic change warranted from this measurement. The CB W/L
+gap is flow asymmetry by design; the batch now has the tool to measure both
+profile models going forward.

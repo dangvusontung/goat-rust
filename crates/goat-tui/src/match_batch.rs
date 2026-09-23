@@ -7,9 +7,16 @@
 ///   3. % of matches where the PC scores 2+ but the team still loses
 ///   4. average goals per match
 ///
-/// Usage: match-batch [num_matches] [master_seed]
+/// Usage: match-batch [num_matches] [master_seed] [--m1-squad]
+///
+/// `--m1-squad` (measurement tool only, no game-logic change): derive
+/// `own_profile` from the squad average WITH the PC occupying his position
+/// slot — the M1 live-loop mechanism — instead of the fixed
+/// `TacticalProfile::derive(75, …)`. Tests how much of the per-position
+/// W/D/L gap (CBs lose far more than STs) comes from the PC's real attrs
+/// lifting his own line vs. the position-independent fixed profile.
 use goat_core::{
-    attrs::AttrId,
+    attrs::{AttrId, NUM_ATTRS},
     generation::{generate_player, CreationChoices, Position},
     roles::RoleId,
     tactical::TacticalProfile,
@@ -48,6 +55,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let n: u64 = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(100_000);
     let master_seed: u64 = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(0xBA7C4);
+    let m1_squad = args.iter().any(|a| a == "--m1-squad");
     let lib = BeatLibrary::load(BEATS_JSON).expect("beats.json must parse");
 
     let mut rng = GoatRng::new(master_seed);
@@ -111,11 +119,45 @@ fn main() {
         let aggression = attrs[AttrId::Aggression as usize].to_int().clamp(1, 99) as u8;
         let match_seed = seed ^ 0xc0ffee;
         let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
+        let own_squad = goat_match::squad::SquadSheet::stub(75, seed ^ 0x5A04_0001, (4, 3, 3));
+        // M1 squad-derived profile (measurement variant): the PC replaces the
+        // first squad player of HIS position group, so his real (position-
+        // shaped) attrs lift his own line of the team average — exactly what
+        // `Population::squad_avg_attrs(.., extra = PC)` + `from_squad` do live.
+        let own_profile = if m1_squad {
+            let pc_group = match position {
+                Position::Defender => 0u8,
+                Position::Midfielder => 1,
+                Position::Forward => 2,
+            };
+            let mut sums = [0i64; NUM_ATTRS];
+            let mut cnt = 0i64;
+            let mut pc_placed = false;
+            for p in &own_squad.players {
+                let src = if !pc_placed && p.position == pc_group {
+                    pc_placed = true;
+                    &attrs
+                } else {
+                    &p.attrs
+                };
+                for (a, s) in sums.iter_mut().enumerate() {
+                    *s += src[a].to_raw() as i64;
+                }
+                cnt += 1;
+            }
+            let mut avg = [Fixed::ZERO; NUM_ATTRS];
+            for (a, v) in avg.iter_mut().enumerate() {
+                *v = Fixed::raw((sums[a] / cnt.max(1)) as i32);
+            }
+            TacticalProfile::from_squad(&avg, 1000, seed)
+        } else {
+            TacticalProfile::derive(75, 1000, seed)
+        };
         let setup = MatchSetup {
             player_role: role,
             player_attrs: attrs,
             player_familiarity: pl.familiarity,
-            own_profile: TacticalProfile::derive(75, 1000, seed),
+            own_profile,
             opp_profile: TacticalProfile::derive(opp_str, 2000, seed),
             opp_name: "Rivals FC",
             form: Fixed::from_int(65),
@@ -124,7 +166,7 @@ fn main() {
             dirty_rep: 50,
             player_traits: PlayerTraits::default(),
             staff_mods: goat_core::staff::StaffMods::NEUTRAL,
-            own_squad: goat_match::squad::SquadSheet::stub(75, seed ^ 0x5A04_0001, (4, 3, 3)),
+            own_squad,
             opp_squad: goat_match::squad::SquadSheet::stub(opp_str, seed ^ 0x5A04_0002, (4, 3, 3)),
             sub_context: None,
         };
@@ -203,7 +245,14 @@ fn main() {
     }
 
     let nf = n as f64;
-    println!("══ match-batch: {n} matches (master seed {master_seed:#x}) ══\n");
+    println!(
+        "══ match-batch: {n} matches (master seed {master_seed:#x}{}) ══\n",
+        if m1_squad {
+            ", M1 squad-derived own_profile"
+        } else {
+            ""
+        }
+    );
 
     println!("── Result split ──");
     println!(
