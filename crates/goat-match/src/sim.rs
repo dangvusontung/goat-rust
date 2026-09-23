@@ -30,6 +30,7 @@ use crate::beats_data::{RawAction, RawBeatLibrary, RawOutcome, RawSituation};
 use crate::contest::{auto_pick_generated_choice, resolve_contest};
 use crate::discipline::{red_mist_roll, resolve_card, FoulRisk, RefPersonality};
 use crate::headspace::Headspace;
+use crate::squad::{SquadPlayer, SquadSheet, POS_DEF, POS_FWD, POS_MID};
 
 // ── Tuning ────────────────────────────────────────────────────────────────────
 
@@ -318,16 +319,41 @@ impl BeatLibrary {
     /// Build an interactive beat for the PC under the current lens: commentary
     /// situation + 2–4 actions filtered by zone / role family / side.
     /// Goal outcomes are suppressed per the mercy flags (see pick_outcome).
+    ///
+    /// PA2 M2 (MATCH.md A.5): the contest has a specific opponent on the far
+    /// side — drawn from `opp_squad`, his real counter-attrs blend 50/50 with
+    /// the team line into the difficulty, and his name fills `{opponent}`.
+    /// `{scorer}`/`{assist}` are filled with real teammates from `own_squad`.
     fn build_beat(
         &self,
         lens: &FlowLens,
         role: RoleId,
-        opp: &TacticalProfile,
+        setup: &MatchSetup,
         suppress_for: bool,
         suppress_against: bool,
         rng: &mut impl RngSource,
     ) -> Option<GeneratedBeat> {
         let situation = self.pick_situation(lens, rng)?;
+
+        // The beat's cast: the man opposite the PC, plus the teammates behind
+        // the {scorer}/{assist} slots. Draw order is load-bearing.
+        let (own_squad, opp_squad) = (&setup.own_squad, &setup.opp_squad);
+        let matchup = pick_matchup(opp_squad, lens.side, lens.zone, rng);
+        let opponent_name = matchup.map(|m| m.name.as_str()).unwrap_or("their man");
+        let teammate = own_squad
+            .pick_teammate(rng)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "a teammate".into());
+        let assist = own_squad
+            .pick_teammate(rng)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "a teammate".into());
+        // On the defensive side, the man who beats you IS the scorer.
+        let scorer = if lens.side == Possession::Opp {
+            opponent_name.to_string()
+        } else {
+            teammate
+        };
 
         let family = role_family_str(ROLE_POSITION_FAMILY[role as usize]);
         let zone_str = zone_str(lens.zone);
@@ -360,19 +386,22 @@ impl BeatLibrary {
             let Some(attr) = parse_attr(&raw_action.attr) else {
                 continue;
             };
-            let (Some(success), Some(failure)) = (
+            let (Some(mut success), Some(mut failure)) = (
                 self.pick_outcome(true, lens.side, suppress_for, suppress_against, rng),
                 self.pick_outcome(false, lens.side, suppress_for, suppress_against, rng),
             ) else {
                 continue;
             };
+            success.text = fill_slots(&success.text, opponent_name, &scorer, &assist);
+            failure.text = fill_slots(&failure.text, opponent_name, &scorer, &assist);
             choices.push(GeneratedChoice {
                 text: raw_action.text.clone(),
                 primary: attr,
                 difficulty: scaled_difficulty(
                     raw_action.difficulty,
                     attr,
-                    opp,
+                    &setup.opp_profile,
+                    matchup,
                     lens.setpiece_bonus,
                 ),
                 foul_chance: raw_action.foul_chance,
@@ -387,7 +416,7 @@ impl BeatLibrary {
 
         Some(GeneratedBeat {
             situation_id: situation.id.clone(),
-            setup: situation.text.clone(),
+            setup: fill_slots(&situation.text, opponent_name, &scorer, &assist),
             zone: lens.zone,
             side: lens.side,
             choices,
@@ -442,6 +471,14 @@ pub struct MatchSetup {
     /// Club-staff effects on this match (stamina, headspace, set pieces).
     /// `StaffMods::NEUTRAL` = no staff influence.
     pub staff_mods: goat_core::staff::StaffMods,
+    /// The PC's team's starting XI (PA2 M2): the PC's own entry is flagged
+    /// `is_pc`. Teammate names fill {scorer}/{assist}; the squad's individuals
+    /// are not read for contest math (the PC contests against the OPPONENT).
+    pub own_squad: SquadSheet,
+    /// The opposition's starting XI (PA2 M2): the specific man on the far side
+    /// of each PC contest (MATCH.md A.5) and the names behind {opponent} and
+    /// conceded-goal {scorer}.
+    pub opp_squad: SquadSheet,
 }
 
 /// Summary of a single flow moment for the commentary feed / post-match recap.
@@ -664,14 +701,7 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
         ms.zone = PitchZone::Defense;
         let lens = make_lens(ms);
         let (sf, sa) = mercy_flags(ms);
-        if let Some(beat) = lib.build_beat(
-            &lens,
-            ms.setup.player_role,
-            &ms.setup.opp_profile,
-            sf,
-            sa,
-            rng,
-        ) {
+        if let Some(beat) = lib.build_beat(&lens, ms.setup.player_role, &ms.setup, sf, sa, rng) {
             ms.current = Some(beat);
             return;
         }
@@ -704,14 +734,7 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
         }
         let lens = make_lens(ms);
         let (sf, sa) = mercy_flags(ms);
-        if let Some(beat) = lib.build_beat(
-            &lens,
-            ms.setup.player_role,
-            &ms.setup.opp_profile,
-            sf,
-            sa,
-            rng,
-        ) {
+        if let Some(beat) = lib.build_beat(&lens, ms.setup.player_role, &ms.setup, sf, sa, rng) {
             ms.current = Some(beat);
             return;
         }
@@ -835,10 +858,37 @@ fn involved(ms: &ActiveMatchState, rng: &mut impl RngSource) -> bool {
 /// Auto-resolve a tick the PC is not involved in: commentary, plus a goal roll
 /// when the possessing side is deep in attacking territory.
 fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) {
-    let lens = make_lens(ms);
-    let situation = lib.pick_situation(&lens, rng);
-    let mut text = situation.map(|s| s.text.clone()).unwrap_or_default();
-    let beat_id = situation.map(|s| s.id.clone()).unwrap_or_default();
+    let (possession, zone) = (ms.possession, ms.zone);
+    let (beat_id, mut text, opp_name, scorer_name, assist_name) = {
+        let situation = {
+            let lens = make_lens(ms);
+            lib.pick_situation(&lens, rng)
+        };
+        // M2 cast for this tick's commentary: the opponent in frame, plus the
+        // possessing side's scorer/assist names (drawn even when no goal
+        // follows, so the draw sequence stays fixed).
+        let (os, ot) = (&ms.setup.own_squad, &ms.setup.opp_squad);
+        let on = pick_matchup(ot, possession, zone, rng)
+            .map(|m| m.name.clone())
+            .unwrap_or_else(|| "their man".into());
+        let acting = match possession {
+            Possession::Own => os,
+            Possession::Opp => ot,
+        };
+        let sc = acting
+            .pick_teammate(rng)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "a teammate".into());
+        let as_ = acting
+            .pick_teammate(rng)
+            .map(|p| p.name.clone())
+            .unwrap_or_else(|| "a teammate".into());
+        let id = situation.map(|s| s.id.clone()).unwrap_or_default();
+        let text = situation
+            .map(|s| fill_slots(&s.text, &on, &sc, &as_))
+            .unwrap_or_default();
+        (id, text, on, sc, as_)
+    };
 
     let attacking = matches!(
         (ms.possession, ms.zone),
@@ -904,7 +954,7 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
             ms.zone = PitchZone::Midfield;
             set_response_surge(ms, ms.possession);
             if let Some(t) = lib.pick_goal_text(ev, rng) {
-                text = t;
+                text = fill_slots(&t, &opp_name, &scorer_name, &assist_name);
             }
             goal_event = Some(ev);
         }
@@ -1057,14 +1107,8 @@ fn resolve_choice(
             ms.possession = chain_side;
             let lens = make_lens(ms);
             let (sf, sa) = mercy_flags(ms);
-            if let Some(next) = lib.build_beat(
-                &lens,
-                ms.setup.player_role,
-                &ms.setup.opp_profile,
-                sf,
-                sa,
-                rng,
-            ) {
+            if let Some(next) = lib.build_beat(&lens, ms.setup.player_role, &ms.setup, sf, sa, rng)
+            {
                 let idx = auto_pick_generated_choice(&next.choices, &ms.setup.player_attrs);
                 resolve_choice(ms, &next, idx, lib, rng, chain_depth + 1);
             }
@@ -1189,13 +1233,21 @@ fn role_family_str(f: PositionFamily) -> &'static str {
     }
 }
 
-/// Contest difficulty scaled by the opponent's relevant line stat:
-/// attacking attrs test against their defense, defensive attrs against their
-/// attack, everything else against the midpoint. Set-piece attrs (FreeKickAcc,
+/// Contest difficulty scaled by the opponent's relevant stat: attacking attrs
+/// test against their defense, defensive attrs against their attack, everything
+/// else against the midpoint. PA2 M2 (A.5): the specific matchup's real
+/// counter-attrs blend 50/50 with the team line — a 90-rated CB is genuinely
+/// harder to beat than his 60-rated partner. Set-piece attrs (FreeKickAcc,
 /// Heading) get a flat reduction from the set-piece coach.
-fn scaled_difficulty(base: u8, attr: AttrId, opp: &TacticalProfile, setpiece_bonus: i32) -> u8 {
+fn scaled_difficulty(
+    base: u8,
+    attr: AttrId,
+    opp: &TacticalProfile,
+    matchup: Option<&SquadPlayer>,
+    setpiece_bonus: i32,
+) -> u8 {
     let idx = attr as usize;
-    let stat = if DEFENDING_ATTRS.contains(&idx) {
+    let line = if DEFENDING_ATTRS.contains(&idx) {
         opp.attack as i32
     } else if SHOOTING_ATTRS.contains(&idx)
         || PASSING_ATTRS.contains(&idx)
@@ -1205,12 +1257,90 @@ fn scaled_difficulty(base: u8, attr: AttrId, opp: &TacticalProfile, setpiece_bon
     } else {
         (opp.attack as i32 + opp.defense as i32) / 2
     };
+    let stat = match matchup {
+        Some(m) => (line + matchup_counter_stat(m, attr)) / 2,
+        None => line,
+    };
     let sp = if attr == AttrId::FreeKickAcc || attr == AttrId::Heading {
         setpiece_bonus
     } else {
         0
     };
     (base as i32 + (stat - 50) / OPP_DIFFICULTY_DIV - sp).clamp(1, 99) as u8
+}
+
+/// Mean of a player's attributes over the given groups (integer).
+fn attr_group_mean(attrs: &[Fixed; NUM_ATTRS], groups: &[&[usize]]) -> i32 {
+    let (sum, n) = groups.iter().fold((0i32, 0i32), |(s, n), g| {
+        (
+            s + g.iter().map(|&a| attrs[a].to_int()).sum::<i32>(),
+            n + g.len() as i32,
+        )
+    });
+    sum / n.max(1)
+}
+
+/// The individual counter-stat a matchup brings to a contest on this attr
+/// (MATCH.md A.5): his defending tests our attacking attrs, his attacking
+/// threat tests our defending attrs.
+fn matchup_counter_stat(m: &SquadPlayer, attr: AttrId) -> i32 {
+    let idx = attr as usize;
+    if DEFENDING_ATTRS.contains(&idx) {
+        attr_group_mean(&m.attrs, &[SHOOTING_ATTRS, DRIBBLING_ATTRS])
+    } else if SHOOTING_ATTRS.contains(&idx)
+        || PASSING_ATTRS.contains(&idx)
+        || DRIBBLING_ATTRS.contains(&idx)
+    {
+        attr_group_mean(&m.attrs, &[DEFENDING_ATTRS])
+    } else {
+        attr_group_mean(
+            &m.attrs,
+            &[SHOOTING_ATTRS, DRIBBLING_ATTRS, DEFENDING_ATTRS],
+        )
+    }
+}
+
+/// Position group of the man opposite the PC: attacking PC meets their
+/// defenders (midfield: their midfielders), defending PC meets their forwards.
+fn matchup_position(side: Possession, zone: PitchZone) -> u8 {
+    match (side, zone) {
+        (Possession::Own, PitchZone::Midfield) => POS_MID,
+        (Possession::Own, _) => POS_DEF,
+        (Possession::Opp, PitchZone::Midfield) => POS_MID,
+        (Possession::Opp, _) => POS_FWD,
+    }
+}
+
+/// Draw the specific opponent matched up against the PC this beat. Falls back
+/// to the whole squad when the natural pool is empty (or the sheet is stubbed
+/// thin); `None` only for an empty sheet.
+fn pick_matchup<'a>(
+    squad: &'a SquadSheet,
+    side: Possession,
+    zone: PitchZone,
+    rng: &mut impl RngSource,
+) -> Option<&'a SquadPlayer> {
+    if squad.players.is_empty() {
+        return None;
+    }
+    let group = squad.group(matchup_position(side, zone));
+    let pool: Vec<usize> = if group.is_empty() {
+        (0..squad.players.len()).collect()
+    } else {
+        group
+    };
+    let idx = pool[rng.next_range_u64(0, pool.len() as u64 - 1) as usize];
+    Some(&squad.players[idx])
+}
+
+/// Fill the commentary template slots with real names (M2).
+fn fill_slots(text: &str, opponent: &str, scorer: &str, assist: &str) -> String {
+    if !text.contains('{') {
+        return text.to_string();
+    }
+    text.replace("{opponent}", opponent)
+        .replace("{scorer}", scorer)
+        .replace("{assist}", assist)
 }
 
 fn convert_outcome(raw: &RawOutcome) -> GeneratedOutcome {

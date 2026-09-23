@@ -210,6 +210,16 @@ fn run_one_season(mut state: WorldState, position: Position, beat_lib: &BeatLibr
                 dirty_rep: state.pc_discipline_rep,
                 player_traits: PlayerTraits::default(),
                 staff_mods: goat_core::staff::StaffMods::NEUTRAL,
+                own_squad: goat_match::squad::SquadSheet::stub(
+                    world.clubs[pc_club_id].strength,
+                    match_seed ^ 0x5A05_0001,
+                    (4, 3, 3),
+                ),
+                opp_squad: goat_match::squad::SquadSheet::stub(
+                    opp.strength,
+                    match_seed ^ 0x5A05_0002,
+                    (4, 3, 3),
+                ),
             };
 
             let result = auto_play_match(beat_lib, setup, &mut GoatRng::new(match_seed));

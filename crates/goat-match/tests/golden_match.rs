@@ -12,6 +12,7 @@ use goat_fixed::Fixed;
 use goat_match::beats::Possession;
 use goat_match::discipline::RefPersonality;
 use goat_match::sim::{auto_play_match, BeatLibrary, MatchSetup};
+use goat_match::squad::SquadSheet;
 use goat_rng::{GoatRng, RngSource};
 use goat_traits::PlayerTraits;
 
@@ -19,6 +20,16 @@ const BEATS_JSON: &str = include_str!("../../../beats.json");
 
 fn lib() -> BeatLibrary {
     BeatLibrary::load(BEATS_JSON).expect("beats.json must be valid")
+}
+
+/// Fixed synthetic sheets (M2): deterministic names/attrs, PC flagged in the
+/// own sheet so {scorer} never draws him.
+fn test_sheet(mark_pc: bool) -> SquadSheet {
+    let mut s = SquadSheet::stub(50, 0xBEEF, (4, 3, 3));
+    if mark_pc {
+        s.players[9].is_pc = true; // a forward slot
+    }
+    s
 }
 
 fn forward_attrs() -> [Fixed; NUM_ATTRS] {
@@ -68,6 +79,8 @@ fn balanced_setup() -> MatchSetup {
         dirty_rep: 50,
         player_traits: PlayerTraits::default(),
         staff_mods: goat_core::staff::StaffMods::NEUTRAL,
+        own_squad: test_sheet(true),
+        opp_squad: test_sheet(false),
     }
 }
 
@@ -75,12 +88,21 @@ fn balanced_setup() -> MatchSetup {
 /// re-frozen after the strength/goals/decoupling tuning pass; output re-frozen
 /// 54 → 52 in round 3b when the rating taper's asymptote moved to the 0/100
 /// rails — same moments/scoreline, only the rating arithmetic moved).
+///
+/// Re-frozen 52/2-2 → 57/1-1 for PA2 M2 (2026-09-23): beats now draw a specific
+/// matchup opponent per beat (his real counter-attrs blend 50/50 with the team
+/// line into contest difficulty, MATCH.md A.5) and commentary slots
+/// ({scorer}/{opponent}/{assist}) are filled from squad sheets — both consume
+/// match RNG and shift contest math by design. Flow rules (possession, zone
+/// drift, momentum, auto-goal, mercy/trailing/response logic) are untouched;
+/// the re-freeze was validated with a 100k-match distribution comparison
+/// (docs/sim-analysis.md, M2 entry).
 #[test]
 fn golden_seed_42_balanced_auto() {
     let result = auto_play_match(&lib(), balanced_setup(), &mut GoatRng::new(42));
-    assert_eq!(result.player_output, 52, "output frozen at 52");
-    assert_eq!(result.goals_for, 2, "goals_for frozen at 2");
-    assert_eq!(result.goals_against, 2, "goals_against frozen at 2");
+    assert_eq!(result.player_output, 57, "output frozen at 57 (M2)");
+    assert_eq!(result.goals_for, 1, "goals_for frozen at 1 (M2)");
+    assert_eq!(result.goals_against, 1, "goals_against frozen at 1 (M2)");
 }
 
 /// Demonstrates Output ≠ Result: a high-output performance can still end in a loss.

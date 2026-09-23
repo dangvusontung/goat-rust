@@ -17,3 +17,4 @@ pub mod contest;
 pub mod discipline;
 pub mod headspace;
 pub mod sim;
+pub mod squad;
