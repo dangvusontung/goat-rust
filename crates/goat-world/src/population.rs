@@ -294,6 +294,11 @@ impl Population {
     /// Top `slots.{0,1,2}` available players by current OVR within each position
     /// group (D/M/F), skipping the retired. Deterministic and noise-free — this
     /// is the *profile* lineup (team strength), not the selection drama.
+    ///
+    /// `slots` counts OUTFIELD players only (real football convention: the
+    /// formation's numbers sum to 10). The population has no goalkeeper entity,
+    /// so the 11th man is an implicit abstract GK — see
+    /// `TacticalProfile::formation_slots`.
     pub fn lineup_indices_formation(
         &self,
         club_id: usize,
@@ -320,6 +325,10 @@ impl Population {
     /// `pc` is `Some((position, attrs))` and he takes one slot in his position
     /// group (one fewer NPC is averaged there); when he is benched, `None`.
     /// Returns `None` if the club cannot field the full split.
+    ///
+    /// The mean is taken over the 10 outfield slots (plus the PC when he
+    /// starts) — the abstract GK contributes nothing, and a mean stays
+    /// comparable to the opponent's top-11-OVR mean regardless of n.
     pub fn squad_avg_attrs_formation(
         &self,
         club_id: usize,
@@ -646,9 +655,9 @@ mod tests {
     #[test]
     fn formation_lineup_respects_slots() {
         let pop = genesis(7);
-        let slots = (5, 4, 2);
+        let slots = (5, 4, 1);
         let lineup = pop.lineup_indices_formation(3, 260, slots);
-        assert_eq!(lineup.len(), 11);
+        assert_eq!(lineup.len(), 10, "10 outfield slots; the GK is abstract");
         for pos in 0..3u8 {
             let want = [slots.0, slots.1, slots.2][pos as usize];
             let got = lineup.iter().filter(|&&i| pop.position[i] == pos).count();
@@ -662,7 +671,7 @@ mod tests {
     fn formation_avg_pc_occupies_his_group_slot() {
         let pop = genesis(5);
         let world = generate_world(5);
-        let slots = (4, 4, 3);
+        let slots = (4, 3, 3);
         let without = pop
             .squad_avg_attrs_formation(2, 260, &world, slots, None)
             .unwrap();

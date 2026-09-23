@@ -150,8 +150,12 @@ Derived from `(world_seed, club_id)`, never saved (tiny-saves rule):
 ### Lineup selection — PC's club (deep) / opponent (top-11 OVR, unchanged)
 
 - **Formation from club style (in M1.5):** dominant style of `TacticalProfile::derive(50,
-  club_id, world_seed)` → outfield slot split (D/M/F, sums to 11):
-  Pressing (4,3,4) · Possession (4,5,2) · Counter (5,4,2) · WingPlay (4,4,3).
+  club_id, world_seed)` → outfield slot split (D/M/F). The population has NO goalkeeper
+  entity (positions are D/M/F only), so slots follow the real football convention and
+  **sum to 10** — the 11th man is an implicit abstract GK who contributes nothing to the
+  line means (they are averages; n=10 stays comparable to the opponent's top-11-OVR mean):
+  Pressing (4,3,3) · Possession (3,5,2) · Counter (5,4,1) · WingPlay (3,4,3).
+  *(Fixed after review: the first cut summed to 11, implicitly fielding 11 outfielders.)*
 - **NPC score** = `current_ovr` + seeded weekly form noise ±10; seeded ~3%/week
   availability exclusion (injury/suspension abstraction; nothing saved).
 - **PC score** =
@@ -199,7 +203,8 @@ suspension path kept for suspensions).
 - [x] `manager.rs`: profile derive deterministic; personality/nation/age bounds; trust/favor
       formula unit tests (sign flips, clamps).
 - [x] Selection unit tests: strong PC starts at a weak club; weak PC can be benched at a
-      strong club; borderline roll deterministic per week; formation slots sum to 11;
+      strong club; borderline roll deterministic per week; formation slots sum to 10
+      (outfield only — GK is abstract, no GK entity in the population);
       ~3% NPC unavailability over many weeks.
 - [x] `pc_manager_trust`/`pc_manager_favor` in `WorldState` + save v11 roundtrip.
 - [x] Live loop: bench path (auto-sim, output 0), trust/favor drift after matches,
@@ -223,5 +228,6 @@ suspension path kept for suspensions).
   hard; the academy/weak-club routes are the on-ramp. At a Third Division club the same PC
   starts while training/output hold up, then loses his place when he skips training
   (trust erodes −2/round under `K`-skip). One observed dynamic to watch: a Counter-style
-  club (5-4-2) has only 2 forward slots, so forwards there are benched more often —
+  club (5-4-1 after the outfield-only fix) has a single forward slot, so forwards there
+  are benched more often —
   realistic, but M4 (late-game sub cameos) is the intended pressure valve.
