@@ -336,9 +336,17 @@ impl BeatLibrary {
         let situation = self.pick_situation(lens, rng)?;
 
         // The beat's cast: the man opposite the PC, plus the teammates behind
-        // the {scorer}/{assist} slots. Draw order is load-bearing.
+        // the {scorer}/{assist} slots. Draw order is load-bearing — the danger
+        // scan itself is deterministic and consumes no RNG.
         let (own_squad, opp_squad) = (&setup.own_squad, &setup.opp_squad);
-        let matchup = pick_matchup(opp_squad, lens.side, lens.zone, rng);
+        let danger_idx = opp_squad.danger_man_in(&matchup_pool(opp_squad, lens.side, lens.zone));
+        let matchup_idx = pick_matchup(opp_squad, lens.side, lens.zone, rng);
+        let matchup = matchup_idx.map(|i| &opp_squad.players[i]);
+        let danger_man = if matchup_idx.is_some() && matchup_idx == danger_idx {
+            matchup.map(|m| m.name.clone())
+        } else {
+            None
+        };
         let opponent_name = matchup.map(|m| m.name.as_str()).unwrap_or("their man");
         let teammate = own_squad.pick_teammate(rng);
         let assist_pick = own_squad.pick_teammate(rng);
@@ -454,6 +462,7 @@ impl BeatLibrary {
             zone: lens.zone,
             side: lens.side,
             choices,
+            danger_man,
         })
     }
 
@@ -575,6 +584,12 @@ pub struct MatchResult {
     /// follow-up) — the live game owes them appearances/goal credits too.
     /// Empty for stub sheets (ids are None) and every harness/golden match.
     pub opp_subs_on: Vec<u32>,
+    /// PC contests won/lost against the opposition danger man (per-match
+    /// only). Both zero when the opposition had no danger man or the PC never
+    /// drew him. `danger_man_name` names the man last faced, for the recap.
+    pub danger_duels_won: u8,
+    pub danger_duels_lost: u8,
+    pub danger_man_name: Option<String>,
 }
 
 /// Live match state, advanced tick by tick through the flow.
@@ -595,6 +610,12 @@ pub struct ActiveMatchState {
     pub moments: Vec<MomentSummary>,
     /// Attribution of every goal so far (PA2 M3).
     pub goal_credits: Vec<GoalCredit>,
+    // ── Danger-man duels (Tùng-locked, per-match only) ───────────────────────
+    /// PC contests won/lost when his matchup was the opposition danger man.
+    danger_duels_won: u8,
+    danger_duels_lost: u8,
+    /// The danger man last faced (for the post-match recap line).
+    danger_man_name: Option<String>,
     // ── PA2 M4 substitutions ─────────────────────────────────────────────────
     /// False while the PC is off the pitch (benched at kickoff and not yet on,
     /// or hooked/sent off). Off-pitch ticks are pure auto-beats.
@@ -701,6 +722,9 @@ pub fn start_match(
         red_card: false,
         moments: Vec::new(),
         goal_credits: Vec::new(),
+        danger_duels_won: 0,
+        danger_duels_lost: 0,
+        danger_man_name: None,
         familiarity_xp: [Fixed::ZERO; NUM_ROLES],
         is_complete: false,
         final_result: None,
@@ -1172,7 +1196,7 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
         // follows, so the draw sequence stays fixed).
         let (os, ot) = (&ms.setup.own_squad, &ms.setup.opp_squad);
         let on = pick_matchup(ot, possession, zone, rng)
-            .map(|m| m.name.clone())
+            .map(|i| ot.players[i].name.clone())
             .unwrap_or_else(|| "their man".into());
         let acting = match possession {
             Possession::Own => os,
@@ -1315,6 +1339,16 @@ fn resolve_choice(
     } else {
         &choice.failure
     };
+
+    // Danger-man duel accounting (counter-only — no RNG, no output effect).
+    if let Some(name) = &beat.danger_man {
+        if success {
+            ms.danger_duels_won += 1;
+        } else {
+            ms.danger_duels_lost += 1;
+        }
+        ms.danger_man_name = Some(name.clone());
+    }
 
     ms.player_output = apply_output_delta(ms.player_output, outcome.output_delta as i32);
     {
@@ -1484,7 +1518,19 @@ fn build_result(ms: &ActiveMatchState) -> MatchResult {
         goal_credits: ms.goal_credits.clone(),
         minutes_played,
         opp_subs_on: ms.opp_subs_on.clone(),
+        danger_duels_won: ms.danger_duels_won,
+        danger_duels_lost: ms.danger_duels_lost,
+        danger_man_name: ms.danger_man_name.clone(),
     }
+}
+
+/// Form-input adjustment from the danger-man duels (Tùng-locked): a light
+/// nudge on the per-match output that feeds the pc_form EMA — the PC who
+/// keeps the danger man quiet in a defeat still gains a little, the PC the
+/// danger man runs rings around loses a little extra. ±3 net duels × 2
+/// points = ±6 max on a 0–100 input (≤0.9 form points after the 0.15 EMA).
+pub fn danger_form_delta(duels_won: u8, duels_lost: u8) -> i32 {
+    (duels_won as i32 - duels_lost as i32).clamp(-3, 3) * 2
 }
 
 fn award_familiarity_xp(ms: &mut ActiveMatchState, primary: AttrId) {
@@ -1654,26 +1700,31 @@ fn matchup_position(side: Possession, zone: PitchZone) -> u8 {
     }
 }
 
-/// Draw the specific opponent matched up against the PC this beat. Falls back
-/// to the whole squad when the natural pool is empty (or the sheet is stubbed
-/// thin); `None` only for an empty sheet.
-fn pick_matchup<'a>(
-    squad: &'a SquadSheet,
-    side: Possession,
-    zone: PitchZone,
-    rng: &mut impl RngSource,
-) -> Option<&'a SquadPlayer> {
-    if squad.players.is_empty() {
-        return None;
-    }
+/// The pool of opposition indices the PC can be matched up against under this
+/// lens: the natural position group, falling back to the whole squad when the
+/// group is empty (or the sheet is stubbed thin).
+fn matchup_pool(squad: &SquadSheet, side: Possession, zone: PitchZone) -> Vec<usize> {
     let group = squad.group(matchup_position(side, zone));
-    let pool: Vec<usize> = if group.is_empty() {
+    if group.is_empty() {
         (0..squad.players.len()).collect()
     } else {
         group
-    };
-    let idx = pool[rng.next_range_u64(0, pool.len() as u64 - 1) as usize];
-    Some(&squad.players[idx])
+    }
+}
+
+/// Draw the specific opponent matched up against the PC this beat, as an index
+/// into `squad.players`; `None` only for an empty sheet.
+fn pick_matchup(
+    squad: &SquadSheet,
+    side: Possession,
+    zone: PitchZone,
+    rng: &mut impl RngSource,
+) -> Option<usize> {
+    if squad.players.is_empty() {
+        return None;
+    }
+    let pool = matchup_pool(squad, side, zone);
+    Some(pool[rng.next_range_u64(0, pool.len() as u64 - 1) as usize])
 }
 
 /// Fill the commentary template slots with real names (M2).

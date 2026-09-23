@@ -12,7 +12,9 @@
 //! `SquadSheet::stub`, which synthesises a deterministic squad around a target
 //! strength from a small built-in name pool.
 
-use goat_core::attrs::NUM_ATTRS;
+use goat_core::attrs::{
+    DEFENDING_ATTRS, DRIBBLING_ATTRS, NUM_ATTRS, PASSING_ATTRS, SHOOTING_ATTRS,
+};
 use goat_fixed::Fixed;
 use goat_rng::{GoatRng, RngSource};
 
@@ -35,7 +37,20 @@ pub struct SquadPlayer {
     /// the key goal credits are persisted against. `None` for stub sheets and
     /// for the PC (his stats live in WorldState, not the population).
     pub id: Option<u32>,
+    /// Real current form 0–100 (PA2 M3 orbit EMA), 50 = neutral. Only the
+    /// danger-man threshold reads it (a hot player can be the danger man
+    /// without elite static quality). Stub sheets sit at 50.
+    pub form: i32,
 }
+
+/// Danger-man bar (Tùng-locked): strongest man in the matchup pool must ALSO
+/// clear an absolute hurdle — position-relevant quality ≥ this...
+pub const DANGER_OVR_MIN: i32 = 70;
+/// ...OR current form ≥ this. A side that is poor AND cold has no danger man
+/// at all ("đội nó đang ngu vài trận thì cũng không ai danger"). 70 ≈ regular
+/// starter at a top-division club (potential anchors club strength ±15);
+/// form 60 ≈ clearly hot — the orbit EMA centres at 50 with a ±8–10 swing.
+pub const DANGER_FORM_MIN: i32 = 60;
 
 /// A starting XI, plus (for the live game) a few named bench players. The
 /// engine only ever reads the XI; all picks are made through the match RNG so
@@ -101,6 +116,7 @@ impl SquadSheet {
                     attrs,
                     is_pc: false,
                     id: None,
+                    form: 50,
                 });
                 name_idx += 1;
             }
@@ -140,6 +156,45 @@ impl SquadSheet {
         (0..self.bench.len())
             .filter(|&i| self.bench[i].position == pos)
             .max_by_key(|&i| Self::attr_sum(&self.bench[i]))
+    }
+
+    /// Position-relevant quality — the engine's OVR proxy for a sheet player.
+    /// Uses the attr group the man actually plays with (forwards: shooting +
+    /// dribbling, midfielders: passing, defenders: defending) because real
+    /// population players are position-SHAPED: a striker's all-attr mean is
+    /// dragged down by his defending and would never clear the bar, which is
+    /// exactly what killed the feature live before this fix. Flat stub sheets
+    /// score ≈ their stub strength under any grouping, so batch stats are
+    /// unaffected.
+    fn quality(p: &SquadPlayer) -> i32 {
+        let groups: &[&[usize]] = match p.position {
+            POS_FWD => &[SHOOTING_ATTRS, DRIBBLING_ATTRS],
+            POS_MID => &[PASSING_ATTRS],
+            _ => &[DEFENDING_ATTRS],
+        };
+        let (sum, n) = groups.iter().fold((0i64, 0i64), |(s, n), g| {
+            (
+                s + g.iter().map(|&a| p.attrs[a].to_int() as i64).sum::<i64>(),
+                n + g.len() as i64,
+            )
+        });
+        (sum / n.max(1)) as i32
+    }
+
+    /// The danger man of a matchup pool (indices into `players`): the
+    /// strongest pool member by position-relevant quality, but ONLY if he
+    /// clears an absolute bar — quality ≥ DANGER_OVR_MIN or form ≥
+    /// DANGER_FORM_MIN. A pool of merely-the-least-worst players yields
+    /// `None`: no danger man, no duel tracking. Deterministic scan — consumes
+    /// no RNG.
+    pub fn danger_man_in(&self, pool: &[usize]) -> Option<usize> {
+        pool.iter()
+            .copied()
+            .max_by_key(|&i| Self::quality(&self.players[i]))
+            .filter(|&i| {
+                let p = &self.players[i];
+                Self::quality(p) >= DANGER_OVR_MIN || p.form >= DANGER_FORM_MIN
+            })
     }
 
     /// Position-weighted pick of a teammate (used for {scorer}/{assist} on the

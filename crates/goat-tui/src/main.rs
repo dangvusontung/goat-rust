@@ -765,6 +765,7 @@ fn run_next_round(
                         attrs: v.current,
                         is_pc: false,
                         id: Some(idx as u32),
+                        form: pop.form[idx] as i32,
                     })
                 };
                 let mut players: Vec<_> = lineup.iter().filter_map(|&i| to_player(i)).collect();
@@ -775,6 +776,7 @@ fn run_next_round(
                         attrs: v.current,
                         is_pc: true,
                         id: None,
+                        form: state.pc_form.to_int(),
                     });
                 }
                 // Opposition bench (M4 follow-up): the next-best OVR names at
@@ -912,6 +914,31 @@ fn run_next_round(
                     .unwrap();
                 }
 
+                // Danger-man duels: the per-match recognition line (display +
+                // a light form nudge below — nothing else reads it).
+                let danger_duels = result.danger_duels_won as u32 + result.danger_duels_lost as u32;
+                if danger_duels > 0 {
+                    let name = result
+                        .danger_man_name
+                        .as_deref()
+                        .unwrap_or("their danger man");
+                    if result.danger_duels_won >= result.danger_duels_lost {
+                        writeln!(
+                            out,
+                            "  You kept {name} quiet — won {} of {danger_duels} duels against the danger man.",
+                            result.danger_duels_won
+                        )
+                        .unwrap();
+                    } else {
+                        writeln!(
+                            out,
+                            "  {name} had your number — lost {} of {danger_duels} duels to the danger man.",
+                            result.danger_duels_lost
+                        )
+                        .unwrap();
+                    }
+                }
+
                 // PA2 M3: the PC's goals are the credits marked Pc — team goals
                 // finished by a named teammate (incl. off the PC's delivery) no
                 // longer inflate his tally.
@@ -1035,8 +1062,17 @@ fn run_next_round(
 
                 // M4: DNP weeks report output 0 so ApplyRoundResult skips the
                 // form EMA and the appearance count (M1.5 bench semantics).
+                // Danger-man duels nudge the form input (Tùng-locked): keeping
+                // the danger man quiet in a defeat still gains a little form;
+                // being run ragged by him costs a little extra. ±6 max on the
+                // 0–100 input (≤0.9 form points after the 0.15 EMA).
                 let pc_output = if result.minutes_played > 0 {
-                    result.player_output
+                    (result.player_output
+                        + goat_match::sim::danger_form_delta(
+                            result.danger_duels_won,
+                            result.danger_duels_lost,
+                        ))
+                    .clamp(0, 100)
                 } else {
                     0
                 };

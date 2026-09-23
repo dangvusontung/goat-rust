@@ -122,4 +122,9 @@ pub struct GeneratedBeat {
     pub zone: PitchZone,
     pub side: Possession,
     pub choices: Vec<GeneratedChoice>,
+    /// Name of the opposition danger man when THIS beat's matchup is him
+    /// (strongest man in the matchup pool above the absolute bar —
+    /// `SquadSheet::danger_man_in`). Counter/recap only: computing it is a
+    /// deterministic scan that consumes no RNG, so it cannot perturb a match.
+    pub danger_man: Option<String>,
 }

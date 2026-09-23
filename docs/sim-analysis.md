@@ -432,3 +432,52 @@ driver is not profile composition:
 Conclusion: no game-logic change warranted from this measurement. The CB W/L
 gap is flow asymmetry by design; the batch now has the tool to measure both
 profile models going forward.
+
+---
+
+## Danger-man duels ("kept Messi quiet") — tracking + light form feed
+
+**Change:** when the PC's matchup is the opposition's danger man — the
+strongest player in the matchup pool by position-relevant quality, but ONLY
+if he clears an absolute bar (quality ≥ 70 OR real orbit form ≥ 60; below
+the bar the match has no danger man at all) — the contest is counted as a
+danger duel. Per-match counters ride MatchResult into a TUI recap line
+("You kept {name} quiet — won W of N duels") and a light nudge on the
+pc_form EMA input live-side: `±(won−lost, cap 3) × 2` = ±6 max on the 0–100
+input, ≤0.9 form points after the 0.15 EMA. Keeping him quiet in a defeat
+gains a little form; being run ragged costs a little extra. No career level,
+no save bump, no trust/media hooks (Tùng-locked simplification).
+
+**Implementation note:** the first cut used an all-attribute mean as the
+quality proxy and the feature was dead in the live game — real population
+players are position-shaped (a striker's all-attr mean is dragged down by
+his defending), so nobody cleared 70. The bar now reads position-relevant
+groups (FWD shooting+dribbling / MID passing / DEF defending). Flat stub
+sheets score ≈ stub strength under any grouping, so batch comparability is
+preserved.
+
+**Golden seed 42 NOT re-frozen (fifth change in a row):** the danger scan is
+a deterministic sweep that consumes no RNG and the counters have zero output
+effect — base stats byte-identical below.
+
+| Metric (match-batch 100k, seed 0xBA7C4) | before | danger-man |
+|---|---|---|
+| W / D / L % | 39.5 / 25.4 / 35.1 | 39.5 / 25.4 / 35.1 |
+| Goals/match (for–against) | 3.02 (1.55–1.47) | 3.02 (1.55–1.47) |
+| Clean sheets | 16.6% | 16.6% |
+| Starred-in-defeat (≥70 & L / ≥80 & L) | 4.68% / 0.76% | 4.68% / 0.76% |
+| Carried-to-win (≤45 & W) | 1.95% | 1.95% |
+| Mean rating | 61.3 | 61.3 |
+
+New decoupling stats (batch stubs, form pinned at 50 so only the quality bar
+applies): danger man faced in **74.2%** of matches (the other 25.8%: weak
+stub squads with nobody ≥70 — the "no danger man" case working as designed);
+duel win rate **49.6%**; **kept the danger man quiet in DEFEAT 5.56%** of all
+matches (vs starred-in-defeat 4.68% — same order, the two now cross-validate
+each other); run ragged by him in defeat **8.87%**.
+
+Live TUI smoke (division 1, real population): recap lines fire with real
+names and sensible duel counts for a bench-warming PC ("You kept Sergio
+Jensen quiet — won 1 of 1 duels…", "Goran Bauer had your number — lost 1 of
+1…"). Division 4 opponents correctly produce NO danger man — weak sides have
+nobody above the bar, exactly Tùng's "đội nó đang ngu thì không ai danger".

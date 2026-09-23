@@ -660,3 +660,54 @@ done here; noted as a possible future worldgen-versioned change.
 - `player_seed` whitening (worldgen re-roll) — deliberate decision deferred.
 - NPC subs are trailing-only; no tactical/leading-side subs, no own-team NPC
   bench (PC is the only substitute on his side).
+
+---
+
+# Danger-man duels ("kept Messi quiet")
+
+## Origin
+
+Tùng: a PC can lose 0–4 with his teammates at fault yet still deserve
+recognition for keeping the opposition's best player quiet all game. Locked
+decisions: (i) danger man = strongest in the matchup pool BUT must clear an
+absolute bar — quality OR hot real form, else the match has NO danger man
+("đội nó đang ngu vài trận thì cũng không ai danger"); (ii+iii) per-match
+only (no career level, no save bump), main purpose = light input into the
+PC's own pc_form EMA, plus the R1 display line. No trust/media system.
+
+## Decision (locked)
+
+- `SquadPlayer.form: i32` (real orbit form world-side, 50 in stubs) — the
+  danger bar may be cleared by form alone.
+- `SquadSheet::danger_man_in(pool)`: strongest pool member by
+  POSITION-RELEVANT quality (FWD: shooting+dribbling, MID: passing, DEF:
+  defending) — an all-attr mean would never clear the bar for real
+  position-shaped players (a striker's defending drags it down), which killed
+  the feature live in the first implementation. Bar: quality ≥ 70 OR form ≥
+  60 (70 ≈ top-division starter; 60 ≈ clearly hot vs the form EMA centred at
+  50 ±8–10). Below the bar: `None` — no danger man, no tracking. Flat stubs
+  score ≈ stub strength, so batch behaviour is unchanged.
+- `GeneratedBeat.danger_man: Option<String>` — set in `build_beat` when the
+  drawn matchup IS the pool's danger man. Deterministic scan, no RNG.
+- Counters `danger_duels_won/lost` (+ last-faced name) in ActiveMatchState →
+  MatchResult; incremented in `resolve_choice` (the single success/failure
+  point). Counter-only: zero output/RNG effect.
+- `danger_form_delta(won, lost) = (won−lost).clamp(−3,3) × 2` (±6 max on the
+  0–100 form input ⇒ ≤0.9 form points after the 0.15 EMA) — applied live in
+  main.rs to the `pc_output` feeding `ApplyRoundResult`; DNP weeks unaffected
+  (output 0 path unchanged).
+- Display: TUI post-match line ("You kept {name} quiet — won W of N duels
+  against the danger man." / "{name} had your number — …"); match-batch
+  decoupling: danger-man presence, duel win rate, "kept quiet in DEFEAT"
+  (≥3 duels, ≥60% won) and "run ragged in DEFEAT".
+
+## DoD
+
+- [x] Threshold unit tests (elite/poor/hot pools), scenario tests (str-88
+      produces duels ≥20/30, str-45 none, deterministic), delta caps.
+- [x] Golden seed 42 UNCHANGED (no RNG consumed, no output effect);
+      match-batch 100k base stats byte-identical.
+- [x] Live TUI smoke (div 1, real population): recap lines fire with real
+      names ("You kept Sergio Jensen quiet — won 1 of 1 duels…"); div 4
+      correctly produces NO danger man (weak opponents).
+- [x] `scripts/test.sh` ALL STEPS PASSED.
