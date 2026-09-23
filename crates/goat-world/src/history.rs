@@ -81,9 +81,22 @@ fn make_name(rng: &mut impl RngSource) -> String {
     format!("{f} {l}")
 }
 
+/// SplitMix64-style finalizer. Xorshift's first outputs only sample a seed's
+/// LOW bits when the requested range is a power of two (mod 2^k), and
+/// `player_seed` mixes only the HIGH bits (its low bits are constant per
+/// world) — so every population player drew the SAME name ("Rafael Novak"
+/// everywhere, exposed by the M4 opposition-sub smoke). Whitening first
+/// restores diversity without touching the seeds themselves.
+fn whiten(seed: u64) -> u64 {
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^ (z >> 31)
+}
+
 /// Deterministic display name from a player's seed (used for promoted/cohort players).
 pub fn name_from_seed(seed: u64) -> String {
-    make_name(&mut GoatRng::new(seed))
+    make_name(&mut GoatRng::new(whiten(seed)))
 }
 
 /// Backfill `num_seasons` of consistent past history from `world_seed`. Pure & deterministic.

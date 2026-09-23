@@ -593,3 +593,70 @@ cameo still count full (a sub's goal is a goal). Normalisation is gated on
 - [x] Save v13 round-trip with `pc_injury_return_week`.
 - [x] `scripts/test.sh` green; match-batch 100k byte-identical on engine stats
       (sub_context None) — logged in docs/sim-analysis.md.
+
+---
+
+# M4 follow-up — opposition substitutions + name-degeneracy fix
+
+## Origin
+
+Tùng, after M4: "làm nốt thay ngưới cho ĐỘI ĐỐI PHƯƠNG (hiện sheet tĩnh cả
+trận)". Locked principle stands: the opposition stays approximate ("đại đại"),
+NO trust/favor/personality for them. Reuse the M4 side-stream pattern so the
+match RNG is never consumed and golden stays safe.
+
+## Decision (locked)
+
+- `SquadSheet.bench: Vec<SquadPlayer>` — named reserves. Empty in every stub /
+  harness / golden sheet, which disables the rule entirely there. The live
+  game fills the OPPOSITION bench from the population: top-16 OVR at the club,
+  11 starters + 5 reserves (PC's own team needs no bench — HE is the sub).
+- Engine rule (`maybe_opp_substitute`, sim.rs): only while the opposition is
+  TRAILING, minute ≥ 60, max 2 subs. Chance per tick = 10 + 8/goal behind
+  (cap 3), guaranteed by 82'. Weakest starter (attr sum) off, best
+  same-position bench player on. The swap mutates `opp_squad`, so the new man
+  appears in A.5 contest matchups, commentary names, and goal credits like any
+  starter. Rolls ride a SECOND side stream (`sub_seed ^ OPP_SUB_STREAM_SALT`)
+  so they never shift the PC's sub decisions.
+- `MatchResult.opp_subs_on: Vec<u32>` — population ids of players subbed on;
+  `build_orbit_record` gives them appearances + goal credits (previously a
+  subbed-on scorer would have been silently dropped from orbit records).
+- Commentary: "80' Substitution for {club}: {on} replaces {off}."
+
+## Name-degeneracy bug (found by the smoke test, pre-existing since M1)
+
+First smoke showed "Rafael Novak replaces Rafael Novak" — every NPC in the
+game was "Rafael Novak". Root cause: `player_seed(world_seed, club, slot)`
+mixes only the HIGH 64 bits (rotate-left 21/43 + multiply leaves the low ~21
+bits equal to `world_seed`'s for every player), and xorshift's first outputs
+on a power-of-two range (the 16-entry name pools, `v % 16` = low 4 bits)
+sample only those constant low bits. Non-power-of-two ranges divide the full
+u64, which is why ages/attributes/potentials were always diverse and the bug
+hid until names were displayed side by side.
+
+Fix (locked, minimal blast radius): whiten inside `name_from_seed` with a
+SplitMix64-style finalizer — names only, no attribute/worldgen change.
+Whitening `player_seed` itself would re-roll every player's attributes: NOT
+done here; noted as a possible future worldgen-versioned change.
+
+## DoD
+
+- [x] Opposition subs live in the real game (TUI smoke: 5 subs in 8
+      interactive matches, all 80–89', distinct on/off names, correct club).
+- [x] Scenario tests: chasing side uses bench (≥60', ≤2 subs, real bench
+      names, `opp_subs_on` ids reported); empty bench ⇒ rule fully inert;
+      `sub_context: None` + populated bench ⇒ zero subs, byte-identical match.
+- [x] Name regression test: 500 population players → >200 distinct names;
+      `name_from_seed` stable across calls.
+- [x] Golden seed 42 UNCHANGED (4th milestone left intact); match-batch 100k
+      byte-identical (batch uses stub sheets, sub_context None).
+- [x] `scripts/test.sh` ALL STEPS PASSED.
+
+## Open points carried forward
+
+- Name pool is only 16×16 = 256 names for ~63,600 players — collisions across
+  different players are now frequent-but-harmless (display only). Enlarge the
+  pools if it bothers playtests.
+- `player_seed` whitening (worldgen re-roll) — deliberate decision deferred.
+- NPC subs are trailing-only; no tactical/leading-side subs, no own-team NPC
+  bench (PC is the only substitute on his side).

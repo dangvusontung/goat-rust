@@ -37,11 +37,17 @@ pub struct SquadPlayer {
     pub id: Option<u32>,
 }
 
-/// A starting XI. The engine only ever reads it; all picks are made through the
-/// match RNG so a match stays a pure function of (setup, rng).
+/// A starting XI, plus (for the live game) a few named bench players. The
+/// engine only ever reads the XI; all picks are made through the match RNG so
+/// a match stays a pure function of (setup, rng). The bench is used solely by
+/// the opposition-substitution rule (PA2 M4 follow-up) — harnesses and the
+/// golden match leave it empty, which disables that rule entirely.
 #[derive(Debug, Clone)]
 pub struct SquadSheet {
     pub players: Vec<SquadPlayer>,
+    /// Named substitutes the opposition manager can throw on while chasing the
+    /// game. Empty in every harness/test sheet.
+    pub bench: Vec<SquadPlayer>,
 }
 
 /// Small built-in pool for `stub` — enough variety that synthetic commentary
@@ -104,7 +110,10 @@ impl SquadSheet {
         push_group(POS_DEF, formation.0 + 1, &mut players);
         push_group(POS_MID, formation.1, &mut players);
         push_group(POS_FWD, formation.2, &mut players);
-        Self { players }
+        Self {
+            players,
+            bench: Vec::new(),
+        }
     }
 
     /// Indices of starters in one position group.
@@ -112,6 +121,25 @@ impl SquadSheet {
         (0..self.players.len())
             .filter(|&i| self.players[i].position == pos)
             .collect()
+    }
+
+    /// Total attribute sum — the rough "how good is he right now" number used
+    /// by the opposition-substitution rule.
+    fn attr_sum(p: &SquadPlayer) -> i64 {
+        p.attrs.iter().map(|a| a.to_int() as i64).sum()
+    }
+
+    /// Index of the weakest starter (lowest attribute sum) — the man a chasing
+    /// manager takes off first.
+    pub fn weakest_starter(&self) -> Option<usize> {
+        (0..self.players.len()).min_by_key(|&i| Self::attr_sum(&self.players[i]))
+    }
+
+    /// Index of the best bench player in a position group, if any.
+    pub fn best_bench_at(&self, pos: u8) -> Option<usize> {
+        (0..self.bench.len())
+            .filter(|&i| self.bench[i].position == pos)
+            .max_by_key(|&i| Self::attr_sum(&self.bench[i]))
     }
 
     /// Position-weighted pick of a teammate (used for {scorer}/{assist} on the

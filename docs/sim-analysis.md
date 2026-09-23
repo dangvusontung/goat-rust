@@ -344,3 +344,44 @@ team chased, a 2-minute leg-finder, two DNPs that froze trust (the drops came
 from skipped training, the M1.5 rule). Interactive bench-watching verified:
 commentary-only until "82' The board goes up — your number. You're on." and the
 beat prompts begin from that minute. Save written at v13 and reloaded cleanly.
+
+---
+
+## PA2 M4 follow-up — opposition substitutions + name-degeneracy fix
+
+**Change:** the opposition no longer plays a static sheet. A trailing AI side
+(minute ≥ 60) hooks its weakest starter for the best same-position man on a
+5-man bench drawn from the club's real population (top-16 OVR split 11+5) —
+max 2 subs, guaranteed by 82'. Deliberately crude: no trust/favor/personality
+for the AI. Rolls ride a second side-stream RNG (`sub_seed ^ salt`), so the
+match RNG and even the PC's own sub stream are untouched. Subbed-on players
+flow into A.5 matchups, commentary, goal credits and — via the new
+`MatchResult.opp_subs_on` — orbit appearances/credits.
+
+**Bug found by the smoke test (pre-existing since M1):** every NPC displayed
+as "Rafael Novak". `player_seed` mixes only high bits; xorshift's first draws
+on the 16-entry name pools (`v % 16`) sample only the low bits, which are
+constant per world. Fixed by whitening inside `name_from_seed` (SplitMix64
+finalizer) — display names only, zero worldgen/attribute impact. Regression
+test added (500 players → >200 distinct names).
+
+**Golden seed 42 NOT re-frozen (fourth milestone in a row):** the rule is
+inert without a side stream (`sub_context: None`) and without a bench —
+both hold for every harness, including match-batch.
+
+| Metric (match-batch 100k, seed 0xBA7C4) | M4 | M4+opp-subs |
+|---|---|---|
+| W / D / L % | 39.5 / 25.4 / 35.1 | 39.5 / 25.4 / 35.1 |
+| Goals/match (for–against) | 3.02 (1.55–1.47) | 3.02 (1.55–1.47) |
+| Clean sheets | 16.6% | 16.6% |
+| Starred-in-defeat (≥70 & L / ≥80 & L) | 4.68% / 0.76% | 4.68% / 0.76% |
+| Carried-to-win (≤45 & W) | 1.95% | 1.95% |
+| PC 2+ goals & L | 1.56% | 1.56% |
+| Mean rating | 61.3 | 61.3 |
+
+Byte-identical again — by construction this time: match-batch builds stub
+sheets with `sub_context: None`, so neither sub stream exists. The feature
+path is covered by scenario tests (`substitutions.rs`: chasing side uses its
+bench, empty bench inert, streamless bench byte-identical) and a live TUI
+smoke (5 opposition subs across 8 interactive matches, all 80–89', e.g.
+"Paulo Larsson replaces Mateus Bauer" — distinct real names both sides).

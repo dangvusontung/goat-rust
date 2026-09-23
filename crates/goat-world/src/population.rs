@@ -112,8 +112,14 @@ fn squad_position(slot: usize) -> u8 {
     (slot % 3) as u8
 }
 
-/// Combine the world seed with club + slot into a stable per-player seed. `GoatRng::new`
-/// whitens it, so this only needs to be collision-resistant across (club, slot).
+/// Combine the world seed with club + slot into a stable per-player seed. NOTE:
+/// `GoatRng::new` does NOT whiten — xorshift's first outputs on power-of-two
+/// ranges sample only the seed's low bits, and this formula leaves those equal
+/// to `world_seed`'s for every player (the rotate/multiply terms only stir the
+/// high bits). Callers making such draws must whiten first (see
+/// `history::name_from_seed`); non-power-of-two ranges divide the full u64 and
+/// are unaffected. Whitening HERE instead would re-roll every player's
+/// attributes — a worldgen change, not a name fix.
 fn player_seed(world_seed: u64, club_id: u64, slot: u64) -> u64 {
     world_seed
         ^ club_id.rotate_left(21).wrapping_mul(0x9E37_79B9_7F4A_7C15)

@@ -490,7 +490,9 @@ impl BeatLibrary {
 /// as plain numbers — goat-match stays world-independent. `seed` drives a
 /// SIDE-STREAM RNG for every sub decision: the match RNG is never consumed,
 /// so a match with `sub_context: None` (all harnesses/golden) is untouched and
-/// a match with one differs ONLY by the substitution itself.
+/// a match with one differs ONLY by the substitution itself. Opposition bench
+/// subs (M4 follow-up) ride a second side-stream derived from the same seed,
+/// so they never shift the PC's sub decisions either.
 #[derive(Debug, Clone, Copy)]
 pub struct SubContext {
     /// Side-stream seed (caller derives it, e.g. `match_seed ^ salt`).
@@ -569,6 +571,10 @@ pub struct MatchResult {
     /// Minutes the PC was actually on the pitch (PA2 M4). 90 for every
     /// `sub_context: None` match; 0 = never came on (M1.5 bench semantics).
     pub minutes_played: u32,
+    /// Population ids of opposition players subbed ON during the match (M4
+    /// follow-up) — the live game owes them appearances/goal credits too.
+    /// Empty for stub sheets (ids are None) and every harness/golden match.
+    pub opp_subs_on: Vec<u32>,
 }
 
 /// Live match state, advanced tick by tick through the flow.
@@ -603,6 +609,15 @@ pub struct ActiveMatchState {
     last_on_minute: Option<u32>,
     /// Side-stream RNG for sub decisions — never the match RNG (golden-safe).
     sub_rng: Option<GoatRng>,
+    /// Separate side-stream for OPPOSITION bench subs (M4 follow-up) — derived
+    /// from the same seed with a salt, so their rolls never shift the PC's sub
+    /// decisions. None whenever `sub_context` is None (all harnesses/golden).
+    opp_sub_rng: Option<GoatRng>,
+    /// Opposition substitutions made so far (capped at OPP_SUB_MAX).
+    opp_subs_done: u8,
+    /// Population ids of opposition players subbed on (for the live game's
+    /// appearance/goal-credit bookkeeping).
+    opp_subs_on: Vec<u32>,
     pub familiarity_xp: [Fixed; NUM_ROLES],
     pub is_complete: bool,
     pub final_result: Option<MatchResult>,
@@ -667,6 +682,12 @@ pub fn start_match(
             None
         },
         sub_rng: setup.sub_context.as_ref().map(|c| GoatRng::new(c.seed)),
+        opp_sub_rng: setup
+            .sub_context
+            .as_ref()
+            .map(|c| GoatRng::new(c.seed ^ OPP_SUB_STREAM_SALT)),
+        opp_subs_done: 0,
+        opp_subs_on: Vec::new(),
         setup,
         minute: 0,
         possession,
@@ -773,6 +794,7 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
 
     // 1.5 Substitutions (PA2 M4): side-stream rolls only — never the match RNG.
     maybe_substitute(ms);
+    maybe_opp_substitute(ms);
 
     // 2. Momentum decays toward zero; the conceding side's surge winds down.
     ms.momentum -= ms.momentum / MOMENTUM_DECAY_DIV;
@@ -961,6 +983,80 @@ fn maybe_substitute(ms: &mut ActiveMatchState) {
     }
     if chance > 0 && srng.next_range_u32(1, 100) <= chance.max(1) as u32 {
         sub_pc_on(ms, "The board goes up — your number. You're on.");
+    }
+}
+
+// ── Opposition substitutions (PA2 M4 follow-up) ──────────────────────────────
+//
+// Deliberately crude — the opposition stays "đại đại": no trust, no favor, no
+// manager personality. A chasing manager hooks his weakest starter for the
+// best same-position man on his bench. The swap mutates `opp_squad`, so the
+// new man shows up in later contest matchups (A.5), commentary names, and —
+// via his population id — goal credits, exactly like a starter.
+
+/// Salt deriving the opposition sub stream from the PC's sub seed.
+const OPP_SUB_STREAM_SALT: u64 = 0x0FF0_51DE_5EED_5EED;
+/// Earliest minute a trailing opposition manager reaches for his bench.
+const OPP_SUB_EARLIEST: u32 = 60;
+/// Base opposition-sub chance per tick (percent) once the window opens.
+const OPP_SUB_BASE: u32 = 10;
+/// Extra chance per goal the opposition is behind (cap 3).
+const OPP_SUB_TRAIL: u32 = 8;
+/// Maximum opposition substitutions per match.
+const OPP_SUB_MAX: u8 = 2;
+/// A chasing manager has always acted by this minute.
+const OPP_SUB_LATEST: u32 = 82;
+
+/// The opposition manager's substitution decision: once per tick on its own
+/// side-stream, only while his side is trailing and only if the sheet actually
+/// carries a bench (the live game; harnesses/golden have none → no-op).
+fn maybe_opp_substitute(ms: &mut ActiveMatchState) {
+    let Some(srng) = ms.opp_sub_rng.as_mut() else {
+        return;
+    };
+    if ms.minute < OPP_SUB_EARLIEST || ms.opp_subs_done >= OPP_SUB_MAX {
+        return;
+    }
+    let behind = (ms.goals_for as i32 - ms.goals_against as i32).clamp(0, 3) as u32;
+    if behind == 0 || ms.setup.opp_squad.bench.is_empty() {
+        return;
+    }
+    let chance = if ms.minute >= OPP_SUB_LATEST {
+        100
+    } else {
+        OPP_SUB_BASE + behind * OPP_SUB_TRAIL
+    };
+    if srng.next_range_u32(1, 100) > chance {
+        return;
+    }
+    // Weakest starter off — but only if the bench holds a man in his position
+    // group; otherwise try the next-weakest, and so on.
+    let mut starters: Vec<usize> = (0..ms.setup.opp_squad.players.len()).collect();
+    starters.sort_by_key(|&i| {
+        ms.setup.opp_squad.players[i]
+            .attrs
+            .iter()
+            .map(|a| a.to_int() as i64)
+            .sum::<i64>()
+    });
+    let swap = starters.into_iter().find_map(|off| {
+        let pos = ms.setup.opp_squad.players[off].position;
+        ms.setup.opp_squad.best_bench_at(pos).map(|on| (off, on))
+    });
+    if let Some((off, on)) = swap {
+        let on_p = ms.setup.opp_squad.bench.remove(on);
+        if let Some(id) = on_p.id {
+            ms.opp_subs_on.push(id);
+        }
+        let off_p = std::mem::replace(&mut ms.setup.opp_squad.players[off], on_p);
+        ms.opp_subs_done += 1;
+        push_sub_moment(
+            ms,
+            format!(
+                "Substitution for {}: {} replaces {}.",
+                ms.setup.opp_name, ms.setup.opp_squad.players[off].name, off_p.name
+            ),
+        );
     }
 }
 
@@ -1387,6 +1483,7 @@ fn build_result(ms: &ActiveMatchState) -> MatchResult {
         red_card: ms.red_card,
         goal_credits: ms.goal_credits.clone(),
         minutes_played,
+        opp_subs_on: ms.opp_subs_on.clone(),
     }
 }
 

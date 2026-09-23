@@ -218,3 +218,173 @@ fn minutes_weighting_and_harness_parity() {
         assert_eq!(r.minutes_played, 90);
     }
 }
+
+// ── Opposition substitutions (M4 follow-up) ──────────────────────────────────
+//
+// The opposition stays crude on purpose: no trust/favor/personality. A chasing
+// manager hooks his weakest starter for the best same-position man on the
+// bench. Rolls ride a SEPARATE side-stream, so they never shift PC decisions.
+
+/// Own side vastly stronger than the opposition, so the opposition spends the
+/// second half chasing — the trigger for their bench. The PC starts on his own
+/// team's bench with zero trust; whether he plays is irrelevant here.
+fn chasing_setup(with_bench: bool) -> MatchSetup {
+    let c = CreationChoices {
+        name: "Test".into(),
+        position: Position::Forward,
+        nationality: "Brazilian",
+        club: "Riverside Town".into(),
+    };
+    let pl = generate_player(12345, &c);
+    let mut opp_squad = SquadSheet::stub(45, 0xBEEF, (4, 3, 3));
+    if with_bench {
+        // Six named reserves covering all three position groups.
+        opp_squad.bench = SquadSheet::stub(42, 0xB3C4, (2, 2, 1)).players;
+    }
+    MatchSetup {
+        player_role: RoleId::CompleteForward,
+        player_attrs: pl.current,
+        player_familiarity: pl.familiarity,
+        own_profile: profile(90, 90, 90),
+        opp_profile: profile(20, 20, 20),
+        opp_name: "Test FC",
+        form: Fixed::from_int(50),
+        player_aggression: 50,
+        ref_personality: RefPersonality::Balanced,
+        dirty_rep: 50,
+        player_traits: PlayerTraits::default(),
+        staff_mods: goat_core::staff::StaffMods::NEUTRAL,
+        own_squad: SquadSheet::stub(92, 0xCAFE, (4, 3, 3)),
+        opp_squad,
+        sub_context: Some(SubContext {
+            seed: 0x0FF5,
+            pc_starts_on_bench: true,
+            manager_trust: 0,
+            manager_patience: 55,
+            pc_returning_from_injury: false,
+        }),
+    }
+}
+
+/// A trailing opposition actually uses its bench: in the second half, at most
+/// twice, with proper commentary — and the man coming on is a real bench name.
+#[test]
+fn opp_subs_when_chasing() {
+    let lib = lib();
+    let bench_names: Vec<String> = SquadSheet::stub(42, 0xB3C4, (2, 2, 1))
+        .players
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
+    let mut matches_with_sub = 0u32;
+    for seed in 0..20u64 {
+        let mut setup = chasing_setup(true);
+        setup.sub_context.as_mut().unwrap().seed ^= seed.wrapping_mul(0x9E37);
+        // Live-game parity: bench players carry population ids, and the result
+        // must hand back exactly the ids of those who came on.
+        for (i, p) in setup.opp_squad.bench.iter_mut().enumerate() {
+            p.id = Some(900 + i as u32);
+        }
+        let r = auto_play_match(&lib, setup, &mut GoatRng::new(seed));
+        let subs: Vec<_> = r
+            .moments
+            .iter()
+            .filter(|m| m.outcome_text.contains(" replaces "))
+            .collect();
+        assert!(subs.len() <= 2, "at most two opposition subs");
+        assert_eq!(
+            subs.len(),
+            r.opp_subs_on.len(),
+            "every sub-on must report its population id"
+        );
+        for id in &r.opp_subs_on {
+            assert!((900..906).contains(id), "id must be a bench player: {id}");
+        }
+        if subs.is_empty() {
+            continue;
+        }
+        matches_with_sub += 1;
+        for m in &subs {
+            assert!(
+                m.minute >= 60,
+                "no opposition sub before 60': {}'",
+                m.minute
+            );
+            assert!(
+                m.outcome_text.starts_with("Substitution for Test FC: "),
+                "sub commentary must name the club: {}",
+                m.outcome_text
+            );
+            let on_name = m
+                .outcome_text
+                .trim_start_matches("Substitution for Test FC: ")
+                .split(" replaces ")
+                .next()
+                .unwrap();
+            assert!(
+                bench_names.iter().any(|n| n == on_name),
+                "the man coming on must be a real bench player: {on_name}"
+            );
+        }
+    }
+    assert!(
+        matches_with_sub >= 10,
+        "a chasing side must use its bench most matches: {matches_with_sub}/20"
+    );
+}
+
+/// No bench ⇒ no opposition subs, however one-sided the match (every harness
+/// and the golden match take this path — their sheets never carry a bench).
+#[test]
+fn no_bench_no_opp_subs() {
+    let lib = lib();
+    for seed in 0..20u64 {
+        let mut setup = chasing_setup(false);
+        setup.sub_context.as_mut().unwrap().seed ^= seed.wrapping_mul(0x9E37);
+        let r = auto_play_match(&lib, setup, &mut GoatRng::new(seed));
+        assert!(
+            !r.moments
+                .iter()
+                .any(|m| m.outcome_text.contains(" replaces ")),
+            "empty bench must disable the rule entirely (seed {seed})"
+        );
+    }
+}
+
+/// The harness/golden path: `sub_context: None` means no sub streams exist at
+/// all, so even a fully populated bench is dead weight — zero sub moments and
+/// a byte-identical match. This is what keeps the golden match untouched.
+#[test]
+fn bench_is_inert_without_sub_context() {
+    let lib = lib();
+    let fingerprint = |r: &goat_match::sim::MatchResult| {
+        (
+            r.goals_for,
+            r.goals_against,
+            r.player_output,
+            r.minutes_played,
+            r.moments.len(),
+            r.yellow_cards,
+            r.red_card,
+        )
+    };
+    for seed in 0..10u64 {
+        let mut with_bench = chasing_setup(true);
+        with_bench.sub_context = None;
+        let mut without_bench = with_bench.clone();
+        without_bench.opp_squad.bench.clear();
+        let a = auto_play_match(&lib, with_bench, &mut GoatRng::new(seed));
+        let b = auto_play_match(&lib, without_bench, &mut GoatRng::new(seed));
+        assert!(
+            !a.moments
+                .iter()
+                .any(|m| m.outcome_text.contains(" replaces ")),
+            "no stream, no subs (seed {seed})"
+        );
+        assert_eq!(
+            fingerprint(&a),
+            fingerprint(&b),
+            "a streamless bench must not perturb the match (seed {seed})"
+        );
+    }
+}
