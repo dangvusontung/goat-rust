@@ -101,6 +101,15 @@ pub struct WorldState {
     pub pc_power_ladder: u8,
     /// Total career savings in thousands (wages minus notional spend).
     pub pc_savings: i64,
+    // ── PA2 M1.5 — manager relationship ──────────────────────────────────────
+    /// Manager's professional trust in the PC 0–100 (50 = neutral): performance,
+    /// training attitude, experience. Path-dependent — drifts per round; the base
+    /// is recomputed by the TUI (via goat-world's derived manager profile) on club
+    /// arrival and pushed in with `SetManagerRelation`.
+    pub pc_manager_trust: i32,
+    /// Manager's personal favor toward the PC 0–100 (50 = neutral): politics/bias,
+    /// independent of performance (nationality, marketability, lifestyle clash...).
+    pub pc_manager_favor: i32,
     // ── Phase 10 — economy (TASK-10B.1) ──────────────────────────────────────
     /// Capital currently tied up in the player's business/investments (thousands).
     pub pc_business_value: i64,
@@ -213,6 +222,8 @@ impl WorldState {
             pc_wage_annual: 20, // £20k/yr at start
             pc_power_ladder: 0,
             pc_savings: 0,
+            pc_manager_trust: 50,
+            pc_manager_favor: 50,
             pc_business_value: 0,
             pc_bankrupt: false,
             pc_dev_invest_level: 0,
@@ -320,6 +331,14 @@ pub enum Intent {
     },
     /// Collect end-of-season wage into savings.
     CollectWage,
+
+    // ── PA2 M1.5 intents ──────────────────────────────────────────────────────
+    /// Hard-set manager relation (clamped 0–100). Sent by the TUI on club arrival
+    /// (new game / transfer) with the base derived from the club's manager profile;
+    /// core stays headless and never derives manager data itself.
+    SetManagerRelation { trust: i32, favor: i32 },
+    /// Apply signed deltas to manager trust/favor (clamped 0–100).
+    ApplyManagerRelation { trust_delta: i32, favor_delta: i32 },
 
     // ── Phase 9 intents ───────────────────────────────────────────────────────
     /// Seed the peer cohort at career start.
@@ -556,6 +575,9 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state.pc_power_ladder = (state.pc_power_ladder + 1).min(3);
             // Each rung burns Character rep (tightens officiating).
             state.pc_discipline_rep = (state.pc_discipline_rep + 8).min(100);
+            // The manager takes agitation personally (PA2 M1.5).
+            state.pc_manager_trust = (state.pc_manager_trust - 5).max(0);
+            state.pc_manager_favor = (state.pc_manager_favor - 3).max(0);
             state
         }
 
@@ -591,6 +613,22 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             if state.pc_contract_seasons_left > 0 {
                 state.pc_contract_seasons_left -= 1;
             }
+            state
+        }
+
+        // ── PA2 M1.5 handlers ──────────────────────────────────────────────────
+        Intent::SetManagerRelation { trust, favor } => {
+            state.pc_manager_trust = trust.clamp(0, 100);
+            state.pc_manager_favor = favor.clamp(0, 100);
+            state
+        }
+
+        Intent::ApplyManagerRelation {
+            trust_delta,
+            favor_delta,
+        } => {
+            state.pc_manager_trust = (state.pc_manager_trust + trust_delta).clamp(0, 100);
+            state.pc_manager_favor = (state.pc_manager_favor + favor_delta).clamp(0, 100);
             state
         }
 

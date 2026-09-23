@@ -115,6 +115,31 @@ impl TacticalProfile {
             TacticalStyle::WingPlay => self.wing_play,
         }
     }
+
+    /// The dominant (highest-weighted) style — first max wins, matching `derive`.
+    pub fn dominant_style(&self) -> TacticalStyle {
+        [
+            TacticalStyle::Pressing,
+            TacticalStyle::Possession,
+            TacticalStyle::Counter,
+            TacticalStyle::WingPlay,
+        ]
+        .into_iter()
+        .max_by_key(|&s| self.style(s))
+        .unwrap_or(TacticalStyle::Pressing)
+    }
+
+    /// Outfield slot split (defenders, midfielders, forwards — sums to 11) implied
+    /// by the club's dominant style (PA2 M1.5: formation follows club identity):
+    /// Pressing 4-3-4 · Possession 4-5-2 · Counter 5-4-2 · WingPlay 4-4-3.
+    pub fn formation_slots(&self) -> (usize, usize, usize) {
+        match self.dominant_style() {
+            TacticalStyle::Pressing => (4, 3, 4),
+            TacticalStyle::Possession => (4, 5, 2),
+            TacticalStyle::Counter => (5, 4, 2),
+            TacticalStyle::WingPlay => (4, 4, 3),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -185,5 +210,23 @@ mod tests {
         }
         // Uniform 60s across all groups → every line lands on 60.
         assert_eq!((a.attack, a.midfield, a.defense), (60, 60, 60));
+    }
+
+    #[test]
+    fn formation_slots_sum_to_eleven_and_follow_dominant_style() {
+        for seed in 0..50 {
+            let p = TacticalProfile::derive(50, seed, 7);
+            let (d, m, f) = p.formation_slots();
+            assert_eq!(d + m + f, 11, "formation must fill all 11 slots");
+            assert!(d >= 3 && m >= 2 && f >= 1, "sane minimums per line");
+            // The dominant style decides the shape: pressing loads the front line,
+            // counter loads the back line.
+            match p.dominant_style() {
+                TacticalStyle::Pressing => assert_eq!((d, m, f), (4, 3, 4)),
+                TacticalStyle::Possession => assert_eq!((d, m, f), (4, 5, 2)),
+                TacticalStyle::Counter => assert_eq!((d, m, f), (5, 4, 2)),
+                TacticalStyle::WingPlay => assert_eq!((d, m, f), (4, 4, 3)),
+            }
+        }
     }
 }

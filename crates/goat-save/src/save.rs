@@ -14,7 +14,8 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// would silently load into the wrong clubs, so they are rejected.
 /// v9: academy arc fields (Phase B) — appended, v8 saves load with defaults.
 /// v10: personal staff (Phase C) — appended, older saves load with vacancies.
-pub const VERSION: u32 = 10;
+/// v11: manager relationship (PA2 M1.5) — appended, older saves load neutral (50/50).
+pub const VERSION: u32 = 11;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -93,6 +94,9 @@ pub struct SaveData {
     pub pc_academy_hype: i32,
     // ── Phase C personal staff (v10+): quality u8 + annual wage i64 per role ──
     pub pc_personal_staff: [(u8, i64); 5],
+    // ── PA2 M1.5 manager relationship (v11+) ─────────────────────────────────
+    pub pc_manager_trust: i32,
+    pub pc_manager_favor: i32,
 }
 
 #[derive(Debug)]
@@ -197,6 +201,8 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
             let s = state.pc_personal_staff[i];
             (s.quality, s.wage_annual)
         }),
+        pc_manager_trust: state.pc_manager_trust,
+        pc_manager_favor: state.pc_manager_favor,
     }
 }
 
@@ -407,6 +413,8 @@ pub fn to_world_state(data: &SaveData) -> WorldState {
     state.pc_in_academy = data.pc_in_academy;
     state.pc_academy_matches = data.pc_academy_matches;
     state.pc_academy_hype = data.pc_academy_hype;
+    state.pc_manager_trust = data.pc_manager_trust;
+    state.pc_manager_favor = data.pc_manager_favor;
     for (i, &(q, w)) in data.pc_personal_staff.iter().enumerate() {
         state.pc_personal_staff[i] = goat_core::staff::PersonalStaff {
             quality: q,
@@ -512,6 +520,9 @@ fn to_bytes(d: &SaveData) -> Vec<u8> {
         v.push(q);
         push_u64(&mut v, w as u64);
     }
+    // PA2 M1.5 manager relationship (v11+)
+    push_i32(&mut v, d.pc_manager_trust);
+    push_i32(&mut v, d.pc_manager_favor);
     v
 }
 
@@ -638,6 +649,9 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         let w = read_u64(b, &mut cur).unwrap_or(0) as i64;
         (q, w)
     });
+    // PA2 M1.5 manager relationship (v11+; older saves load neutral)
+    let pc_manager_trust = read_i32(b, &mut cur).unwrap_or(50);
+    let pc_manager_favor = read_i32(b, &mut cur).unwrap_or(50);
 
     Ok(SaveData {
         world_seed,
@@ -698,6 +712,8 @@ fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
         pc_academy_matches,
         pc_academy_hype,
         pc_personal_staff,
+        pc_manager_trust,
+        pc_manager_favor,
     })
 }
 
