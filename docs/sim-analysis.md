@@ -481,3 +481,43 @@ names and sensible duel counts for a bench-warming PC ("You kept Sergio
 Jensen quiet — won 1 of 1 duels…", "Goran Bauer had your number — lost 1 of
 1…"). Division 4 opponents correctly produce NO danger man — weak sides have
 nobody above the bar, exactly Tùng's "đội nó đang ngu thì không ai danger".
+
+---
+
+## Phase 8 economy: merit-based offers/fees/renewals + scout-saturation fix
+
+**Changes (market realism, live-loop only — match engine untouched):**
+1. `generate_transfer_offers`: club selection was uniform-random in a random
+   division; now samples 3 candidates and prefers the club whose strength
+   best matches the scouted level (80% best / 20% runner-up). Wage scouted
+   term ×1 → ×3.
+2. `fee_bonus`: was flat old-club-strength ×3×agent; now scales with
+   contract years left (0 = walks free), age (resale peaks young) and form.
+3. `run_contract_negotiation`: wage gains `max(OVR−50,0)×3`; contract length
+   by age (≤23→4, 24-27→3, 28-31→2, 32+→1) — was flat 2 seasons.
+4. **Scout-saturation fix (this session's find):** `observed` fed to
+   `scout_estimate` used the CUMULATIVE season output SUM (~1500–3000 for a
+   full season), so `scout_estimate`'s 1–99 clamp pinned scouted at ~99 for
+   every regular. Now uses the per-match season average (mirroring
+   `best_season_avg_output`).
+
+**Measurement (career-batch, before = 99k careers market2 CSV, after = 20k
+careers same seed):**
+
+| Metric | before | after |
+|---|---|---|
+| scouted_avg p10 / median / p90 | 96 / 99 / 99 (saturated) | 18 / 27 / 45 |
+| careers with ≥1 offer season | 100.0% | 40.8% |
+| offers_wage_avg by scouted band | flat 333→339 | 175 → 255 (monotone) |
+
+The wage-by-scouted gradient is the validation that matters: offers and
+wages now track scouted level. Caveat: absolute batch levels are pessimistic
+because career-batch's synthetic output model (output = form ± 10) is a
+random walk with no mean reversion — form diffuses to ~28 over 600 rounds,
+dragging scouted down. In the live game the real engine outputs mean ~61 and
+form tracks it, so live scouted will sit mid-band. The batch output model is
+a harness artifact (noted for future work), not game logic.
+
+Wage by PEAK OVR stays weakly graded (211/216/216 across 70/80/90 bands) —
+by design: fees and wages follow CURRENT form/scouted level, not past glory
+("siêu sao hết thỜi đi free cũng ok").

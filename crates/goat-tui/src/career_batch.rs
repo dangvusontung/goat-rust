@@ -265,7 +265,14 @@ fn run_one(
         // Phase 8 measurement: replicate goat-tui's generate_transfer_offers gate +
         // wage formula exactly (main.rs), observation only — no offer is executed.
         {
-            let observed = (state.pc_form.to_int() + season_output_sum) / 2;
+            // Per-match AVERAGE, mirroring main.rs — the cumulative sum
+            // saturates scout_estimate's clamp at 99 (see main.rs note).
+            let season_avg = if s_matches > 0 {
+                (season_output_sum / s_matches as i32).clamp(0, 100)
+            } else {
+                0
+            };
+            let observed = (state.pc_form.to_int() + season_avg) / 2;
             let mut scout_rng = GoatRng::new(seed ^ ((season as u64) << 40) ^ 0xA11BEEF);
             let scouted = goat_world::scout::scout_estimate(observed, &mut scout_rng);
             scouted_sum += scouted as i64;

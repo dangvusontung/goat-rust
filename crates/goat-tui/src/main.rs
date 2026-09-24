@@ -1899,9 +1899,17 @@ fn generate_transfer_offers(state: &WorldState, view: &PlayerView) -> Vec<(usize
     use goat_world::scout::scout_estimate;
     let age = view.age_weeks / 52;
     let mut rng = GoatRng::new(state.world_seed ^ ((state.season_number as u64) << 32) ^ 0xA11BEEF);
-    // Clubs scout OBSERVED performance (form + this season's output), never the
-    // hidden attributes — and sometimes they read it wrong.
-    let observed = (state.pc_form.to_int() + state.pc_season_output) / 2;
+    // Clubs scout OBSERVED performance (form + this season's average output),
+    // never the hidden attributes — and sometimes they read it wrong. NOTE:
+    // this must be the per-match AVERAGE, mirroring best_season_avg_output —
+    // the cumulative season SUM (~1800 for a full season) saturates
+    // scout_estimate's 1..99 clamp, leaving every regular scouted at 99.
+    let season_avg = if state.pc_season_matches > 0 {
+        (state.pc_season_output / state.pc_season_matches as i32).clamp(0, 100)
+    } else {
+        0
+    };
+    let observed = (state.pc_form.to_int() + season_avg) / 2;
     let scouted = scout_estimate(observed, &mut rng);
     // Only generate offers if the scouted level impresses and age < 34
     if scouted < 55 || age >= 34 {
