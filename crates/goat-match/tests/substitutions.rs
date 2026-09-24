@@ -3,7 +3,8 @@
 //! a side-stream RNG; the golden match (sub_context None) is untouched.
 
 use goat_core::{
-    generation::{generate_player, CreationChoices, Position},
+    generation::{generate_player, CreationChoices},
+    positions::PrimaryPosition,
     roles::RoleId,
     tactical::TacticalProfile,
 };
@@ -38,8 +39,8 @@ fn profile(att: i32, mid: i32, def: i32) -> TacticalProfile {
 fn setup_with_subs(sub: SubContext, pc_attr: i32) -> MatchSetup {
     let c = CreationChoices {
         name: "Test".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
         club: "Riverside Town".into(),
     };
     let mut pl = generate_player(12345, &c);
@@ -231,8 +232,8 @@ fn minutes_weighting_and_harness_parity() {
 fn chasing_setup(with_bench: bool) -> MatchSetup {
     let c = CreationChoices {
         name: "Test".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
         club: "Riverside Town".into(),
     };
     let pl = generate_player(12345, &c);

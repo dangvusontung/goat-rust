@@ -15,7 +15,8 @@
 //! stays derived from `world_seed`.
 
 use crate::batch_tick::{batch_tick_season_orbit, OrbitSeasonOverlay};
-use crate::population::{genesis, Population};
+use crate::population::{apply_youth_intake, genesis, Population};
+use crate::world::WorldGenesis;
 use goat_core::state::OrbitMatchRecord;
 
 /// Synthetic per-match rating feeding the NPC form EMA: team result is the
@@ -67,18 +68,32 @@ pub fn season_overlay(records: &[OrbitMatchRecord], season: u32) -> Option<Orbit
 /// (PA2 M3): genesis → for each completed season, apply that season's orbit
 /// records then batch-tick with the remainder overlay → finally apply the
 /// in-progress season's records. Deterministic in `(world_seed, records)`.
+/// Post-merge this runs on the `WorldGenesis` world model; youth replenishment
+/// comes from `population::apply_youth_intake` (Round-3 Slice 4) after each
+/// completed season's batch tick.
 pub fn rebuild_population(
     world_seed: u64,
     season: u32,
     records: &[OrbitMatchRecord],
 ) -> Population {
-    let mut pop = genesis(world_seed);
+    let world = WorldGenesis::generate(world_seed);
+    let league_clubs = world.static_league_clubs();
+    let mut pop = genesis(world_seed, &world);
     for s in 1..season {
         for rec in records.iter().filter(|r| r.season == s) {
             apply_orbit_record(&mut pop, rec);
         }
         let overlay = season_overlay(records, s);
-        batch_tick_season_orbit(&mut pop, world_seed, s, s * 52, overlay.as_ref());
+        batch_tick_season_orbit(
+            &mut pop,
+            &world,
+            &league_clubs,
+            world_seed,
+            s,
+            s * 52,
+            overlay.as_ref(),
+        );
+        apply_youth_intake(&mut pop, &world, world_seed, s);
     }
     for rec in records.iter().filter(|r| r.season == season) {
         apply_orbit_record(&mut pop, rec);
@@ -132,7 +147,8 @@ mod tests {
     #[test]
     fn form_feedback_loop_rises_on_hot_streak_and_sinks_on_cold() {
         let idx = 7u32;
-        let mut pop = genesis(42);
+        let w = WorldGenesis::generate(42);
+        let mut pop = genesis(42, &w);
         assert_eq!(pop.form[idx as usize], 50);
         for round in 0..10 {
             apply_orbit_record(&mut pop, &rec(1, round, 0, vec![credit(idx, 1, 1)]));
@@ -140,7 +156,8 @@ mod tests {
         let hot = pop.form[idx as usize];
         assert!(hot > 60, "scoring every week in wins lifts form: {hot}");
 
-        let mut pop2 = genesis(42);
+        let w2 = WorldGenesis::generate(42);
+        let mut pop2 = genesis(42, &w2);
         for round in 0..10 {
             apply_orbit_record(&mut pop2, &rec(1, round, 0, vec![credit(idx, 0, -1)]));
         }

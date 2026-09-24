@@ -8,7 +8,8 @@ use std::collections::HashSet;
 
 #[test]
 fn population_names_are_diverse() {
-    let pop = goat_world::population::genesis(12345);
+    let world = goat_world::world::WorldGenesis::generate(12345);
+    let pop = goat_world::population::genesis(12345, &world);
     let names: HashSet<String> = (0..500usize)
         .map(|i| goat_world::history::name_from_seed(pop.seed[i]))
         .collect();

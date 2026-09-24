@@ -2,7 +2,8 @@
 //! specific population NPC) so the live game can persist career stats.
 
 use goat_core::{
-    generation::{generate_player, CreationChoices, Position},
+    generation::{generate_player, CreationChoices},
+    positions::PrimaryPosition,
     roles::RoleId,
     tactical::TacticalProfile,
 };
@@ -37,8 +38,8 @@ fn neutral_profile() -> TacticalProfile {
 fn setup_with_ids() -> MatchSetup {
     let c = CreationChoices {
         name: "Test".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
         club: "Riverside Town".into(),
     };
     let pl = generate_player(12345, &c);

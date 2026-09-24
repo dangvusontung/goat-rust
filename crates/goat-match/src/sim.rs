@@ -145,6 +145,10 @@ const OPP_DIFFICULTY_DIV: i32 = 2;
 /// Frustration above this can force a reckless defend beat on the next tick.
 const RECKLESS_FRUSTRATION: i32 = 75;
 
+/// BL5.2 decisive-moment detection: only beats at or after this minute can count
+/// as decisive candidates (late-game window; placeholder cutoff, tune with data).
+pub const DECISIVE_MINUTE_CUTOFF: u32 = 80;
+
 // ── Beat library ──────────────────────────────────────────────────────────────
 
 /// Compiled, ready-to-use beat library loaded from the JSON data file.
@@ -283,7 +287,7 @@ impl BeatLibrary {
         let allowed = |o: &&RawOutcome| {
             !o.auto_commentary
                 && match o.score_event.as_deref() {
-                    Some("goal_for") => !suppress_for,
+                    Some("goal_for") | Some("assist_for") => !suppress_for,
                     Some("goal_against") => !suppress_against,
                     _ => true,
                 }
@@ -429,6 +433,12 @@ impl BeatLibrary {
                         scorer: matchup_actor,
                         assist: None,
                     },
+                    // A PC-assisted goal: the teammate finishes, the PC sets it up.
+                    ScoreEvent::AssistFor => GoalCredit {
+                        event,
+                        scorer: teammate_actor,
+                        assist: Some(GoalActor::Pc),
+                    },
                 })
             };
             let (success_credit, failure_credit) = (credit_of(&success), credit_of(&failure));
@@ -469,7 +479,7 @@ impl BeatLibrary {
     /// Pick a goal commentary outcome for an auto-resolved score event.
     fn pick_goal_text(&self, event: ScoreEvent, rng: &mut impl RngSource) -> Option<String> {
         let (ev, side) = match event {
-            ScoreEvent::GoalFor => ("goal_for", "attack"),
+            ScoreEvent::GoalFor | ScoreEvent::AssistFor => ("goal_for", "attack"),
             ScoreEvent::GoalAgainst => ("goal_against", "defend"),
         };
         let pool: Vec<&RawOutcome> = self
@@ -562,6 +572,14 @@ pub struct MomentSummary {
     pub goal_event: Option<ScoreEvent>,
     /// True when the PC made (or auto-picked) a choice; false = pure commentary.
     pub is_action: bool,
+    /// Score going INTO this moment (BL5.2): decisive-ness is judged against the
+    /// score the moment broke, not the score it created.
+    pub goals_for_before: u32,
+    pub goals_against_before: u32,
+    /// Score event on the taken choice's success/failure branch (BL5.2 stakes
+    /// check). `None`/`None` for commentary moments — they are never decisive.
+    pub success_event: Option<ScoreEvent>,
+    pub failure_event: Option<ScoreEvent>,
 }
 
 /// Final result of a completed match.
@@ -590,6 +608,62 @@ pub struct MatchResult {
     pub danger_duels_won: u8,
     pub danger_duels_lost: u8,
     pub danger_man_name: Option<String>,
+}
+
+/// BL5.2: is this moment a "decisive candidate"? Pure predicate over the recorded
+/// moment — no position bias by construction (replaces the rejected curated-`"key"`-tag
+/// approach, which skewed 6-attacking/1-defensive). All of:
+/// 1. The beat was stakes-bearing: the taken choice's success OR failure branch
+///    carries a `score_event` (a goal was plausibly on the line either way).
+/// 2. Late game: `minute >= DECISIVE_MINUTE_CUTOFF`.
+/// 3. Close score going in: |goals_for_before − goals_against_before| <= 1.
+/// 4. The outcome mattered: either the PC's side scored (GoalFor/AssistFor on a
+///    success), or a threatened concession was prevented (the failure branch
+///    carries GoalAgainst, but no GoalAgainst actually happened — whether a card
+///    was shown on the beat is deliberately irrelevant: the card roll is
+///    independent of and runs after contest resolution).
+pub fn is_decisive(m: &MomentSummary) -> bool {
+    let stakes_bearing = m.success_event.is_some() || m.failure_event.is_some();
+    if !stakes_bearing || m.minute < DECISIVE_MINUTE_CUTOFF {
+        return false;
+    }
+    let gap = m.goals_for_before as i32 - m.goals_against_before as i32;
+    if gap.abs() > 1 {
+        return false;
+    }
+    let scored = m.success
+        && matches!(
+            m.goal_event,
+            Some(ScoreEvent::GoalFor) | Some(ScoreEvent::AssistFor)
+        );
+    let stopped_threat = matches!(m.failure_event, Some(ScoreEvent::GoalAgainst))
+        && !matches!(m.goal_event, Some(ScoreEvent::GoalAgainst));
+    scored || stopped_threat
+}
+
+/// BL5.3: is this decisive moment also CLUTCH — the high-leverage subset that
+/// actually moved the needle (so the clutch index isn't a duplicate of the
+/// decisive count)?
+/// - Scored (GoalFor/AssistFor) while level or trailing going in: an equalizer
+///   or go-ahead goal. An insurance goal while already ahead (gap_before = +1)
+///   stays decisive but is NOT clutch.
+/// - A threatened concession prevented: always clutch — any late stop in a
+///   one-goal game keeps points/hope alive.
+pub fn is_clutch(m: &MomentSummary) -> bool {
+    if !is_decisive(m) {
+        return false;
+    }
+    let scored = m.success
+        && matches!(
+            m.goal_event,
+            Some(ScoreEvent::GoalFor) | Some(ScoreEvent::AssistFor)
+        );
+    if scored {
+        let gap = m.goals_for_before as i32 - m.goals_against_before as i32;
+        gap <= 0
+    } else {
+        true
+    }
 }
 
 /// Live match state, advanced tick by tick through the flow.
@@ -937,6 +1011,10 @@ fn push_sub_moment(ms: &mut ActiveMatchState, text: String) {
         outcome_text: text,
         goal_event: None,
         is_action: false,
+        goals_for_before: ms.goals_for,
+        goals_against_before: ms.goals_against,
+        success_event: None,
+        failure_event: None,
     });
 }
 
@@ -1225,6 +1303,10 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
             | (Possession::Opp, PitchZone::Defense)
     );
     let mut goal_event = None;
+    // Score going into this commentary moment (BL5.2 before-fields; commentary
+    // moments are never decisive, but keep the record accurate for the recap).
+    let goals_for_before = ms.goals_for;
+    let goals_against_before = ms.goals_against;
     if attacking {
         let (att, def) = match ms.possession {
             Possession::Own => (ms.setup.own_profile.attack, ms.setup.opp_profile.defense),
@@ -1264,7 +1346,7 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
                 Possession::Opp => ScoreEvent::GoalAgainst,
             };
             match ev {
-                ScoreEvent::GoalFor => {
+                ScoreEvent::GoalFor | ScoreEvent::AssistFor => {
                     ms.goals_for += 1;
                     ms.momentum += MOMENTUM_GOAL;
                 }
@@ -1276,7 +1358,7 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
             ms.momentum = ms.momentum.clamp(-MOMENTUM_MAX, MOMENTUM_MAX);
             // Kickoff: the conceding side restarts with the ball — and surges.
             ms.possession = match ev {
-                ScoreEvent::GoalFor => Possession::Opp,
+                ScoreEvent::GoalFor | ScoreEvent::AssistFor => Possession::Opp,
                 ScoreEvent::GoalAgainst => Possession::Own,
             };
             ms.zone = PitchZone::Midfield;
@@ -1302,6 +1384,10 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
         outcome_text: text,
         goal_event,
         is_action: false,
+        goals_for_before,
+        goals_against_before,
+        success_event: None,
+        failure_event: None,
     });
 }
 
@@ -1381,9 +1467,15 @@ fn resolve_choice(
     );
     ms.stamina = (ms.stamina - stamina_cost).clamp(Fixed::ZERO, STARTING_STAMINA);
 
+    // Capture the score BEFORE this beat's own event lands (BL5.2): a decisive
+    // moment is judged against the score it broke, not the score it created.
+    let goals_for_before = ms.goals_for;
+    let goals_against_before = ms.goals_against;
+
     if let Some(ev) = outcome.score_event {
         match ev {
-            ScoreEvent::GoalFor => ms.goals_for += 1,
+            // An assist is still a goal for the PC's team — a teammate finished it.
+            ScoreEvent::GoalFor | ScoreEvent::AssistFor => ms.goals_for += 1,
             ScoreEvent::GoalAgainst => ms.goals_against += 1,
         }
         let credit = if success {
@@ -1398,7 +1490,7 @@ fn resolve_choice(
         // rule — and a natural decoupler: PC goals hand the initiative to the
         // opposition, so a great PC game can still end in defeat).
         ms.possession = match ev {
-            ScoreEvent::GoalFor => Possession::Opp,
+            ScoreEvent::GoalFor | ScoreEvent::AssistFor => Possession::Opp,
             ScoreEvent::GoalAgainst => Possession::Own,
         };
         ms.zone = PitchZone::Midfield;
@@ -1427,6 +1519,10 @@ fn resolve_choice(
         outcome_text: outcome.text.clone(),
         goal_event: outcome.score_event,
         is_action: true,
+        goals_for_before,
+        goals_against_before,
+        success_event: choice.success.score_event,
+        failure_event: choice.failure.score_event,
     });
 
     // Discipline: foul review from the action's own foul data.
@@ -1748,6 +1844,7 @@ fn convert_outcome(raw: &RawOutcome) -> GeneratedOutcome {
         },
         score_event: match raw.score_event.as_deref() {
             Some("goal_for") => Some(ScoreEvent::GoalFor),
+            Some("assist_for") => Some(ScoreEvent::AssistFor),
             Some("goal_against") => Some(ScoreEvent::GoalAgainst),
             _ => None,
         },

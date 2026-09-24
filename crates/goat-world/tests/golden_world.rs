@@ -3,48 +3,57 @@
 
 use goat_core::{
     attrs::AttrId,
-    generation::{CreationChoices, Position},
+    generation::CreationChoices,
+    positions::PrimaryPosition,
     state::{reduce, Intent, WorldState},
     week::{Intensity, Routine},
 };
 use goat_rng::GoatRng;
-use goat_world::worldgen::generate_world;
 use goat_world::{
-    div_clubs, div_index, facilities_mult, generate_fixtures, round_fixtures, sim_team_match,
-    Table, CLUBS_PER_DIV, NATION_BRAZIL, NATION_ENGLAND, NUM_CLUBS, ROUNDS_PER_SEASON,
+    generate_fixtures, rest_weeks_after_round, round_fixtures, sim_team_match,
+    week_ends_after_round,
+    world::{WorldGenesis, NUM_CLUBS, NUM_DIVISIONS},
+    Table, CLUBS_PER_DIV, ROUNDS_PER_SEASON,
 };
-
-fn div_eng_top() -> usize {
-    div_index(NATION_ENGLAND, 0)
-}
-fn div_eng_sec() -> usize {
-    div_index(NATION_ENGLAND, 1)
-}
-fn div_bra_top() -> usize {
-    div_index(NATION_BRAZIL, 0)
-}
 
 #[test]
 fn world_has_correct_size() {
+    let world = WorldGenesis::generate(1);
+    assert_eq!(world.clubs.len(), NUM_CLUBS);
+    assert_eq!(world.leagues.len(), NUM_DIVISIONS);
+    for league in &world.leagues {
+        assert_eq!(league.clubs.len(), CLUBS_PER_DIV);
+    }
+    assert_eq!(ROUNDS_PER_SEASON, 38);
+}
+
+/// The local line's 50-nation structural world (`layout` + `worldgen`) — kept
+/// intact post-merge for the career tooling built on it.
+#[test]
+fn layout_world_has_correct_size() {
+    use goat_world::layout::{div_clubs, div_index, NATION_BRAZIL, NATION_ENGLAND, NUM_CLUBS};
     assert_eq!(NUM_CLUBS, 2544);
-    assert_eq!(div_clubs(div_eng_top()).len(), 16);
-    assert_eq!(div_clubs(div_eng_sec()).len(), 16);
-    assert_eq!(div_clubs(div_bra_top()).len(), 16);
-    assert_eq!(ROUNDS_PER_SEASON, 30);
-    let w = generate_world(42);
+    assert_eq!(div_clubs(div_index(NATION_ENGLAND, 0)).len(), 16);
+    assert_eq!(div_clubs(div_index(NATION_ENGLAND, 1)).len(), 16);
+    assert_eq!(div_clubs(div_index(NATION_BRAZIL, 0)).len(), 16);
+    let w = goat_world::worldgen::generate_world(42);
     assert_eq!(w.clubs.len(), NUM_CLUBS);
 }
 
 #[test]
 fn golden_fixture_count() {
-    let fixtures = generate_fixtures(12345, 1, div_eng_top());
-    // 16 clubs, 30 rounds, 8 matches/round = 240
+    let world = WorldGenesis::generate(12345);
+    let league_clubs = &world.leagues[0].clubs;
+    let fixtures = generate_fixtures(12345, 1, 0, league_clubs);
+    // CLUBS_PER_DIV clubs, ROUNDS_PER_SEASON rounds, CLUBS_PER_DIV/2 matches/round
     assert_eq!(fixtures.len(), CLUBS_PER_DIV / 2 * ROUNDS_PER_SEASON);
 }
 
 #[test]
 fn each_round_has_correct_match_count() {
-    let fixtures = generate_fixtures(12345, 1, div_eng_top());
+    let world = WorldGenesis::generate(12345);
+    let league_clubs = &world.leagues[0].clubs;
+    let fixtures = generate_fixtures(12345, 1, 0, league_clubs);
     for round in 0..ROUNDS_PER_SEASON {
         let count = fixtures.iter().filter(|f| f.round == round).count();
         assert_eq!(
@@ -58,7 +67,9 @@ fn each_round_has_correct_match_count() {
 
 #[test]
 fn each_club_plays_exactly_once_per_round() {
-    let fixtures = generate_fixtures(42, 1, div_eng_top());
+    let world = WorldGenesis::generate(42);
+    let league_clubs = &world.leagues[0].clubs;
+    let fixtures = generate_fixtures(42, 1, 0, league_clubs);
     for round in 0..ROUNDS_PER_SEASON {
         let round_fx: Vec<_> = fixtures.iter().filter(|f| f.round == round).collect();
         let mut seen = std::collections::HashSet::new();
@@ -78,10 +89,11 @@ fn each_club_plays_exactly_once_per_round() {
 }
 
 #[test]
-fn each_club_plays_30_games_per_season() {
-    let div_clubs = *div_clubs(div_eng_top());
-    let fixtures = generate_fixtures(7, 1, div_eng_top());
-    for &club in &div_clubs {
+fn each_club_plays_full_season_games() {
+    let world = WorldGenesis::generate(7);
+    let div_clubs = &world.leagues[0].clubs;
+    let fixtures = generate_fixtures(7, 1, 0, div_clubs);
+    for &club in div_clubs {
         let count = fixtures
             .iter()
             .filter(|f| f.home == club || f.away == club)
@@ -95,8 +107,10 @@ fn each_club_plays_30_games_per_season() {
 
 #[test]
 fn fixture_list_is_deterministic() {
-    let a = generate_fixtures(999, 2, div_bra_top());
-    let b = generate_fixtures(999, 2, div_bra_top());
+    let world = WorldGenesis::generate(999);
+    let league_clubs = &world.leagues[3].clubs;
+    let a = generate_fixtures(999, 2, 3, league_clubs);
+    let b = generate_fixtures(999, 2, 3, league_clubs);
     assert_eq!(a.len(), b.len());
     for (fa, fb) in a.iter().zip(b.iter()) {
         assert_eq!(fa.home, fb.home);
@@ -107,8 +121,10 @@ fn fixture_list_is_deterministic() {
 
 #[test]
 fn different_seasons_give_different_fixtures() {
-    let s1 = generate_fixtures(42, 1, div_eng_top());
-    let s2 = generate_fixtures(42, 2, div_eng_top());
+    let world = WorldGenesis::generate(42);
+    let league_clubs = &world.leagues[0].clubs;
+    let s1 = generate_fixtures(42, 1, 0, league_clubs);
+    let s2 = generate_fixtures(42, 2, 0, league_clubs);
     let differ = s1
         .iter()
         .zip(s2.iter())
@@ -132,13 +148,16 @@ fn golden_team_match_seed_42() {
 #[test]
 fn twenty_seasons_full_career_no_panic() {
     let world_seed = 0xCAFE_BABE_u64;
-    let world = generate_world(world_seed);
-    let pc_club_id = div_clubs(div_eng_sec())[0];
+    let world = WorldGenesis::generate(world_seed);
+    // League index 1 = nation 0's Second-tier division (mirrors the old "starts in the
+    // second division" flavor — the specific league doesn't matter, just its tier).
+    let pc_div_idx: usize = 1;
+    let pc_club_id = world.leagues[pc_div_idx].clubs[0];
 
     let choices = CreationChoices {
         name: "Career GOAT".into(),
-        position: Position::Forward,
-        nationality: "England",
+        primary_position: PrimaryPosition::ST,
+        nationality: "England".to_string(),
         club: world.clubs[pc_club_id].name.clone(),
     };
 
@@ -156,10 +175,10 @@ fn twenty_seasons_full_career_no_panic() {
         Intent::InitWorld {
             world_seed,
             pc_club_idx: pc_club_id as u16,
-            pc_div_idx: div_eng_sec() as u8,
-            facilities_mult: facilities_mult(world.clubs[pc_club_id].strength),
+            pc_div_idx: pc_div_idx as u8,
+            facilities_mult: world.clubs[pc_club_id].facilities_mult(),
             staff_mods: goat_world::staff::club_staff_mods(world.clubs[pc_club_id].strength),
-            initial_table: Box::new([0u32; 80]),
+            initial_table: Box::new([0u32; 100]),
         },
         &mut GoatRng::new(0),
     );
@@ -175,11 +194,15 @@ fn twenty_seasons_full_career_no_panic() {
     let mut prev_career_matches = 0u32;
 
     for season in 1u32..=20 {
-        state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+        state = reduce(
+            state,
+            Intent::StartSeason { fixtures: vec![] },
+            &mut GoatRng::new(0),
+        );
         assert_eq!(state.season_number, season, "s{season}: season counter");
 
         let div_idx = state.pc_div_idx as usize;
-        let div_clubs = *div_clubs(div_idx);
+        let div_clubs = &world.leagues[div_idx].clubs;
 
         for round in 0..ROUNDS_PER_SEASON {
             let age = state.players.get_age_weeks(state.pc_player_id.unwrap());
@@ -189,7 +212,7 @@ fn twenty_seasons_full_career_no_panic() {
                 &mut GoatRng::new(age as u64 ^ (season as u64 * 0xbeef) ^ round as u64),
             );
 
-            let all_fixtures = round_fixtures(world_seed, season, div_idx, round);
+            let all_fixtures = round_fixtures(world_seed, season, div_idx, div_clubs, round);
             let mut sim_rng = GoatRng::new(world_seed ^ ((season as u64) << 32) ^ (round as u64));
 
             let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
@@ -223,10 +246,17 @@ fn twenty_seasons_full_career_no_panic() {
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
                     pc_goals: 0,
+                    pc_assists: 0,
+                    pc_decisive_count: 0,
+                    pc_clutch_count: 0,
+                    fixture_importance: goat_core::state::FixtureImportance::League,
                     pc_output: 60,
                     pc_result,
                     round_results,
+                    rest_weeks: rest_weeks_after_round(round),
+                    week_ends: week_ends_after_round(round),
                 },
                 &mut GoatRng::new(0),
             );
@@ -237,10 +267,10 @@ fn twenty_seasons_full_career_no_panic() {
             "s{season}: round counter at end"
         );
 
-        let table = Table::from_raw(&state.table_raw, &div_clubs);
+        let table = Table::from_raw(&state.table_raw, div_clubs);
         let pos = table.position_of(pc_club_id);
         assert!(
-            (1..=16).contains(&pos),
+            (1..=CLUBS_PER_DIV).contains(&pos),
             "s{season}: position {pos} out of range"
         );
         season_positions.push(pos);
@@ -289,13 +319,14 @@ fn twenty_seasons_full_career_no_panic() {
 #[test]
 fn five_headless_seasons_no_panic() {
     let world_seed = 7777u64;
-    let world = generate_world(world_seed);
-    let pc_club_id = div_clubs(div_eng_sec())[0];
+    let world = WorldGenesis::generate(world_seed);
+    let pc_div_idx: usize = 1;
+    let pc_club_id = world.leagues[pc_div_idx].clubs[0];
 
     let choices = CreationChoices {
         name: "Headless Hero".into(),
-        position: Position::Forward,
-        nationality: "England",
+        primary_position: PrimaryPosition::ST,
+        nationality: "England".to_string(),
         club: world.clubs[pc_club_id].name.clone(),
     };
 
@@ -313,10 +344,10 @@ fn five_headless_seasons_no_panic() {
         Intent::InitWorld {
             world_seed,
             pc_club_idx: pc_club_id as u16,
-            pc_div_idx: div_eng_sec() as u8,
-            facilities_mult: facilities_mult(world.clubs[pc_club_id].strength),
+            pc_div_idx: pc_div_idx as u8,
+            facilities_mult: world.clubs[pc_club_id].facilities_mult(),
             staff_mods: goat_world::staff::club_staff_mods(world.clubs[pc_club_id].strength),
-            initial_table: Box::new([0u32; 80]),
+            initial_table: Box::new([0u32; 100]),
         },
         &mut GoatRng::new(0),
     );
@@ -330,11 +361,15 @@ fn five_headless_seasons_no_panic() {
     let mut final_positions: Vec<usize> = Vec::new();
 
     for season in 1u32..=5 {
-        state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
+        state = reduce(
+            state,
+            Intent::StartSeason { fixtures: vec![] },
+            &mut GoatRng::new(0),
+        );
         assert_eq!(state.season_number, season, "season counter");
 
         let div_idx = state.pc_div_idx as usize;
-        let div_clubs = *div_clubs(div_idx);
+        let div_clubs = &world.leagues[div_idx].clubs;
 
         for round in 0..ROUNDS_PER_SEASON {
             // Advance 1 training week before each match.
@@ -346,7 +381,7 @@ fn five_headless_seasons_no_panic() {
             );
 
             // Sim all matches in this round via team strength.
-            let all_fixtures = round_fixtures(world_seed, season, div_idx, round);
+            let all_fixtures = round_fixtures(world_seed, season, div_idx, div_clubs, round);
             let mut sim_rng = GoatRng::new(world_seed ^ ((season as u64) << 32) ^ (round as u64));
 
             let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
@@ -380,10 +415,17 @@ fn five_headless_seasons_no_panic() {
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
                     pc_goals: 0,
+                    pc_assists: 0,
+                    pc_decisive_count: 0,
+                    pc_clutch_count: 0,
+                    fixture_importance: goat_core::state::FixtureImportance::League,
                     pc_output: 60,
                     pc_result,
                     round_results,
+                    rest_weeks: rest_weeks_after_round(round),
+                    week_ends: week_ends_after_round(round),
                 },
                 &mut GoatRng::new(0),
             );
@@ -394,9 +436,12 @@ fn five_headless_seasons_no_panic() {
             "season {season}: round counter at end"
         );
 
-        let table = Table::from_raw(&state.table_raw, &div_clubs);
+        let table = Table::from_raw(&state.table_raw, div_clubs);
         let pos = table.position_of(pc_club_id);
-        assert!((1..=16).contains(&pos), "position {pos} out of range");
+        assert!(
+            (1..=CLUBS_PER_DIV).contains(&pos),
+            "position {pos} out of range"
+        );
         final_positions.push(pos);
 
         // Attr invariants hold mid-career.

@@ -17,7 +17,8 @@
 /// lifting his own line vs. the position-independent fixed profile.
 use goat_core::{
     attrs::{AttrId, NUM_ATTRS},
-    generation::{generate_player, CreationChoices, Position},
+    generation::{generate_player, CreationChoices},
+    positions::PrimaryPosition,
     roles::RoleId,
     tactical::TacticalProfile,
 };
@@ -31,12 +32,12 @@ use goat_traits::PlayerTraits;
 
 const BEATS_JSON: &str = include_str!("../../../beats.json");
 
-const POSITIONS: [(&str, Position, RoleId); 5] = [
-    ("ST", Position::Forward, RoleId::CompleteForward),
-    ("W", Position::Midfielder, RoleId::Winger),
-    ("CAM", Position::Midfielder, RoleId::AttackingMid),
-    ("CM", Position::Midfielder, RoleId::CentralMid),
-    ("CB", Position::Defender, RoleId::CentreBack),
+const POSITIONS: [(&str, PrimaryPosition, RoleId); 5] = [
+    ("ST", PrimaryPosition::ST, RoleId::CompleteForward),
+    ("W", PrimaryPosition::W, RoleId::Winger),
+    ("CAM", PrimaryPosition::CAM, RoleId::AttackingMid),
+    ("CM", PrimaryPosition::CM, RoleId::CentralMid),
+    ("CB", PrimaryPosition::CB, RoleId::CentreBack),
 ];
 
 /// Per-match record kept for outlier hunting (top scorelines / extreme ratings).
@@ -105,9 +106,9 @@ fn main() {
 
         let choices = CreationChoices {
             name: "Batch".into(),
-            position,
-            nationality: "Brazilian",
-            club: "Riverside Town".into(),
+            primary_position: position,
+            nationality: "Brazilian".to_string(),
+            club: "Riverside Town".to_string(),
         };
         let pl = generate_player(seed, &choices);
         // Star injection: 1 in 4 matches is played by a peak-career PC (attr
@@ -132,10 +133,10 @@ fn main() {
         // shaped) attrs lift his own line of the team average — exactly what
         // `Population::squad_avg_attrs(.., extra = PC)` + `from_squad` do live.
         let own_profile = if m1_squad {
-            let pc_group = match position {
-                Position::Defender => 0u8,
-                Position::Midfielder => 1,
-                Position::Forward => 2,
+            let pc_group = match position.family() {
+                goat_core::roles::PositionFamily::Defender => 0u8,
+                goat_core::roles::PositionFamily::Midfielder => 1,
+                goat_core::roles::PositionFamily::Forward => 2,
             };
             let mut sums = [0i64; NUM_ATTRS];
             let mut cnt = 0i64;

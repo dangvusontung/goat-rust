@@ -5,7 +5,8 @@
 //! outcomes stay byte-identical.
 
 use goat_core::{
-    generation::{generate_player, CreationChoices, Position},
+    generation::{generate_player, CreationChoices},
+    positions::PrimaryPosition,
     roles::RoleId,
     tactical::TacticalProfile,
 };
@@ -39,8 +40,8 @@ fn profile(att: i32, mid: i32, def: i32) -> TacticalProfile {
 fn setup_cb(opp_str: u8) -> MatchSetup {
     let c = CreationChoices {
         name: "Test".into(),
-        position: Position::Defender,
-        nationality: "Brazilian",
+        primary_position: PrimaryPosition::CB,
+        nationality: "Brazilian".to_string(),
         club: "Riverside Town".into(),
     };
     let pl = generate_player(999, &c);

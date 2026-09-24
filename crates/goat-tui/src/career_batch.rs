@@ -10,21 +10,27 @@
 ///   career-batch 100000 0xBA7C4 > logs/career-batch-100k.csv
 use goat_core::{
     attrs::AttrId,
+    calendar_loop::LEAGUE_COMPETITION_ID,
     derive::ovr,
-    generation::{CreationChoices, Position},
+    generation::CreationChoices,
+    positions::PrimaryPosition,
     state::{reduce, Intent, WorldState},
     week::{Intensity, Routine},
 };
 use goat_rng::{GoatRng, RngSource};
 use goat_world::{
-    div_clubs, div_index, facilities_mult, fixture_for_round, round_fixtures, sim_team_match,
-    worldgen::generate_world, Table, NATION_ENGLAND, ROUNDS_PER_SEASON,
+    fixture_for_round, round_fixtures, sim_team_match, world::WorldGenesis, Table,
+    ROUNDS_PER_SEASON,
 };
 
-const POSITIONS: [(&str, Position); 3] = [
-    ("Forward", Position::Forward),
-    ("Midfielder", Position::Midfielder),
-    ("Defender", Position::Defender),
+/// Post-merge note: this harness mirrors career-sim's merged path — the
+/// `WorldGenesis` model (20 nations × 3 tiers × 20 clubs, 38-round seasons).
+/// The local line's 50-nation layout model still exists under
+/// `goat_world::layout` but no longer drives the career loop.
+const POSITIONS: [(&str, PrimaryPosition); 3] = [
+    ("Forward", PrimaryPosition::ST),
+    ("Midfielder", PrimaryPosition::CM),
+    ("Defender", PrimaryPosition::CB),
 ];
 
 const INTENSITIES: [(&str, Intensity); 3] = [
@@ -34,24 +40,24 @@ const INTENSITIES: [(&str, Intensity); 3] = [
 ];
 
 // (goal_attr, range_max) — same table as career-sim's SimPos::goal_roll.
-fn goal_roll(pos: Position) -> (AttrId, u32) {
-    match pos {
-        Position::Forward => (AttrId::Finishing, 399),
-        Position::Midfielder => (AttrId::Finishing, 699),
-        Position::Defender => (AttrId::Heading, 1199),
+fn goal_roll(pos: PrimaryPosition) -> (AttrId, u32) {
+    match pos.family() {
+        goat_core::roles::PositionFamily::Forward => (AttrId::Finishing, 399),
+        goat_core::roles::PositionFamily::Midfielder => (AttrId::Finishing, 699),
+        goat_core::roles::PositionFamily::Defender => (AttrId::Heading, 1199),
     }
 }
 
-fn focus_attrs(pos: Position) -> Vec<AttrId> {
-    match pos {
-        Position::Forward => vec![
+fn focus_attrs(pos: PrimaryPosition) -> Vec<AttrId> {
+    match pos.family() {
+        goat_core::roles::PositionFamily::Forward => vec![
             AttrId::Finishing,
             AttrId::AttPositioning,
             AttrId::ShotPower,
             AttrId::BallControl,
             AttrId::Composure,
         ],
-        Position::Midfielder => vec![
+        goat_core::roles::PositionFamily::Midfielder => vec![
             AttrId::ShortPassing,
             AttrId::Stamina,
             AttrId::Vision,
@@ -59,7 +65,7 @@ fn focus_attrs(pos: Position) -> Vec<AttrId> {
             AttrId::LongPassing,
             AttrId::Composure,
         ],
-        Position::Defender => vec![
+        goat_core::roles::PositionFamily::Defender => vec![
             AttrId::Marking,
             AttrId::StandingTackle,
             AttrId::Heading,
@@ -101,19 +107,20 @@ struct CareerRow {
 
 fn run_one(
     seed: u64,
-    pos: Position,
+    pos: PrimaryPosition,
     pos_label: &'static str,
     intensity: Intensity,
     intensity_label: &'static str,
 ) -> CareerRow {
-    let world = generate_world(seed);
-    let div_idx = div_index(NATION_ENGLAND, 1);
-    let pc_club_id = div_clubs(div_idx)[0];
+    let world = WorldGenesis::generate(seed);
+    // Second tier of the first generated nation (mirrors career-sim).
+    let div_idx = 1;
+    let pc_club_id = world.leagues[div_idx].clubs[0];
 
     let choices = CreationChoices {
         name: "Batch".into(),
-        position: pos,
-        nationality: "England",
+        primary_position: pos,
+        nationality: "England".to_string(),
         club: world.clubs[pc_club_id].name.clone(),
     };
 
@@ -129,15 +136,10 @@ fn run_one(
             world_seed: seed,
             pc_club_idx: pc_club_id as u16,
             pc_div_idx: div_idx as u8,
-            facilities_mult: facilities_mult(world.clubs[pc_club_id].strength),
+            facilities_mult: world.clubs[pc_club_id].facilities_mult(),
             staff_mods: goat_world::staff::club_staff_mods(world.clubs[pc_club_id].strength),
-            initial_table: Box::new([0u32; 80]),
+            initial_table: Box::new([0u32; 100]),
         },
-        &mut GoatRng::new(0),
-    );
-    state = reduce(
-        state,
-        Intent::SetLifestyle { lifestyle: 1 },
         &mut GoatRng::new(0),
     );
     let routine = Routine {
@@ -163,10 +165,16 @@ fn run_one(
     let mut offers_wage_max: i64 = 0;
 
     for season in 1u32..=20 {
-        state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
         let season_div_idx = state.pc_div_idx as usize;
         let season_pc_club = state.pc_club_idx as usize;
-        let div_club_ids = div_clubs(season_div_idx);
+        let div_club_ids = world.leagues[season_div_idx].clubs.clone();
+        // Batch mode keeps no calendar orbit fixtures; the StartSeason rest-week
+        // back-fill handles off-season time (same as career-sim's batch path).
+        state = reduce(
+            state,
+            Intent::StartSeason { fixtures: vec![] },
+            &mut GoatRng::new(0),
+        );
 
         for round in 0..ROUNDS_PER_SEASON {
             for t in 0u64..2 {
@@ -175,7 +183,7 @@ fn run_one(
                 state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(rng_seed));
             }
 
-            let all_fixtures = round_fixtures(seed, season, season_div_idx, round);
+            let all_fixtures = round_fixtures(seed, season, season_div_idx, &div_club_ids, round);
             let mut sim_rng = GoatRng::new(seed ^ ((season as u64) << 32) ^ (round as u64));
             let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
             let mut pc_gf = 0u32;
@@ -199,17 +207,23 @@ fn run_one(
                 }
             }
 
-            let pc_output =
-                match fixture_for_round(seed, season, season_div_idx, season_pc_club, round) {
-                    Some(_) => {
-                        let form_val = state.pc_form.to_int() as u64;
-                        let mut out_rng =
-                            GoatRng::new(seed ^ (season as u64 * 0xdead) ^ (round as u64));
-                        let variance = out_rng.next_range_u64(0, 20) as i32 - 10;
-                        (form_val as i32 + variance).clamp(0, 100)
-                    }
-                    None => 0,
-                };
+            let pc_output = match fixture_for_round(
+                seed,
+                season,
+                season_div_idx,
+                &div_club_ids,
+                season_pc_club,
+                round,
+            ) {
+                Some(_) => {
+                    let form_val = state.pc_form.to_int() as u64;
+                    let mut out_rng =
+                        GoatRng::new(seed ^ (season as u64 * 0xdead) ^ (round as u64));
+                    let variance = out_rng.next_range_u64(0, 20) as i32 - 10;
+                    (form_val as i32 + variance).clamp(0, 100)
+                }
+                None => 0,
+            };
             let pc_result: i8 = if pc_gf > pc_ga {
                 1
             } else if pc_gf < pc_ga {
@@ -231,10 +245,20 @@ fn run_one(
             state = reduce(
                 state,
                 Intent::ApplyRoundResult {
+                    competition_id: LEAGUE_COMPETITION_ID,
                     pc_goals: player_goals,
+                    // Batch path rolls goals from attrs without beat moments, so
+                    // there is no assist source here — assists stay 0 in this mode.
+                    pc_assists: 0,
+                    // Same for decisive moments — no moments to detect them from.
+                    pc_decisive_count: 0,
+                    pc_clutch_count: 0,
+                    fixture_importance: goat_calendar::FixtureImportance::League,
                     pc_output,
                     pc_result,
                     round_results,
+                    rest_weeks: 0,
+                    week_ends: true,
                 },
                 &mut GoatRng::new(0),
             );
@@ -247,7 +271,7 @@ fn run_one(
         }
         season_ovrs[(season - 1) as usize] = cur_ovr;
         let age_years = view.age_weeks / 52;
-        let table = Table::from_raw(&state.table_raw, div_club_ids);
+        let table = Table::from_raw(&state.table_raw, &div_club_ids);
         let table_pos = table.position_of(season_pc_club);
 
         let season_avg = if state.pc_season_matches > 0 {
@@ -297,7 +321,7 @@ fn run_one(
                         let cand_pos = scout_rng
                             .next_range_u64(0, (goat_world::CLUBS_PER_DIV - 1) as u64)
                             as usize;
-                        let cand_id = div_clubs(cand_div)[cand_pos];
+                        let cand_id = world.leagues[cand_div].clubs[cand_pos];
                         if cand_id == season_pc_club {
                             continue;
                         }
@@ -340,14 +364,22 @@ fn run_one(
             state,
             Intent::ApplySeasonEndLegacy {
                 season_goals: s_goals,
+                season_assists: 0,
                 season_matches: s_matches,
                 season_output_sum,
                 won_title,
                 player_of_year: season_avg > 75,
                 finish_position: table_pos as u32,
                 decisive_moments: 0,
+                season_clutch_index: 0,
                 new_sporting_rep,
                 new_club_fan_rep,
+                season_standout_matches: 0,
+                season_transfer_requests: 0,
+                season_caps: 0,
+                season_international_goals: 0,
+                season_world_cups_won: 0,
+                season_continental_championships_won: 0,
             },
             &mut GoatRng::new(0),
         );

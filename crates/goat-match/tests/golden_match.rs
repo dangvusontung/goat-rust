@@ -4,7 +4,8 @@
 
 use goat_core::{
     attrs::{AttrId, NUM_ATTRS},
-    generation::{generate_player, CreationChoices, Position},
+    generation::{generate_player, CreationChoices},
+    positions::PrimaryPosition,
     roles::RoleId,
     tactical::TacticalProfile,
 };
@@ -35,8 +36,8 @@ fn test_sheet(mark_pc: bool) -> SquadSheet {
 fn forward_attrs() -> [Fixed; NUM_ATTRS] {
     let c = CreationChoices {
         name: "Test".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
         club: "Riverside Town".into(),
     };
     generate_player(12345, &c).current
@@ -45,8 +46,8 @@ fn forward_attrs() -> [Fixed; NUM_ATTRS] {
 fn forward_fam() -> [goat_core::roles::FamiliarityTier; goat_core::roles::NUM_ROLES] {
     let c = CreationChoices {
         name: "Test".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
         club: "Riverside Town".into(),
     };
     generate_player(12345, &c).familiarity
@@ -98,12 +99,21 @@ fn balanced_setup() -> MatchSetup {
 /// drift, momentum, auto-goal, mercy/trailing/response logic) are untouched;
 /// the re-freeze was validated with a 100k-match distribution comparison
 /// (docs/sim-analysis.md, M2 entry).
+///
+/// Re-frozen 57/1-1 → 51/0-1 at the PA2/origin-main merge (2026-09-25): the
+/// merge pulls in the ceiling-lottery restore (CEILING 99/99 → 70/99), so the
+/// setup's generate_player(12345) attrs now roll against ceiling 79, and the
+/// BL5.1 AssistFor wiring adds a teammate-goal credit path. Same engine, same
+/// seed — lower inputs, lower output.
 #[test]
 fn golden_seed_42_balanced_auto() {
     let result = auto_play_match(&lib(), balanced_setup(), &mut GoatRng::new(42));
-    assert_eq!(result.player_output, 57, "output frozen at 57 (M2)");
-    assert_eq!(result.goals_for, 1, "goals_for frozen at 1 (M2)");
-    assert_eq!(result.goals_against, 1, "goals_against frozen at 1 (M2)");
+    assert_eq!(
+        result.player_output, 51,
+        "output frozen at 51 (merge: ceiling 79 era)"
+    );
+    assert_eq!(result.goals_for, 0, "goals_for frozen at 0 (merge)");
+    assert_eq!(result.goals_against, 1, "goals_against frozen at 1 (merge)");
 }
 
 /// Demonstrates Output ≠ Result: a high-output performance can still end in a loss.

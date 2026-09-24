@@ -1,0 +1,10 @@
+position,intensity,n,peak_ovr_mean,realized_pct_mean,career_goals_mean,league_titles_mean
+Defender,High,11000,90.04,95.54,57.11,2.29
+Defender,Low,11000,90.06,95.55,56.64,2.29
+Defender,Medium,11000,90.03,95.54,57.56,2.28
+Forward,High,11000,90.71,96.87,177.1,2.27
+Forward,Low,11000,90.71,96.87,176.91,2.27
+Forward,Medium,11000,90.68,96.87,179.15,2.28
+Midfielder,High,11000,90.15,96.21,28.65,2.28
+Midfielder,Low,11000,90.16,96.21,28.47,2.28
+Midfielder,Medium,11000,90.14,96.21,28.53,2.29

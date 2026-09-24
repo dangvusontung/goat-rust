@@ -11,7 +11,8 @@
 //! weeks, Flashy peaks 89 vs 93 — toxic finally costs ceiling + durability.
 
 use goat_core::derive::ovr;
-use goat_core::generation::{CreationChoices, Position};
+use goat_core::generation::CreationChoices;
+use goat_core::positions::PrimaryPosition;
 use goat_core::state::{reduce, Intent, WorldState};
 use goat_core::week::{Intensity, Routine};
 use goat_fixed::Fixed;
@@ -20,14 +21,31 @@ use goat_rng::GoatRng;
 const PROFESSIONAL: u8 = 0;
 const FLASHY: u8 = 2;
 
-/// Build a Forward at a fixed seed, set the given lifestyle + a High-intensity
+/// Maps a forced test lifestyle tier to the extreme lifestyle score that produces it
+/// (bible §8.5/§8.6 — lifestyle is now emergent, not a settable intent). Pinned to the
+/// extremes of the [-1.000, 1.000] band so a single week's nudge can never cross a
+/// tier threshold on its own.
+fn score_for_lifestyle(lifestyle: u8) -> Fixed {
+    match lifestyle {
+        0 => Fixed::raw(-1_000),
+        2 => Fixed::raw(1_000),
+        _ => Fixed::ZERO,
+    }
+}
+
+/// Build a Forward at a fixed seed, pin the given lifestyle tier + a High-intensity
 /// striker routine, then run `weeks` weeks. Returns (peak OVR seen, weeks injured).
+///
+/// The High-intensity routine nudges the lifestyle score toward Professional every
+/// week (bible §8.5); this harness re-pins the score before each week so the forced
+/// tier holds for the whole run — reproducing the old "lifestyle set once, never
+/// changes" behaviour byte-for-bit, which is what the frozen goldens below assume.
 fn run_career(seed: u64, lifestyle: u8, weeks: u32) -> (i32, u32) {
     let choices = CreationChoices {
         name: "Spec".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
-        club: "Riverside Town".into(),
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     let mut s = WorldState::new();
     s = reduce(
@@ -35,7 +53,9 @@ fn run_career(seed: u64, lifestyle: u8, weeks: u32) -> (i32, u32) {
         Intent::CreatePlayer { seed, choices },
         &mut GoatRng::new(0),
     );
-    s = reduce(s, Intent::SetLifestyle { lifestyle }, &mut GoatRng::new(0));
+    let forced_score = score_for_lifestyle(lifestyle);
+    s.pc_lifestyle_score = forced_score;
+    s.pc_lifestyle = lifestyle;
     let routine = Routine {
         focus_attrs: vec![
             goat_core::attrs::AttrId::Finishing,
@@ -51,7 +71,10 @@ fn run_career(seed: u64, lifestyle: u8, weeks: u32) -> (i32, u32) {
     let mut peak = 0i32;
     let mut injured = 0u32;
     for _ in 0..weeks {
+        s.pc_lifestyle_score = forced_score;
+        s.pc_lifestyle = lifestyle;
         s = reduce(s, Intent::AdvanceWeek, &mut rng);
+        s.pc_week_training_done = false; // week boundary — harness has no round loop
         if s.players.get_injury_weeks(pc) > 0 {
             injured += 1;
         }
@@ -107,9 +130,9 @@ fn professional_lifestyle_reaches_higher_peak() {
 fn lifestyle_never_breaks_talent_ceiling() {
     let choices = CreationChoices {
         name: "Ceil".into(),
-        position: Position::Forward,
-        nationality: "Brazilian",
-        club: "Riverside Town".into(),
+        primary_position: PrimaryPosition::ST,
+        nationality: "Brazilian".to_string(),
+        club: "Riverside Town".to_string(),
     };
     let mut s = WorldState::new();
     s = reduce(
@@ -117,13 +140,8 @@ fn lifestyle_never_breaks_talent_ceiling() {
         Intent::CreatePlayer { seed: 7, choices },
         &mut GoatRng::new(0),
     );
-    s = reduce(
-        s,
-        Intent::SetLifestyle {
-            lifestyle: PROFESSIONAL,
-        },
-        &mut GoatRng::new(0),
-    );
+    s.pc_lifestyle_score = score_for_lifestyle(PROFESSIONAL);
+    s.pc_lifestyle = PROFESSIONAL;
     let routine = Routine {
         focus_attrs: vec![goat_core::attrs::AttrId::Finishing],
         intensity: Intensity::High,
@@ -132,7 +150,10 @@ fn lifestyle_never_breaks_talent_ceiling() {
     let pc = s.pc_player_id.unwrap();
     let mut rng = GoatRng::new(7);
     for _ in 0..600 {
+        s.pc_lifestyle_score = score_for_lifestyle(PROFESSIONAL);
+        s.pc_lifestyle = PROFESSIONAL;
         s = reduce(s, Intent::AdvanceWeek, &mut rng);
+        s.pc_week_training_done = false; // week boundary — harness has no round loop
         for a in 0..goat_core::attrs::NUM_ATTRS {
             assert!(
                 s.players.get_current(pc, a) <= s.players.get_potential(pc, a).max(Fixed::MIN_ATTR),
@@ -191,10 +212,17 @@ fn lifestyle_pro_dominates_flashy_across_seeds() {
 #[test]
 fn golden_lifestyle_seed3() {
     // (lifestyle, expected_peak_ovr, expected_injured_weeks)
+    // RE-FROZEN for the ceiling-lottery restore (intentional): seed 3 now rolls a
+    // ceiling in 70–99 instead of always 99 — this seed draws a modest ceiling, so
+    // peak OVR drops 88 → 64.
+    // RE-FROZEN again at the PA2/origin-main merge (intentional): the merged tree
+    // combines the lottery restore with the local training-intensity ceiling work,
+    // shifting injury counts (Pro/Balanced 66/113 → 101/101, Flashy 158 → 157).
+    // Pro-dominates-Flashy ordering (higher peak, fewer injuries) still holds.
     let golden = [
-        (PROFESSIONAL, 88, 88),
-        (1u8, 88, 101), // Balanced — must match pre-lifestyle behavior
-        (FLASHY, 85, 140),
+        (PROFESSIONAL, 64, 101),
+        (1u8, 64, 101), // Balanced — must match pre-lifestyle behavior
+        (FLASHY, 62, 157),
     ];
     for (lifestyle, exp_peak, exp_inj) in golden {
         let (peak, inj) = run_career(3, lifestyle, 900);

@@ -65,6 +65,23 @@ impl PrimaryPosition {
             _ => None,
         }
     }
+
+    /// Which broad position family this specific position belongs to (bible §4/§5.3):
+    /// used for generation role-DNA bias and familiarity seeding. Mirrors the convention
+    /// in `roles::ROLE_POSITION_FAMILY` (e.g. `RoleId::Winger` is Midfielder family) — no
+    /// 4th family is introduced.
+    pub fn family(self) -> crate::roles::PositionFamily {
+        use crate::roles::PositionFamily;
+        match self {
+            PrimaryPosition::CB | PrimaryPosition::FB => PositionFamily::Defender,
+            PrimaryPosition::DM
+            | PrimaryPosition::CM
+            | PrimaryPosition::WM
+            | PrimaryPosition::CAM
+            | PrimaryPosition::W => PositionFamily::Midfielder,
+            PrimaryPosition::ST => PositionFamily::Forward,
+        }
+    }
 }
 
 /// Position familiarity tiers from appendix C.3 (distinct from role familiarity in §5.2).
