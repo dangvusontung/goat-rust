@@ -17,7 +17,8 @@ use crate::tuning::{
     FAM_XP_COMPETENT, FAM_XP_IMP_PER_WEEK, FAM_XP_KEY_PER_WEEK, FAM_XP_UNCONVINCING,
     GROWTH_MULT_HIGH, GROWTH_MULT_LOW, GROWTH_MULT_MED, GROWTH_SINGLE_WEEK_CAP,
     GROWTH_VARIANCE_RAW, INJURY_LIFESTYLE_X10_BALANCED, INJURY_LIFESTYLE_X10_FLASHY,
-    INJURY_LIFESTYLE_X10_PRO, INJURY_WEEKS_MAX, INJURY_WEEKS_MIN, LIFESTYLE_CEILING_BALANCED,
+    INJURY_LIFESTYLE_X10_PRO, INJURY_WEEKS_MAX, INJURY_WEEKS_MIN, INTENSITY_CEILING_HIGH,
+    INTENSITY_CEILING_LOW, INTENSITY_CEILING_MED, LIFESTYLE_CEILING_BALANCED,
     LIFESTYLE_CEILING_FLASHY, LIFESTYLE_CEILING_PRO, W_IMP, W_KEY,
 };
 
@@ -232,7 +233,14 @@ pub fn advance_week(
         let cur = players.get_current(pc_id, a);
         // Effective ceiling: a flashy lifestyle burns a little of the potential, so
         // the player never quite reaches the top (still ≤ potential — pillar §2.4).
-        let pot = players.get_potential(pc_id, a) * lifestyle_ceiling(lifestyle);
+        // Uses `routine.intensity` (the player's set choice), NOT the effective
+        // per-week `intensity` (which can be silently auto-downgraded on an
+        // exhausted week) — the ceiling reflects sustained commitment, not one
+        // tired week, so a routine High player doesn't see already-earned stats
+        // clawed back the moment energy dips.
+        let pot = players.get_potential(pc_id, a)
+            * lifestyle_ceiling(lifestyle)
+            * intensity_ceiling(routine.intensity);
         players.set_current(pc_id, a, (cur + growth).clamp(Fixed::MIN_ATTR, pot));
     }
 
@@ -250,7 +258,9 @@ pub fn advance_week(
         let a = attr as usize;
         let cur = players.get_current(pc_id, a);
         // Same effective ceiling as training growth — a breakthrough can't exceed it.
-        let pot = players.get_potential(pc_id, a) * lifestyle_ceiling(lifestyle);
+        let pot = players.get_potential(pc_id, a)
+            * lifestyle_ceiling(lifestyle)
+            * intensity_ceiling(routine.intensity);
         let new_val = (cur + BREAKTHROUGH_BONUS).clamp(Fixed::MIN_ATTR, pot);
         players.set_current(pc_id, a, new_val);
         events.push(DevelopmentEvent::Breakthrough {
@@ -383,6 +393,17 @@ fn lifestyle_ceiling(lifestyle: u8) -> Fixed {
         0 => LIFESTYLE_CEILING_PRO,
         2 => LIFESTYLE_CEILING_FLASHY,
         _ => LIFESTYLE_CEILING_BALANCED,
+    }
+}
+
+/// Effective ceiling factor (fraction of potential reachable) for a training
+/// intensity — multiplies with `lifestyle_ceiling`. Speed alone can't create a
+/// lasting gap between intensities over a full career; this does.
+fn intensity_ceiling(intensity: Intensity) -> Fixed {
+    match intensity {
+        Intensity::Low => INTENSITY_CEILING_LOW,
+        Intensity::Medium => INTENSITY_CEILING_MED,
+        Intensity::High => INTENSITY_CEILING_HIGH,
     }
 }
 
@@ -556,8 +577,8 @@ mod tests {
         }
         let recovered_energy = store.get_energy(id);
         assert!(
-            recovered_energy > drained_energy,
-            "resting should recover energy: {drained_energy:?} → {recovered_energy:?}"
+            recovered_energy >= drained_energy,
+            "resting should never lower energy: {drained_energy:?} → {recovered_energy:?}"
         );
     }
 

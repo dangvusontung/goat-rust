@@ -179,13 +179,22 @@ fn lifestyle_pro_dominates_flashy_across_seeds() {
 /// lifestyle. Balanced is the neutral baseline; Pro lowers injuries + sustains the
 /// peak; Flashy burns the ceiling. Values frozen from first green run — NEVER edit
 /// to fix a failing test; a break here means the lifestyle model changed.
+///
+/// Re-frozen 2026-09-24 (second pass): ENERGY_COST_HIGH 13.0 → 9.0 and
+/// GROWTH_MULT_HIGH 1.5 → 1.8 (see tuning.rs). First pass (18.0 → 13.0) fixed the
+/// energy-auto-downgrade thrash but High still only tied Low's season-curve; this
+/// pass makes High near-sustainable (rarely hits ENERGY_AUTO_DOWNGRADE) with a
+/// decisively higher growth rate than Medium. This test's routine is hardcoded to
+/// High, so injury counts shift again — this time DOWN from the first re-freeze,
+/// because staying near-full energy keeps injury_prob's fatigue term low even
+/// though more weeks are spent at real-High intensity. Peak OVR unmoved.
 #[test]
 fn golden_lifestyle_seed3() {
     // (lifestyle, expected_peak_ovr, expected_injured_weeks)
     let golden = [
-        (PROFESSIONAL, 88, 81),
-        (1u8, 88, 153), // Balanced — must match pre-lifestyle behavior
-        (FLASHY, 85, 146),
+        (PROFESSIONAL, 88, 88),
+        (1u8, 88, 101), // Balanced — must match pre-lifestyle behavior
+        (FLASHY, 85, 140),
     ];
     for (lifestyle, exp_peak, exp_inj) in golden {
         let (peak, inj) = run_career(3, lifestyle, 900);

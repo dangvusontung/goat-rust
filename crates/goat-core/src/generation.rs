@@ -7,13 +7,14 @@ use goat_fixed::Fixed;
 use goat_rng::{GoatRng, RngSource};
 
 use crate::attrs::{AgeCurveArchetype, ATTR_ARCHETYPES, NUM_ATTRS};
+use crate::derive::ovr;
 use crate::player::PlayerView;
 use crate::positions::{PrimaryPosition, POSITION_WEIGHT_TABLE};
 use crate::roles::{FamiliarityTier, PositionFamily, RoleId, NUM_ROLES, ROLE_POSITION_FAMILY};
 use crate::tuning::{
-    CEILING_MAX, CEILING_MIN, IMP_BASE_PCT, KEY_BASE_PCT, MENTAL_START_PCT, NOISE_SALT,
-    NOISE_WIDTH_PER_SPIKE, NONE_POT_ABS_LOW, NONE_POT_HIGH_PCT, PHYSICAL_START_PCT, SEC_BASE_PCT,
-    TECHNICAL_START_PCT,
+    CEILING_MAX, CEILING_MIN, DEBUT_OVR_CAP, IMP_BASE_PCT, KEY_BASE_PCT, MENTAL_START_PCT,
+    NOISE_SALT, NOISE_WIDTH_PER_SPIKE, NONE_POT_ABS_LOW, NONE_POT_HIGH_PCT, PHYSICAL_START_PCT,
+    SEC_BASE_PCT, TECHNICAL_START_PCT,
 };
 
 /// High-level player position chosen at career creation (bible §4).
@@ -113,8 +114,16 @@ pub fn generate_player(seed: u64, choices: &CreationChoices) -> PlayerView {
     let primary_pos = choices.position.default_primary();
     let potential = roll_potentials(seed, ceiling, spikiness, primary_pos);
 
-    // Step 5 — starting current values
-    let current = derive_starting_current(&potential);
+    // Step 5 — starting current values, capped so debut OVR never exceeds
+    // DEBUT_OVR_CAP regardless of talent ceiling.
+    let mut current = derive_starting_current(&potential);
+    let debut_ovr = ovr(&current, primary_pos);
+    if debut_ovr > DEBUT_OVR_CAP {
+        let scale = DEBUT_OVR_CAP / debut_ovr;
+        for a in current.iter_mut() {
+            *a = (*a * scale).clamp_attr();
+        }
+    }
 
     // Step 6 — familiarity seeding
     let familiarity = seed_familiarity(choices.position, primary_role);

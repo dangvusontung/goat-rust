@@ -100,6 +100,13 @@ pub const CEILING_MIN: u8 = 99;
 /// Maximum overall talent ceiling (inclusive).
 pub const CEILING_MAX: u8 = 99;
 
+/// Hard cap on debut OVR (age 16, appendix C.4) regardless of talent ceiling.
+/// No matter how gifted, a 16-year-old hasn't shown it all on the pitch yet —
+/// the legend is built over the career, not handed at creation. If the raw
+/// starting attrs would rate above this, they're scaled down uniformly to land
+/// exactly at the cap.
+pub const DEBUT_OVR_CAP: Fixed = Fixed::from_int(65);
+
 // ── Generation: per-attribute potential ranges (as % of ceiling) ──────────────
 
 pub const KEY_POT_LOW_PCT: u8 = 80;
@@ -152,8 +159,16 @@ pub const ENERGY_AUTO_DOWNGRADE: Fixed = Fixed::raw(20_000); // 20.0
 pub const ENERGY_COST_LOW: Fixed = Fixed::raw(3_000); // 3.0
 /// Energy cost per week: Medium intensity — net zero with passive recovery.
 pub const ENERGY_COST_MED: Fixed = Fixed::raw(8_000); // 8.0
-/// Energy cost per week: High intensity — drains ~10/wk; depletes in ~7 weeks from full.
-pub const ENERGY_COST_HIGH: Fixed = Fixed::raw(18_000); // 18.0
+/// Energy cost per week: High intensity — drains ~1/wk, near-sustainable.
+/// Lowered from 18.0 → 13.0 → 9.0 (2026-09-24, two passes): 18.0 drained to the
+/// ENERGY_AUTO_DOWNGRADE floor in ~7 weeks, so a "High" routine spent most weeks
+/// silently forced back to Low — High and Low converged to near-identical
+/// season-curves. 13.0 fixed the thrash but still wasn't a decisive edge over
+/// Medium. At 9.0, High almost never hits the auto-downgrade floor, so its full
+/// growth_mult (now 1.8x, see below) applies nearly every week — the real cost of
+/// choosing High is now the flat higher injury_prob intensity factor, not energy
+/// attrition.
+pub const ENERGY_COST_HIGH: Fixed = Fixed::raw(9_000); // 9.0
 
 // ── Week loop: growth ─────────────────────────────────────────────────────────
 
@@ -164,7 +179,10 @@ pub const GROWTH_MULT_LOW: Fixed = Fixed::raw(600); // 0.600
 /// Growth multiplier at Medium intensity.
 pub const GROWTH_MULT_MED: Fixed = Fixed::raw(1_000); // 1.000
 /// Growth multiplier at High intensity.
-pub const GROWTH_MULT_HIGH: Fixed = Fixed::raw(1_500); // 1.500
+/// Raised 1.5 → 1.8 (2026-09-24) alongside the ENERGY_COST_HIGH fix — with the
+/// energy-thrash bug gone, High needed a clearly higher nominal rate than Medium's
+/// 1.0x to be a decisively faster climb, not just a tied one.
+pub const GROWTH_MULT_HIGH: Fixed = Fixed::raw(1_800); // 1.800
 /// Random variance band: ± this many thousandths each week.
 pub const GROWTH_VARIANCE_RAW: i32 = 50; // ±0.050
 /// Single-week gain cap — prevents extreme lucky streaks.
@@ -203,6 +221,19 @@ pub const INJURY_LIFESTYLE_X10_FLASHY: u32 = 15;
 pub const LIFESTYLE_CEILING_PRO: Fixed = Fixed::raw(1_000); // 1.000 — full potential
 pub const LIFESTYLE_CEILING_BALANCED: Fixed = Fixed::raw(1_000); // 1.000
 pub const LIFESTYLE_CEILING_FLASHY: Fixed = Fixed::raw(960); // 0.960 — burned potential
+
+/// Effective ceiling: fraction of *potential* a training intensity lets the player
+/// actually reach — same mechanism as LIFESTYLE_CEILING, multiplied together (added
+/// 2026-09-24). Growth SPEED alone (GROWTH_MULT_*) can't create a lasting gap
+/// between intensities: with 20 seasons of budget, even Low training has time to
+/// converge near the ceiling before the career ends, so Low/Medium/High end up with
+/// nearly identical peak OVR no matter how the speed multipliers are tuned — only a
+/// gap in the ceiling itself is permanent. High reaches full potential (you left
+/// nothing on the table); Medium and Low cap a little below it (you never quite
+/// squeezed out the last few points without pushing all the way).
+pub const INTENSITY_CEILING_LOW: Fixed = Fixed::raw(900); // 0.900
+pub const INTENSITY_CEILING_MED: Fixed = Fixed::raw(960); // 0.960
+pub const INTENSITY_CEILING_HIGH: Fixed = Fixed::raw(1_000); // 1.000 — full potential
 
 /// Age-decline multiplier by lifestyle: Professional 0.7× (gentler, later burnout),
 /// Balanced 1.0×, Flashy 1.4× (steeper, earlier decline). Multiplies the base decay.
