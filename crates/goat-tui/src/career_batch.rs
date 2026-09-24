@@ -90,6 +90,12 @@ struct CareerRow {
     rival_crystallised: bool,
     marketability: i32,
     discipline_rep: i32,
+    career_output_sum: i64,
+    scouted_avg: i64,
+    offer_seasons: u32,
+    offers_total: u32,
+    offers_wage_avg: i64,
+    offers_wage_max: i64,
     season_ovrs: [i32; 20],
 }
 
@@ -149,6 +155,12 @@ fn run_one(
     let mut peak_ovr = initial_ovr;
     let mut retired_at: u32 = 0;
     let mut season_ovrs = [0i32; 20];
+    let mut scouted_sum: i64 = 0;
+    let mut scouted_seasons: u32 = 0;
+    let mut offer_seasons: u32 = 0;
+    let mut offers_total: u32 = 0;
+    let mut offers_wage_sum: i64 = 0;
+    let mut offers_wage_max: i64 = 0;
 
     for season in 1u32..=20 {
         state = reduce(state, Intent::StartSeason, &mut GoatRng::new(0));
@@ -194,7 +206,7 @@ fn run_one(
                         let mut out_rng =
                             GoatRng::new(seed ^ (season as u64 * 0xdead) ^ (round as u64));
                         let variance = out_rng.next_range_u64(0, 20) as i32 - 10;
-                        ((form_val as i32 + variance).clamp(0, 100)) as i32
+                        (form_val as i32 + variance).clamp(0, 100)
                     }
                     None => 0,
                 };
@@ -250,6 +262,73 @@ fn run_one(
         let s_goals = state.pc_season_goals;
         let s_matches = state.pc_season_matches;
 
+        // Phase 8 measurement: replicate goat-tui's generate_transfer_offers gate +
+        // wage formula exactly (main.rs), observation only — no offer is executed.
+        {
+            let observed = (state.pc_form.to_int() + season_output_sum) / 2;
+            let mut scout_rng = GoatRng::new(seed ^ ((season as u64) << 40) ^ 0xA11BEEF);
+            let scouted = goat_world::scout::scout_estimate(observed, &mut scout_rng);
+            scouted_sum += scouted as i64;
+            scouted_seasons += 1;
+            if scouted >= 55 && age_years < 34 {
+                let n_offers = scout_rng.next_range_u64(0, 2) as usize;
+                if n_offers > 0 {
+                    offer_seasons += 1;
+                }
+                for _ in 0..n_offers {
+                    // Merit-based scouting (matches main.rs generate_transfer_offers
+                    // after the 2026-09-24 fix): sample 3 candidates, prefer the
+                    // closest strength match to `scouted`, 20% runner-up noise.
+                    const CANDIDATES: usize = 3;
+                    let mut best: Option<(usize, i32)> = None;
+                    let mut runner_up: Option<(usize, i32)> = None;
+                    for _ in 0..CANDIDATES {
+                        let cand_div =
+                            ((state.pc_div_idx as u64 + 1 + scout_rng.next_range_u64(0, 2))
+                                % goat_world::NUM_DIVISIONS as u64)
+                                as usize;
+                        let cand_pos = scout_rng
+                            .next_range_u64(0, (goat_world::CLUBS_PER_DIV - 1) as u64)
+                            as usize;
+                        let cand_id = div_clubs(cand_div)[cand_pos];
+                        if cand_id == season_pc_club {
+                            continue;
+                        }
+                        let gap = (world.clubs[cand_id].strength as i32 - scouted).abs();
+                        match best {
+                            Some((_, best_gap)) if gap >= best_gap => {
+                                runner_up = Some((cand_id, gap))
+                            }
+                            _ => {
+                                runner_up = best;
+                                best = Some((cand_id, gap));
+                            }
+                        }
+                    }
+                    let picked = if scout_rng.next_range_u64(0, 99) < 80 {
+                        best.or(runner_up)
+                    } else {
+                        runner_up.or(best)
+                    };
+                    let Some((club_id, _)) = picked else {
+                        continue;
+                    };
+                    let target_strength = world.clubs[club_id].strength;
+                    let wage_offer = (state.pc_wage_annual
+                        + (target_strength as i64 * 2)
+                        + (scouted as i64 - 50) * 3
+                        + scout_rng.next_range_u64(0, 50) as i64)
+                        * 100
+                        / 100; // agent_q always 0 in this harness (no personal staff hired)
+                    offers_total += 1;
+                    offers_wage_sum += wage_offer;
+                    if wage_offer > offers_wage_max {
+                        offers_wage_max = wage_offer;
+                    }
+                }
+            }
+        }
+
         state = reduce(
             state,
             Intent::ApplySeasonEndLegacy {
@@ -295,6 +374,20 @@ fn run_one(
         rival_crystallised: state.pc_rival_idx.is_some(),
         marketability: state.pc_marketability,
         discipline_rep: state.pc_discipline_rep,
+        career_output_sum: state.pc_career_output_sum,
+        scouted_avg: if scouted_seasons > 0 {
+            scouted_sum / scouted_seasons as i64
+        } else {
+            0
+        },
+        offer_seasons,
+        offers_total,
+        offers_wage_avg: if offers_total > 0 {
+            offers_wage_sum / offers_total as i64
+        } else {
+            0
+        },
+        offers_wage_max,
         season_ovrs,
     }
 }
@@ -311,7 +404,8 @@ fn main() {
     println!(
         "seed,position,intensity,initial_ovr,peak_ovr,final_ovr,ovr_ceiling,seasons_played,retired_age,\
 career_goals,career_matches,league_titles,poty_wins,best_season_avg_output,sporting_rep,\
-club_fan_rep,rival_crystallised,marketability,discipline_rep"
+club_fan_rep,rival_crystallised,marketability,discipline_rep,career_output_sum,\
+scouted_avg,offer_seasons,offers_total,offers_wage_avg,offers_wage_max"
     );
 
     // [position][intensity][season-1] -> (sum_ovr, count)
@@ -332,7 +426,7 @@ club_fan_rep,rival_crystallised,marketability,discipline_rep"
             }
         }
         println!(
-            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             row.seed,
             row.position,
             row.intensity,
@@ -352,6 +446,12 @@ club_fan_rep,rival_crystallised,marketability,discipline_rep"
             row.rival_crystallised,
             row.marketability,
             row.discipline_rep,
+            row.career_output_sum,
+            row.scouted_avg,
+            row.offer_seasons,
+            row.offers_total,
+            row.offers_wage_avg,
+            row.offers_wage_max,
         );
     }
 
