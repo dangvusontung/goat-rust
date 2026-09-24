@@ -408,7 +408,7 @@ fn run_game_loop(
             // Phase 8: transfer window and contract renewal.
             state = run_transfer_window(lines, out, state, &view);
             if state.pc_contract_seasons_left == 0 {
-                state = run_contract_negotiation(lines, out, state);
+                state = run_contract_negotiation(lines, out, state, &view);
             }
 
             // Phase 10: auto-retirement suggestion.
@@ -1911,11 +1911,41 @@ fn generate_transfer_offers(state: &WorldState, view: &PlayerView) -> Vec<(usize
     let n_offers = rng.next_range_u64(0, 2) as usize; // 0-2 offers
     let mut offers = Vec::new();
     for _ in 0..n_offers {
-        // Pick a random club from a different division
-        let target_div = ((state.pc_div_idx as u64 + 1 + rng.next_range_u64(0, 2))
-            % NUM_DIVISIONS as u64) as usize;
-        let club_pos = rng.next_range_u64(0, (CLUBS_PER_DIV - 1) as u64) as usize;
-        let club_id = div_clubs(target_div)[club_pos];
+        // Merit-based scouting: sample a few candidate clubs from other divisions
+        // and prefer whichever one's strength best matches the scouted level — a
+        // heavily-scouted player draws interest from stronger sides, not a
+        // uniformly random one. One runner-up slot (20% of the time) keeps some
+        // noise so it's not a deterministic strength-matcher.
+        const CANDIDATES: usize = 3;
+        let mut best: Option<(usize, usize, i32)> = None; // (club_id, div_idx, gap)
+        let mut runner_up: Option<(usize, usize, i32)> = None;
+        for _ in 0..CANDIDATES {
+            let cand_div = ((state.pc_div_idx as u64 + 1 + rng.next_range_u64(0, 2))
+                % NUM_DIVISIONS as u64) as usize;
+            let cand_pos = rng.next_range_u64(0, (CLUBS_PER_DIV - 1) as u64) as usize;
+            let cand_id = div_clubs(cand_div)[cand_pos];
+            if cand_id == state.pc_club_idx as usize {
+                continue;
+            }
+            let gap = (world.clubs[cand_id].strength as i32 - scouted).abs();
+            match best {
+                Some((_, _, best_gap)) if gap >= best_gap => {
+                    runner_up = Some((cand_id, cand_div, gap))
+                }
+                _ => {
+                    runner_up = best;
+                    best = Some((cand_id, cand_div, gap));
+                }
+            }
+        }
+        let picked = if rng.next_range_u64(0, 99) < 80 {
+            best.or(runner_up)
+        } else {
+            runner_up.or(best)
+        };
+        let Some((club_id, target_div, _)) = picked else {
+            continue;
+        };
         let target_strength = world.clubs[club_id].strength;
         // Wage follows the scouted level — an overrated player gets overpaid.
         // A personal agent negotiates the number up.
@@ -1923,14 +1953,12 @@ fn generate_transfer_offers(state: &WorldState, view: &PlayerView) -> Vec<(usize
             state.pc_personal_staff[goat_core::staff::PersonalRole::Agent as usize].quality as i64;
         let wage_offer = (state.pc_wage_annual
             + (target_strength as i64 * 2)
-            + (scouted as i64 - 50)
+            + (scouted as i64 - 50) * 3
             + rng.next_range_u64(0, 50) as i64)
             * (100 + agent_q / 4)
             / 100;
         let length = 2 + rng.next_range_u64(0, 2) as u32;
-        if club_id != state.pc_club_idx as usize {
-            offers.push((club_id, target_div as u8, wage_offer, length));
-        }
+        offers.push((club_id, target_div as u8, wage_offer, length));
     }
     offers
 }
@@ -1996,10 +2024,27 @@ fn run_transfer_window(
                 let agent_q = state.pc_personal_staff
                     [goat_core::staff::PersonalRole::Agent as usize]
                     .quality as i64;
-                let fee_bonus = (world.clubs[state.pc_club_idx as usize].strength as i64)
-                    * 3
-                    * (100 + agent_q / 2)
-                    / 100;
+                // Fee reflects what the selling club can actually extract: years
+                // left on contract (leverage — an out-of-contract star walks for
+                // free, no fee owed), age (resale value peaks young and fades),
+                // and current form. Previously a flat function of the old club's
+                // strength alone, regardless of any of that.
+                let age = view.age_weeks / 52;
+                let contract_years = state.pc_contract_seasons_left.min(3) as i64;
+                let age_factor = (120 - (age as i64 - 23).max(0) * 4).clamp(40, 120);
+                let form_factor = state.pc_form.to_int().clamp(20, 100) as i64;
+                let fee_bonus = if contract_years == 0 {
+                    0
+                } else {
+                    world.clubs[state.pc_club_idx as usize].strength as i64
+                        * contract_years
+                        * age_factor
+                        / 100
+                        * form_factor
+                        / 100
+                        * (100 + agent_q / 2)
+                        / 100
+                };
                 state = reduce(
                     state,
                     Intent::ExecuteTransfer {
@@ -2043,13 +2088,25 @@ fn run_contract_negotiation(
     lines: &mut impl Iterator<Item = io::Result<String>>,
     out: &mut impl Write,
     mut state: WorldState,
+    view: &PlayerView,
 ) -> WorldState {
     // PA2 M1.5: the manager's trust feeds the renewal offer — a trusted player
-    // is one the club wants to keep (±10k at the extremes).
+    // is one the club wants to keep (±10k at the extremes). Current quality
+    // (OVR) and age now shape both the wage bump and how long a term the club
+    // is willing to commit to — previously wage ignored OVR entirely and length
+    // was a flat 2 seasons whether the player was 18 or 35.
+    let age = view.age_weeks / 52;
+    let current_ovr = ovr(&view.current, view.primary_position).to_int() as i64;
     let new_wage = state.pc_wage_annual
         + (state.pc_form.to_int() as i64 / 10) * 5
+        + (current_ovr - 50).max(0) * 3
         + (state.pc_manager_trust as i64 - 50) / 5;
-    let new_length = 2u32;
+    let new_length: u32 = match age {
+        ..=23 => 4,
+        24..=27 => 3,
+        28..=31 => 2,
+        _ => 1,
+    };
 
     writeln!(out, "\n╔══════════════════════════════════════════════╗").unwrap();
     writeln!(out, "║  CONTRACT RENEWAL — {}  ║", state.pc_club).unwrap();
