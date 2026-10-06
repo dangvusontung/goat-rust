@@ -1,5 +1,12 @@
 # Become the GOAT — Project Context Document
 
+Latest implementation: [v10 ranked deep leagues](docs/DEEP-LEAGUES.md) — PC league plus
+top 5, named NPC fixture minutes/credits, authoritative standings replay; save 25.
+
+Latest checkpoint (2026-10-06): [implemented v9 season chronology](docs/SEASON-CHRONOLOGY.md),
+15 August–30 June, continuous training/health and dated replay; save layout 24.
+Legacy factory descriptions below remain applicable to their compatibility paths.
+
 > **Purpose:** This file is a self-contained briefing for working on this project in
 > web-based AI coding environments (Kimi Code Web, Claude Code on the web, or any
 > cloud agent session). Import/paste it as project knowledge or instructions. It
@@ -183,3 +190,13 @@ SIM_VERSION 7, layout 22. Five-drill weekly policy, energy/recovery and seeded
 injury episodes feed promotion, selection and season availability. Core gate
 564 passed; whole-world 20-season cloud replay median 9.21 s, peak native RSS
 about 41.9 MiB. Mobile cache/device task and realistic fixture workload remain next.
+
+Current update (2026-10-06): [v8 dated NPC fixture workload](docs/NPC-FIXTURE-WORKLOAD.md),
+SIM_VERSION 8 / save layout 23. Observed engine minutes override background
+plans; rest gaps and congestion affect energy and injury risk. Weekly training
+and 364/365-day clock differences remain documented limitations.
+
+Latest: [retained deep/light session](docs/DEEP-LIGHT-SESSION.md) implemented in core and live
+league adapter. Incremental journal synchronization preserves v8 fresh replay;
+no save-layout or simulation-version bump. Orbit policy, chronology and 200k
+capacity validation remain pending.

@@ -51,7 +51,7 @@ use goat_world::{
     national_tournament::national_team_strength,
     population::Population,
     promotion::{
-        apply_season_end_for_nation, overlay_nation_membership, sim_league_season,
+        apply_season_end_for_nation, overlay_nation_membership, sim_league_season_with_scores,
         PromoRelegationEvent, TransitionType,
     },
     round_fixtures, round_to_week, sim_team_match_shared,
@@ -161,13 +161,16 @@ fn main() {
                                         // consistent" (like WorldGenesis itself) — not
                                         // persisted in the save, rebuilt here from the
                                         // loaded world_seed/season/club/division.
-                                        state.pc_season_fixtures = build_season_orbit_fixtures(
-                                            state.world_seed,
-                                            state.season_number,
-                                            state.pc_div_idx as usize,
-                                            &world.leagues[state.pc_div_idx as usize].clubs,
-                                            state.pc_club_idx as usize,
-                                        );
+                                        if !state.dated_calendar {
+                                            state.pc_season_fixtures = build_career_fixtures(
+                                                &state,
+                                                state.world_seed,
+                                                state.season_number,
+                                                state.pc_div_idx as usize,
+                                                &world.leagues[state.pc_div_idx as usize].clubs,
+                                                state.pc_club_idx as usize,
+                                            );
+                                        }
                                         run_game_loop(
                                             &mut lines,
                                             &mut out,
@@ -422,7 +425,17 @@ fn run_new_game(
                         &mut GoatRng::new(effective_seed ^ 0x7261_6974_0000_0001),
                     );
 
-                    let fixtures = build_season_orbit_fixtures(
+                    if !std::env::args().any(|a| a == "--legacy-calendar") {
+                        state = reduce(
+                            state,
+                            Intent::EnableDatedCalendar {
+                                base_year: current_year(),
+                            },
+                            &mut GoatRng::new(0),
+                        );
+                    }
+                    let fixtures = build_career_fixtures(
+                        &state,
                         seed,
                         1,
                         div_idx,
@@ -437,7 +450,9 @@ fn run_new_game(
                     // Career epoch: the real-world year, read from wall-clock HERE
                     // (renderer layer) exactly once at new-game — never inside the
                     // core (§9 determinism). Persisted in the save (v19+).
-                    state.career_base_year = current_year();
+                    if !state.dated_calendar {
+                        state.career_base_year = current_year();
+                    }
                     run_game_loop(lines, out, state, beat_lib, pc_traits, world);
                     return;
                 }
@@ -460,7 +475,51 @@ fn run_new_game(
 /// `StartSeason` back-fill pins age to START_AGE + (N−1)·52 at every season
 /// start, and every in-season week ticks exactly one age-week, so the
 /// difference IS the current grid week — pre-season weeks included.
+fn build_career_fixtures(
+    state: &WorldState,
+    seed: u64,
+    season: u32,
+    league: usize,
+    clubs: &[usize],
+    pc: usize,
+) -> Vec<goat_calendar::Fixture> {
+    if state.dated_calendar {
+        orbit_fixtures::build_season_orbit_fixtures_dated(
+            seed,
+            state.career_base_year,
+            season,
+            league,
+            clubs,
+            pc,
+        )
+    } else {
+        build_season_orbit_fixtures(seed, season, league, clubs, pc)
+    }
+}
+fn training_intent(state: &WorldState, n: u32, gated: bool) -> Intent {
+    if state.dated_calendar {
+        let next = state
+            .next_dated_fixture()
+            .map(|(_, f)| f)
+            .map_or(state.pc_epoch_day + n * 7, |f| f.scheduled_day);
+        Intent::AdvanceToDate {
+            epoch_day: (state.pc_epoch_day + n * 7).min(next.max(state.pc_epoch_day)),
+            train: true,
+        }
+    } else if gated {
+        Intent::AdvanceWeek
+    } else {
+        Intent::AdvanceWeeks { n }
+    }
+}
+
 fn season_week(state: &WorldState) -> u32 {
+    if let Some(c) = state.chronology() {
+        return state
+            .pc_epoch_day
+            .saturating_sub(c.frame(state.season_number).preparation_start)
+            / 7;
+    }
     match state.pc_player_id {
         Some(id) => {
             let start = goat_core::tuning::START_AGE_WEEKS + (state.season_number - 1) * 52;
@@ -472,6 +531,13 @@ fn season_week(state: &WorldState) -> u32 {
 
 /// True during the 7-week pre-season lead (before the first league round's week).
 fn in_pre_season(state: &WorldState) -> bool {
+    if state.dated_calendar {
+        return state.season_number > 0
+            && state.season_round == 0
+            && state
+                .next_dated_fixture()
+                .is_some_and(|(_, f)| state.pc_epoch_day < f.scheduled_day);
+    }
     state.season_number > 0
         && state.season_round == 0
         && season_week(state) < PRE_SEASON_WEEKS as u32
@@ -492,7 +558,7 @@ fn run_friendly(
     pc_traits: PlayerTraits,
     world: &WorldGenesis,
 ) -> WorldState {
-    let pc_id = state.pc_player_id.unwrap();
+    let _pc_id = state.pc_player_id.unwrap();
     let pc_club_id = state.pc_club_idx as usize;
     let week = season_week(&state);
 
@@ -519,7 +585,7 @@ fn run_friendly(
     )
     .unwrap();
 
-    let view = state.players.snapshot(pc_id);
+    let view = state.pc_display_view();
     let match_seed =
         state.world_seed ^ ((state.season_number as u64) << 32) ^ (week as u64) ^ 0xF21E_5A17;
     let mut match_rng = GoatRng::new(match_seed);
@@ -621,7 +687,35 @@ fn resolve_pc_nation_promotion(
     world: &mut WorldGenesis,
     state: &mut WorldState,
     season: u32,
+    simulation_session: &mut goat_world::session::SimulationSession,
 ) -> Vec<PromoRelegationEvent> {
+    if state.dated_calendar {
+        let nation = world.leagues[state.pc_div_idx as usize].nation;
+        let Some(close) = simulation_session.finish_deep_season(state) else {
+            return Vec::new();
+        };
+        for (league, clubs) in world.leagues.iter_mut().zip(close.membership) {
+            league.clubs = clubs;
+        }
+        state.pc_nation_membership = world
+            .leagues
+            .iter()
+            .filter(|l| l.nation == nation)
+            .flat_map(|l| l.clubs.iter().map(|&id| id as u32))
+            .collect();
+        if let Some(league) = world
+            .leagues
+            .iter()
+            .find(|l| l.clubs.contains(&(state.pc_club_idx as usize)))
+        {
+            state.pc_div_idx = league.id as u8;
+        }
+        return close
+            .events
+            .into_iter()
+            .filter(|e| world.leagues[e.from_league].nation == nation)
+            .collect();
+    }
     let pc_league_id = state.pc_div_idx as usize;
     let nation = world.leagues[pc_league_id].nation;
     let mut nation_leagues: Vec<usize> = world
@@ -640,12 +734,13 @@ fn resolve_pc_nation_promotion(
         tables[id] = if id == pc_league_id {
             Table::from_raw(&state.table_raw, &world.leagues[id].clubs)
         } else {
-            sim_league_season(
+            sim_league_season_with_scores(
                 world,
                 id,
                 &world.leagues[id].clubs,
                 state.world_seed,
                 season,
+                &state.deep_results,
             )
         };
     }
@@ -682,7 +777,15 @@ fn run_game_loop(
     // which must be a read-only side trip) — this guard keeps the pipeline itself to
     // exactly one run per season boundary while still letting the post-pipeline menu
     // (and read-only views from it) redisplay freely.
-    let mut season_end_done_for: Option<u32> = None;
+    let mut simulation_session = goat_world::session::SimulationSession::new();
+    let mut season_end_done_for = if state.dated_calendar
+        && state.season_number > 0
+        && state.pc_seasons_played >= state.season_number
+    {
+        Some(state.season_number)
+    } else {
+        None
+    };
     // Session-local: whether the PC's club is still alive in this season's domestic
     // cup run (Design round 4, Slice 5's playable-gate dispatcher — see
     // `cup_dispatch.rs`'s doc comment for why this is deliberately not persisted in
@@ -704,14 +807,15 @@ fn run_game_loop(
     let mut pc_tournament: Option<TournamentRun> = None;
 
     loop {
-        let pc_id = match state.pc_player_id {
+        state = simulation_session.advance_deep(state, &world);
+        let _pc_id = match state.pc_player_id {
             Some(id) => id,
             None => return,
         };
 
         // Retirement screen (Phase 10).
         if state.pc_retired {
-            let view = state.players.snapshot(pc_id);
+            let view = state.pc_display_view();
             render_retirement_screen(out, &state, &view);
             return;
         }
@@ -732,7 +836,19 @@ fn run_game_loop(
             // must not re-collect wages, re-roll transfer/contract offers, or
             // double-credit career legacy stats.
             if season_end_done_for != Some(state.season_number) {
-                let view = state.players.snapshot(pc_id);
+                if let Some(c) = state.chronology() {
+                    let target = c.frame(state.season_number).next_preparation_start;
+                    state = reduce(
+                        state,
+                        Intent::AdvanceToDate {
+                            epoch_day: target,
+                            train: false,
+                        },
+                        &mut GoatRng::new(0),
+                    );
+                }
+                state = simulation_session.advance_deep(state, &world);
+                let view = state.pc_display_view();
                 render_season_review(out, &state, &view, &world);
 
                 // Collect annual wage.
@@ -775,7 +891,7 @@ fn run_game_loop(
                 }
 
                 // Phase 10: auto-retirement suggestion.
-                let view2 = state.players.snapshot(pc_id);
+                let view2 = state.pc_display_view();
                 let age_years = view2.age_weeks / 52;
                 if age_years >= 35 && state.pc_form.to_int() < 40 {
                     writeln!(
@@ -850,8 +966,12 @@ fn run_game_loop(
                         // season's table_raw + deterministic batch sims, and the
                         // resulting membership is persisted.
                         let concluded_season = state.season_number;
-                        let promo_events =
-                            resolve_pc_nation_promotion(&mut world, &mut state, concluded_season);
+                        let promo_events = resolve_pc_nation_promotion(
+                            &mut world,
+                            &mut state,
+                            concluded_season,
+                            &mut simulation_session,
+                        );
                         if !promo_events.is_empty() {
                             writeln!(out, "\n  --- PROMOTION & RELEGATION ---").unwrap();
                             for e in &promo_events {
@@ -879,7 +999,8 @@ fn run_game_loop(
                         // Fixtures for the NEW season come from the post-promotion
                         // membership and the PC's (possibly new) league.
                         let new_div_idx = state.pc_div_idx as usize;
-                        let fixtures = build_season_orbit_fixtures(
+                        let fixtures = build_career_fixtures(
+                            &state,
                             state.world_seed,
                             state.season_number + 1,
                             new_div_idx,
@@ -909,8 +1030,15 @@ fn run_game_loop(
                             &mut pc_qualifying,
                             &mut pc_tournament,
                         );
-                        pc_qualifying = None; // fresh national-team cycle each season
-                        pc_tournament = None;
+                        // An unfinished national tournament survives the club boundary.
+                        if !state.dated_calendar
+                            || pc_tournament.as_ref().is_none_or(|run| {
+                                run.phase == national_dispatch::TournamentPhase::Done
+                            })
+                        {
+                            pc_qualifying = None;
+                            pc_tournament = None;
+                        }
                         continue;
                     }
                     "G" => {
@@ -928,13 +1056,20 @@ fn run_game_loop(
             }
         }
 
-        let view = state.players.snapshot(pc_id);
+        let view = state.pc_display_view();
         render_game_sheet(out, &view, &state);
 
         let has_season = state.season_number > 0;
         if has_season {
             if in_pre_season(&state) {
-                writeln!(
+                if state.dated_calendar {
+                    writeln!(
+                        out,
+                        "  Summer preparation — club season: 15 August to 30 June."
+                    )
+                    .unwrap();
+                } else {
+                    writeln!(
                     out,
                     "  (Pre-season week {}/{} — training and friendlies only; the league starts in week {})",
                     season_week(&state) + 1,
@@ -942,6 +1077,7 @@ fn run_game_loop(
                     PRE_SEASON_WEEKS + 1,
                 )
                 .unwrap();
+                }
             }
             writeln!(
                 out,
@@ -981,11 +1117,8 @@ fn run_game_loop(
                         // friendly. `AdvanceWeeks` deliberately, not `AdvanceWeek`:
                         // each pre-season week is a fresh week, and the per-week
                         // training flag only resets on round boundaries.
-                        state = reduce(
-                            state,
-                            Intent::AdvanceWeeks { n: 1 },
-                            &mut GoatRng::new(week_rng_seed),
-                        );
+                        let intent = training_intent(&state, 1, false);
+                        state = reduce(state, intent, &mut GoatRng::new(week_rng_seed));
                         display_events(out, &state.last_week_events);
                         display_flashpoints(out, &state.last_week_flashpoints);
                         state = dispatch_national_flashpoints(
@@ -1001,13 +1134,17 @@ fn run_game_loop(
                             continue;
                         }
                         if in_pre_season(&state) {
-                            writeln!(
+                            if state.dated_calendar {
+                                writeln!(out,"  Summer preparation — [P] Play friendly  (anything else: back to menu)").unwrap();
+                            } else {
+                                writeln!(
                                 out,
                                 "  Pre-season week {}/{} done — [P] Play friendly  (anything else: back to menu)",
                                 season_week(&state),
                                 PRE_SEASON_WEEKS
                             )
                             .unwrap();
+                            }
                             write!(out, "  > ").unwrap();
                             out.flush().unwrap();
                             if let Some(Ok(l)) = lines.next() {
@@ -1030,8 +1167,8 @@ fn run_game_loop(
                         continue;
                     }
                     if !state.pc_week_training_done {
-                        state =
-                            reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(week_rng_seed));
+                        let intent = training_intent(&state, 1, true);
+                        state = reduce(state, intent, &mut GoatRng::new(week_rng_seed));
                         display_events(out, &state.last_week_events);
                         display_flashpoints(out, &state.last_week_flashpoints);
                         state = dispatch_national_flashpoints(
@@ -1056,7 +1193,7 @@ fn run_game_loop(
                     writeln!(
                         out,
                         "  Round {}/{} due this week — [P] Play  [K] Skip  (anything else: back to menu)",
-                        state.season_round + 1,
+                        state.next_dated_fixture().map_or(state.season_round+1,|(round,_)| round as u32+1),
                         ROUNDS_PER_SEASON
                     )
                     .unwrap();
@@ -1077,6 +1214,7 @@ fn run_game_loop(
                                     &mut pc_continental,
                                     &mut pc_qualifying,
                                     &mut pc_tournament,
+                                    &mut simulation_session,
                                 )
                             }
                             "K" => {
@@ -1092,6 +1230,7 @@ fn run_game_loop(
                                     &mut pc_continental,
                                     &mut pc_qualifying,
                                     &mut pc_tournament,
+                                    &mut simulation_session,
                                 )
                             }
                             _ => {} // defer — back to the menu, match offered again next [C]
@@ -1103,11 +1242,8 @@ fn run_game_loop(
                     if in_pre_season(&state) {
                         // Pre-season week: one fresh training week each press
                         // (AdvanceWeeks — see the [C] branch for why not AdvanceWeek).
-                        state = reduce(
-                            state,
-                            Intent::AdvanceWeeks { n: 1 },
-                            &mut GoatRng::new(week_rng_seed),
-                        );
+                        let intent = training_intent(&state, 1, false);
+                        state = reduce(state, intent, &mut GoatRng::new(week_rng_seed));
                         display_events(out, &state.last_week_events);
                         display_flashpoints(out, &state.last_week_flashpoints);
                         state = dispatch_national_flashpoints(
@@ -1129,7 +1265,8 @@ fn run_game_loop(
                     // (`pc_week_training_done` gate) — snapshot the flag first so we
                     // can tell the player instead of silently redrawing the same state.
                     let already_trained = state.pc_week_training_done;
-                    state = reduce(state, Intent::AdvanceWeek, &mut GoatRng::new(week_rng_seed));
+                    let intent = training_intent(&state, 1, true);
+                    state = reduce(state, intent, &mut GoatRng::new(week_rng_seed));
                     if already_trained {
                         writeln!(
                             out,
@@ -1158,11 +1295,8 @@ fn run_game_loop(
                         }
                         writeln!(out, "  Enter a number.").unwrap();
                     };
-                    state = reduce(
-                        state,
-                        Intent::AdvanceWeeks { n },
-                        &mut GoatRng::new(week_rng_seed),
-                    );
+                    let intent = training_intent(&state, n, false);
+                    state = reduce(state, intent, &mut GoatRng::new(week_rng_seed));
                     display_events(out, &state.last_week_events);
                     display_flashpoints(out, &state.last_week_flashpoints);
                     state = dispatch_national_flashpoints(
@@ -1201,6 +1335,7 @@ fn run_game_loop(
                         &mut pc_continental,
                         &mut pc_qualifying,
                         &mut pc_tournament,
+                        &mut simulation_session,
                     )
                 }
                 "K" if has_season => {
@@ -1216,6 +1351,7 @@ fn run_game_loop(
                         &mut pc_continental,
                         &mut pc_qualifying,
                         &mut pc_tournament,
+                        &mut simulation_session,
                     )
                 }
                 "T" if has_season => render_table(out, &state, &world),
@@ -1260,8 +1396,9 @@ fn run_next_round(
     pc_continental: &mut Option<ContinentalRun>,
     pc_qualifying: &mut Option<QualifyingCampaign>,
     pc_tournament: &mut Option<TournamentRun>,
+    simulation_session: &mut goat_world::session::SimulationSession,
 ) -> WorldState {
-    let pc_id = match state.pc_player_id {
+    let _pc_id = match state.pc_player_id {
         Some(id) => id,
         None => return state,
     };
@@ -1270,14 +1407,53 @@ fn run_next_round(
         return state;
     }
 
-    let round = state.season_round as usize;
+    let mut round = state.season_round as usize;
+    if state.dated_calendar {
+        loop {
+            let Some((_, fixture)) = state.next_dated_fixture() else {
+                return state;
+            };
+            let target = fixture.scheduled_day;
+            if target < state.pc_epoch_day {
+                return state;
+            }
+            state = reduce(
+                state,
+                Intent::AdvanceToDate {
+                    epoch_day: target,
+                    train: true,
+                },
+                &mut GoatRng::new(target as u64),
+            );
+            let Some((selected, fixture)) = state.next_dated_fixture() else {
+                return state;
+            };
+            if fixture.scheduled_day > state.pc_epoch_day {
+                continue;
+            }
+            round = selected;
+            let id = fixture.id;
+            state = reduce(
+                state,
+                Intent::BeginDatedFixture { fixture_id: id },
+                &mut GoatRng::new(0),
+            );
+            break;
+        }
+    }
+    state = simulation_session.advance_deep(state, world);
     let season = state.season_number;
     let div_idx = state.pc_div_idx as usize;
     let pc_club_id = state.pc_club_idx as usize;
     let world_seed = state.world_seed;
     let div_clubs = world.leagues[div_idx].clubs.clone();
 
-    let week_label = format_week_header(state.career_base_year + season - 1, round_to_week(round));
+    let week_label = if let Some(c) = state.chronology() {
+        let date = c.date(state.pc_epoch_day);
+        format!("{:02}/{:02}/{}", date.day, date.month, date.year)
+    } else {
+        format_week_header(state.career_base_year + season - 1, round_to_week(round))
+    };
     writeln!(
         out,
         "\n--- ROUND {} / {} · {} ---",
@@ -1297,17 +1473,29 @@ fn run_next_round(
             state.pc_suspension_matches_remaining(LEAGUE_COMPETITION_ID) - 1
         )
         .unwrap();
+        state = simulation_session.advance_deep_without_pc(state, world, round);
         // Still need to sim other matches and advance the round.
         let all_fixtures = round_fixtures(world_seed, season, div_idx, &div_clubs, round);
         let sim_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
         let mut sim_rng = GoatRng::new(sim_seed);
         let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
         for f in &all_fixtures {
-            let (gf, ga) = sim_team_match_shared(
+            let legacy = sim_team_match_shared(
                 world.clubs[f.home].strength,
                 world.clubs[f.away].strength,
                 &mut sim_rng,
             );
+            let (gf, ga) = state
+                .deep_results
+                .iter()
+                .find(|r| {
+                    r.season == season
+                        && r.round == round as u32
+                        && r.league == div_idx as u32
+                        && r.home == f.home as u32
+                        && r.away == f.away as u32
+                })
+                .map_or(legacy, |r| (r.home_goals, r.away_goals));
             let h_pos = club_div_pos_in(&div_clubs, f.home) as u8;
             let a_pos = club_div_pos_in(&div_clubs, f.away) as u8;
             round_results.push((h_pos, a_pos, gf, ga));
@@ -1367,6 +1555,7 @@ fn run_next_round(
 
     // Phase B: academy (U21) weeks replace the league fixture until promotion.
     if state.pc_in_academy {
+        state = simulation_session.advance_deep_without_pc(state, world, round);
         return run_academy_round(
             lines,
             out,
@@ -1388,21 +1577,24 @@ fn run_next_round(
                 let opp_id = if is_home { f.away } else { f.home };
                 let opp = &world.clubs[opp_id];
                 let own_str = world.clubs[pc_club_id].strength;
-                let view = state.players.snapshot(pc_id);
+                let view = state.pc_display_view();
 
                 let match_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
                 let mut match_rng = GoatRng::new(match_seed);
 
                 // PA2 M1: profiles from the real squads, not the static club scalar.
-                // Rebuild the population pantheon-style (genesis + replay completed
-                // seasons) WITH the orbit residue replayed (PA2 M3: real NPC career
-                // stats + form).
+                // Retain the light world and incrementally apply deep-orbit journals.
                 let elapsed_weeks = state.pc_epoch_day / 7;
-                let pop = goat_world::orbit::rebuild_population_lived(
-                    world_seed,
-                    season,
-                    &state.orbit_records,
-                );
+                let pop = if state.dated_calendar {
+                    simulation_session.population_deep(&state)
+                } else {
+                    simulation_session.population(
+                        world_seed,
+                        season,
+                        &state.orbit_records,
+                        &state.npc_match_loads,
+                    )
+                };
 
                 // PA2 M1.5: the club's manager (seed-derived) picks a formation by
                 // club style and a lineup by the multi-factor selection score — the
@@ -1751,6 +1943,41 @@ fn run_next_round(
                     &mut GoatRng::new(0),
                 );
 
+                let calendar_week = goat_world::round_to_week(round);
+                let slot = round - goat_world::week_to_rounds(calendar_week).start;
+                let fallback_id =
+                    goat_world::workload::league_fixture_id(world_seed, season, round, slot);
+                let (fixture_id, day) = state
+                    .pc_season_fixtures
+                    .iter()
+                    .find(|f| f.id == fallback_id)
+                    .map(|f| (f.id, f.scheduled_day))
+                    .unwrap_or((
+                        fallback_id,
+                        goat_world::week_day_offset(calendar_week, slot),
+                    ));
+                let epoch_day = if state.dated_calendar {
+                    day
+                } else {
+                    (season - 1) * 364 + day
+                };
+                let loads = result
+                    .npc_minutes
+                    .iter()
+                    .map(|m| goat_core::history::NpcMatchLoad {
+                        competition_id: LEAGUE_COMPETITION_ID,
+                        pop_idx: m.pop_idx,
+                        fixture_id,
+                        epoch_day,
+                        minutes: m.minutes,
+                    })
+                    .collect();
+                state = reduce(
+                    state,
+                    Intent::RecordNpcMatchLoads { loads },
+                    &mut GoatRng::new(0),
+                );
+
                 // PA2 M4: match effects scale with minutes. A DNP (benched all
                 // game) keeps M1.5 semantics: no form/stat gain, no match
                 // counted, no energy cost, trust untouched (favor still drifts).
@@ -1864,6 +2091,17 @@ fn run_next_round(
             None => (0, 0, 0, 0, 0, 0i8, None),
         };
 
+    if state.dated_calendar {
+        if let (Some(f), Some(result)) = (pc_fixture, match_result_opt.as_ref()) {
+            let (gf, ga) = if f.home == pc_club_id {
+                (result.goals_for, result.goals_against)
+            } else {
+                (result.goals_against, result.goals_for)
+            };
+            state = goat_world::deep::record_pc_score(state, round, f.home, f.away, gf, ga);
+        }
+    }
+
     // Simulate all other matches in this round.
     let all_fixtures = round_fixtures(world_seed, season, div_idx, &div_clubs, round);
     let sim_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xfeed;
@@ -1883,11 +2121,24 @@ fn run_next_round(
                 (0, 0)
             }
         } else {
-            sim_team_match_shared(
-                world.clubs[f.home].strength,
-                world.clubs[f.away].strength,
-                &mut sim_rng,
-            )
+            state
+                .deep_results
+                .iter()
+                .find(|r| {
+                    r.season == season
+                        && r.round == round as u32
+                        && r.league == div_idx as u32
+                        && r.home == f.home as u32
+                        && r.away == f.away as u32
+                })
+                .map(|r| (r.home_goals, r.away_goals))
+                .unwrap_or_else(|| {
+                    sim_team_match_shared(
+                        world.clubs[f.home].strength,
+                        world.clubs[f.away].strength,
+                        &mut sim_rng,
+                    )
+                })
         };
         let h_pos = club_div_pos_in(&div_clubs, f.home) as u8;
         let a_pos = club_div_pos_in(&div_clubs, f.away) as u8;
@@ -2001,7 +2252,7 @@ fn maybe_play_cup_fixture(
     world_seed: u64,
     pc_cup_alive: &mut bool,
 ) -> WorldState {
-    let pc_id = match state.pc_player_id {
+    let _pc_id = match state.pc_player_id {
         Some(id) => id,
         None => return state,
     };
@@ -2080,7 +2331,7 @@ fn maybe_play_cup_fixture(
             let mut rp_rng = GoatRng::new(cup_seed ^ 0xBADCAFE);
             RefPersonality::from_rng(&mut rp_rng)
         };
-        let view = state.players.snapshot(pc_id);
+        let view = state.pc_display_view();
         let setup = MatchSetup {
             player_role: best_role_for_position(state.pc_position),
             player_attrs: view.current,
@@ -2204,7 +2455,7 @@ fn maybe_play_cup_fixture(
 fn play_orbit_match(
     out: &mut impl Write,
     mut state: WorldState,
-    pc_id: goat_core::player::PlayerId,
+    _pc_id: goat_core::player::PlayerId,
     beat_lib: &BeatLibrary,
     pc_traits: PlayerTraits,
     own_str: u8,
@@ -2242,7 +2493,7 @@ fn play_orbit_match(
             let mut rp_rng = GoatRng::new(seed ^ 0xBADCAFE);
             RefPersonality::from_rng(&mut rp_rng)
         };
-        let view = state.players.snapshot(pc_id);
+        let view = state.pc_display_view();
         let setup = MatchSetup {
             player_role: best_role_for_position(state.pc_position),
             player_attrs: view.current,
@@ -2535,7 +2786,7 @@ fn national_call_up_roll(state: &WorldState, seed: u64) -> bool {
         Some(id) => id,
         None => return false,
     };
-    let view = state.players.snapshot(pc_id);
+    let view = state.pc_display_view();
     let position = state.players.get_primary_position(pc_id);
     let pct = ovr(&view.current, position).to_int().clamp(10, 95) as u32;
     let mut rng = GoatRng::new(seed);
@@ -2715,13 +2966,28 @@ fn maybe_run_qualifying_campaign(
     };
 
     writeln!(out, "\n*** {} QUALIFYING CAMPAIGN ***", kind.label()).unwrap();
-    let pop = goat_world::population::genesis_lived(state.world_seed, world);
+    let pop = if state.dated_calendar {
+        goat_world::orbit::rebuild_population_deep(
+            state.world_seed,
+            state.career_base_year,
+            state.season_number,
+            &state.orbit_records,
+            &state.npc_match_loads,
+            &state.deep_results,
+        )
+    } else {
+        goat_world::population::genesis_scheduled(state.world_seed, world)
+    };
     let competition_id = if kind.is_world_cup() {
         WORLD_CUP_COMPETITION_ID
     } else {
         CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID
     };
-    let elapsed_weeks = national_dispatch::elapsed_weeks_for(season);
+    let elapsed_weeks = if state.dated_calendar {
+        state.pc_epoch_day / 7
+    } else {
+        national_dispatch::elapsed_weeks_for(season)
+    };
     let mut campaign = QualifyingCampaign::start(state.world_seed, season, pc_nation);
 
     while !campaign.is_complete() {
@@ -2807,8 +3073,23 @@ fn maybe_play_tournament(
     } else {
         CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID
     };
-    let pop = goat_world::population::genesis_lived(state.world_seed, world);
-    let elapsed_weeks = national_dispatch::elapsed_weeks_for(season);
+    let pop = if state.dated_calendar {
+        goat_world::orbit::rebuild_population_deep(
+            state.world_seed,
+            state.career_base_year,
+            state.season_number,
+            &state.orbit_records,
+            &state.npc_match_loads,
+            &state.deep_results,
+        )
+    } else {
+        goat_world::population::genesis_scheduled(state.world_seed, world)
+    };
+    let elapsed_weeks = if state.dated_calendar {
+        state.pc_epoch_day / 7
+    } else {
+        national_dispatch::elapsed_weeks_for(season)
+    };
     writeln!(out, "\n*** THE {} BEGINS ***", kind.label()).unwrap();
 
     loop {
@@ -3232,7 +3513,7 @@ fn run_academy_round(
 ) -> WorldState {
     use goat_core::week::apply_academy_match;
 
-    let pc_id = match state.pc_player_id {
+    let _pc_id = match state.pc_player_id {
         Some(id) => id,
         None => return state,
     };
@@ -3265,7 +3546,7 @@ fn run_academy_round(
         let mut rp_rng = GoatRng::new(match_seed ^ 0xBADCAFE);
         RefPersonality::from_rng(&mut rp_rng)
     };
-    let view = state.players.snapshot(pc_id);
+    let view = state.pc_display_view();
     let make_setup = |view: &goat_core::player::PlayerView| MatchSetup {
         player_role: best_role_for_position(state.pc_position),
         player_attrs: view.current,
@@ -3349,7 +3630,7 @@ fn run_academy_round(
     );
 
     // Breakthrough check (multi-factor: performance, age, fit, hype).
-    let view = state.players.snapshot(pc_id);
+    let view = state.pc_display_view();
     let best_fam = view.familiarity.iter().map(|&t| t as u8).max().unwrap_or(0);
     let age_years = view.age_weeks / 52;
     let mut bt_rng = GoatRng::new(match_seed ^ 0xB12A_9000);
@@ -4212,7 +4493,7 @@ fn run_save(
     out: &mut impl Write,
     state: &WorldState,
 ) {
-    let Some(pc_id) = state.pc_player_id else {
+    let Some(_pc_id) = state.pc_player_id else {
         return;
     };
 
@@ -4241,7 +4522,7 @@ fn run_save(
         }
     }
 
-    let view = state.players.snapshot(pc_id);
+    let view = state.pc_display_view();
     let data = from_world_state(state, &view);
     match save_to_file(&data, slot_path(SAVE_DIR, slot)) {
         Ok(()) => writeln!(out, "  Saved to slot {slot}.").unwrap(),
@@ -4416,8 +4697,21 @@ fn render_game_sheet(out: &mut impl Write, view: &PlayerView, state: &WorldState
     );
     box_line(out, &format!("  Energy {energy_bar} {energy_pct}%"));
 
+    if let Some(c) = state.chronology() {
+        let d = c.date(state.pc_epoch_day);
+        box_line(
+            out,
+            &format!("  Date {:02}/{:02}/{}", d.day, d.month, d.year),
+        );
+    }
     if state.season_number > 0 {
-        let round = state.season_round + 1; // 1-indexed: next round to play, matches the match header
+        let round = if state.dated_calendar {
+            state
+                .next_dated_fixture()
+                .map_or(ROUNDS_PER_SEASON as u32, |(round, _)| round as u32 + 1)
+        } else {
+            state.season_round + 1
+        };
         let total = ROUNDS_PER_SEASON as u32;
         let club_name = &state.pc_club;
         let disc_label = match state.pc_discipline_rep {
@@ -4662,7 +4956,23 @@ fn render_world_screen(out: &mut impl Write, state: &WorldState, world: &WorldGe
     // Your generation: batch-tick the cohort up to now (orbit residue replayed,
     // PA2 M3 — the rival race sees real deep-sim stats), then crystallise.
     let seasons = state.season_number.max(1);
-    let pop = goat_world::orbit::rebuild_population_lived(seed, seasons + 1, &state.orbit_records);
+    let pop = if state.dated_calendar {
+        goat_world::orbit::rebuild_population_deep(
+            seed,
+            state.career_base_year,
+            seasons + 1,
+            &state.orbit_records,
+            &state.npc_match_loads,
+            &state.deep_results,
+        )
+    } else {
+        goat_world::orbit::rebuild_population_scheduled(
+            seed,
+            seasons + 1,
+            &state.orbit_records,
+            &state.npc_match_loads,
+        )
+    };
     writeln!(out, "\n  YOUR GENERATION").unwrap();
     match crystallise_rival(&pop, 16 * 52, state.pc_career_goals, state.pc_league_titles) {
         RivalVerdict::Rival {

@@ -13,6 +13,7 @@
 
 pub mod attrs;
 pub mod calendar_loop;
+pub mod deep;
 pub mod derive;
 pub mod development;
 pub mod generation;
@@ -27,3 +28,5 @@ pub mod tactical;
 pub mod tactical_identity;
 pub mod tuning;
 pub mod week;
+
+pub use goat_calendar::chronology;

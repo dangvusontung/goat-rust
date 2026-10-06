@@ -202,6 +202,87 @@ pub fn advance_calendar_week(
     (epoch_day + 7, flashpoints)
 }
 
+/// V9: advance absolute Gregorian days, including summer, and retain rescheduling.
+pub fn advance_dated_calendar(
+    from: u32,
+    to: u32,
+    base_year: u32,
+    seed: u64,
+    fixtures: &[Fixture],
+) -> (u32, Vec<CalendarFlashpoint>, Vec<Fixture>) {
+    use goat_calendar::chronology::{Chronology, CivilDate};
+    let c = Chronology::new(base_year);
+    let mut day = from;
+    let mut pending = fixtures.to_vec();
+    let mut flashpoints = Vec::new();
+    while day < to {
+        let cycle = c.planning_season(day);
+        let f = c.frame(cycle);
+        let y = base_year + cycle - 1;
+        let epoch = |year, month, day| c.epoch_day(CivilDate { year, month, day }).unwrap();
+        let windows = vec![
+            CalendarWindow {
+                kind: WindowKind::TransferSummer,
+                start_day: f.preparation_start,
+                end_day: f.start_day - 1,
+            },
+            CalendarWindow {
+                kind: WindowKind::OffSeason,
+                start_day: f.preparation_start,
+                end_day: f.start_day - 1,
+            },
+            CalendarWindow {
+                kind: WindowKind::InternationalBreak,
+                start_day: epoch(y, 9, 1),
+                end_day: epoch(y, 9, 14),
+            },
+            CalendarWindow {
+                kind: WindowKind::TransferWinter,
+                start_day: epoch(y + 1, 1, 1),
+                end_day: epoch(y + 1, 1, 31),
+            },
+            CalendarWindow {
+                kind: WindowKind::InternationalBreak,
+                start_day: epoch(y + 1, 3, 20),
+                end_day: epoch(y + 1, 3, 31),
+            },
+        ];
+        let season = Season {
+            id: cycle,
+            start_day: f.start_day,
+            end_day: f.end_day,
+            windows: windows.clone(),
+            competition_ids: vec![LEAGUE_COMPETITION_ID],
+        };
+        let mut engine = CalendarEngine::new(seed, season, pending, standard_competitions());
+        engine.clock.epoch_day = day;
+        engine.register(Box::new(WindowWatch));
+        while day < to.min(f.next_preparation_start) {
+            engine.tick_one_day();
+            for w in windows.iter().filter(|w| w.start_day == day) {
+                flashpoints.push(CalendarFlashpoint {
+                    day,
+                    window: w.kind,
+                });
+            }
+            day += 1;
+        }
+        pending = engine.fixtures;
+    }
+    // Resolve the target day's fixtures without consuming that day or its windows.
+    let frame = c.frame(c.planning_season(to.max(from)));
+    let season = Season {
+        id: frame.id,
+        start_day: frame.start_day,
+        end_day: frame.end_day,
+        windows: vec![],
+        competition_ids: vec![LEAGUE_COMPETITION_ID],
+    };
+    let mut final_engine = CalendarEngine::new(seed, season, pending, standard_competitions());
+    final_engine.resolve_conflicts_for_day(to.max(from));
+    (to.max(from), flashpoints, final_engine.fixtures)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

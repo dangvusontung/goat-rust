@@ -1,0 +1,33 @@
+scheduled=false week=52 pass=0 players=26835 segments=2684 ms=413.162 sum=1053573
+scheduled=false week=52 pass=1 players=26835 segments=2684 ms=0.185 sum=1053573
+scheduled=false week=53 pass=0 players=26835 segments=2684 ms=16.837 sum=1053777
+scheduled=false week=53 pass=1 players=26835 segments=2684 ms=0.157 sum=1053777
+scheduled=false week=1040 pass=0 players=26835 segments=2684 ms=3542.600 sum=1023733
+scheduled=false week=1040 pass=1 players=26835 segments=2684 ms=0.196 sum=1023733
+scheduled=true week=52 pass=0 players=26835 segments=2684 ms=497.672 sum=1053937
+scheduled=true week=52 pass=1 players=26835 segments=2684 ms=0.190 sum=1053937
+scheduled=true week=53 pass=0 players=26835 segments=2684 ms=18.087 sum=1054122
+scheduled=true week=53 pass=1 players=26835 segments=2684 ms=0.175 sum=1054122
+scheduled=true week=1040 pass=0 players=26835 segments=2684 ms=4482.571 sum=1023877
+scheduled=true week=1040 pass=1 players=26835 segments=2684 ms=0.196 sum=1023877
+replay season=1 players=29235 segments=26881 ms=556.250
+replay season=2 players=31633 segments=53313 ms=468.498
+replay season=3 players=32115 segments=81854 ms=504.765
+replay season=4 players=32133 segments=110706 ms=514.805
+replay season=5 players=32135 segments=139369 ms=518.104
+replay season=6 players=34175 segments=168370 ms=525.405
+replay season=7 players=35015 segments=196497 ms=526.811
+replay season=8 players=37009 segments=225629 ms=538.207
+replay season=9 players=37859 segments=253709 ms=541.629
+replay season=10 players=39871 segments=282895 ms=553.710
+replay season=11 players=40823 segments=310771 ms=549.188
+replay season=12 players=42865 segments=339757 ms=560.388
+replay season=13 players=43921 segments=367461 ms=560.868
+replay season=14 players=45995 segments=396473 ms=578.697
+replay season=15 players=46951 segments=424368 ms=586.353
+replay season=16 players=48999 segments=453531 ms=586.457
+replay season=17 players=49969 segments=481441 ms=595.093
+replay season=18 players=51987 segments=510487 ms=601.219
+replay season=19 players=52915 segments=538415 ms=604.739
+replay season=20 players=54933 segments=567609 ms=614.158
+replay total20 ms=11085.811

@@ -56,6 +56,27 @@ fn fixture_id(world_seed: u64, competition_id: u32, season: u32, round: usize, s
     GoatRng::new(mixed).next_u64()
 }
 
+/// V9 fixtures carry absolute epoch dates, matching core and NPC workload.
+#[allow(dead_code)] // Shared file: legacy career-sim intentionally uses the frozen builder.
+pub fn build_season_orbit_fixtures_dated(
+    world_seed: u64,
+    base_year: u32,
+    season: u32,
+    league_id: usize,
+    div_clubs: &[ClubId],
+    pc_club_id: ClubId,
+) -> Vec<Fixture> {
+    let calendar = goat_core::chronology::Chronology::new(base_year);
+    let mut fixtures =
+        build_season_orbit_fixtures(world_seed, season, league_id, div_clubs, pc_club_id);
+    for (round, f) in fixtures.iter_mut().enumerate() {
+        let day = goat_world::calendar::dated_fixture_day(calendar, season, round);
+        f.scheduled_day = day;
+        f.original_day = day;
+    }
+    fixtures
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

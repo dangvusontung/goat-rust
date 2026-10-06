@@ -1,0 +1,3 @@
+cold_us=4476
+leagues=6 fixtures=2280 dose_rows=113088 round_median_us=28383 round_max_us=53860 season_us=1069958
+boundary_us=773192 players=29235 rebuilds=1

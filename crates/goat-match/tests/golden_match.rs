@@ -930,3 +930,56 @@ fn unified_cameos_and_hooks_keep_full_team_exposure_and_eleven_players() {
     }
     assert!(hooks > 0, "must exercise real substitutions");
 }
+
+#[test]
+fn named_npc_minutes_include_substitution_stints_and_bench_dnps() {
+    use goat_match::sim::{auto_play_match_unified, SubContext};
+    let lib = lib();
+    let mut substitutions = 0;
+    for seed in 0..64 {
+        let mut setup = balanced_setup();
+        for (i, p) in setup.own_squad.players.iter_mut().enumerate() {
+            if !p.is_pc {
+                p.id = Some(100 + i as u32);
+            }
+        }
+        for (i, p) in setup.opp_squad.players.iter_mut().enumerate() {
+            p.id = Some(200 + i as u32);
+        }
+        for idx in 0..2 {
+            let mut p = setup.opp_squad.players[idx].clone();
+            p.id = Some(300 + idx as u32);
+            p.attrs = [Fixed::from_int(90); NUM_ATTRS];
+            setup.opp_squad.bench.push(p);
+        }
+        setup.own_profile.attack = 90;
+        setup.opp_profile.defense = 20;
+        setup.sub_context = Some(SubContext {
+            seed,
+            pc_starts_on_bench: false,
+            manager_trust: 50,
+            manager_patience: 50,
+            pc_returning_from_injury: false,
+        });
+        let opposition_starters = setup.opp_squad.players.len();
+        let r = auto_play_match_unified(&lib, setup, &mut GoatRng::new(seed));
+        let opposition: Vec<_> = r.npc_minutes.iter().filter(|m| m.pop_idx >= 200).collect();
+        assert_eq!(
+            opposition.iter().map(|m| m.minutes as u32).sum::<u32>(),
+            opposition_starters as u32 * 90
+        );
+        assert!(r.npc_minutes.iter().all(|m| m.minutes <= 90));
+        assert_eq!(opposition.len(), opposition_starters + 2);
+        for id in &r.opp_subs_on {
+            let minutes = r
+                .npc_minutes
+                .iter()
+                .find(|m| m.pop_idx == *id)
+                .unwrap()
+                .minutes;
+            assert!(minutes <= 30);
+            substitutions += usize::from(minutes > 0);
+        }
+    }
+    assert!(substitutions > 0);
+}

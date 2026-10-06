@@ -16,6 +16,8 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(10);
+// A dated full-season probe now includes up to six leagues of individual NPC fixtures.
+const DATED_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Run `goat-tui` with `input` piped to stdin (then stdin closed, signalling
 /// EOF). Returns the captured stdout, or `None` if the process didn't exit
@@ -28,7 +30,14 @@ fn run_scripted(input: &str) -> Option<String> {
 /// tests that need `saves/slot-N.sav` to live in a scratch directory rather than
 /// the crate root, so a pre-seeded save doesn't collide with other tests.
 fn run_scripted_in(input: &str, cwd: Option<&Path>) -> Option<String> {
+    // Preserve frozen v8 weekly-calendar scenarios explicitly; v9 has its own tests.
+    run_scripted_calendar(input, cwd, true)
+}
+fn run_scripted_calendar(input: &str, cwd: Option<&Path>, legacy: bool) -> Option<String> {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_goat-tui"));
+    if legacy {
+        cmd.arg("--legacy-calendar");
+    }
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
@@ -52,7 +61,7 @@ fn run_scripted_in(input: &str, cwd: Option<&Path>) -> Option<String> {
         let _ = tx.send(buf);
     });
 
-    match rx.recv_timeout(TIMEOUT) {
+    match rx.recv_timeout(if legacy { TIMEOUT } else { DATED_TIMEOUT }) {
         Ok(buf) => {
             let _ = child.wait();
             Some(buf)
@@ -623,6 +632,21 @@ fn live_league_season_persists_roster_matches_and_legacy() {
         .orbit_records
         .iter()
         .any(|record| !record.credits.is_empty()));
+    assert!(
+        !saved.npc_match_loads.is_empty(),
+        "named fixture minutes must survive the live save path"
+    );
+    assert!(saved
+        .npc_match_loads
+        .iter()
+        .all(|l| l.minutes <= 90 && l.competition_id == 1));
+    let fixtures: std::collections::BTreeSet<_> =
+        saved.npc_match_loads.iter().map(|l| l.fixture_id).collect();
+    assert_eq!(
+        fixtures.len(),
+        38,
+        "every league fixture must leave a minutes journal"
+    );
     assert!((0..=100).contains(&saved.pc_manager_trust));
 }
 
@@ -826,4 +850,100 @@ fn promoted_clubs_appear_in_next_season_table() {
             "promoted club {club} must appear in new table: {stdout}"
         );
     }
+}
+
+#[test]
+fn dated_live_season_closes_june_30_and_saves_continuous_clock() {
+    let dir = std::env::temp_dir().join(format!("goat_dated_season_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = format!(
+        "N\nDated Probe\n1\n42\n1\n3\n1\nN\nS\n{}{}N\nZ\n1\nQ\n",
+        "W\n".repeat(8),
+        "K\n".repeat(38)
+    );
+    let output =
+        run_scripted_calendar(&script, Some(&dir), false).expect("dated season must complete");
+    let data = goat_save::save::load_from_file(goat_save::save::slot_path(dir.join("saves"), 1));
+    let data = data.unwrap_or_else(|e| panic!("{e:?}\n{output}"));
+    assert!(data.dated_calendar);
+    let c = goat_core::chronology::Chronology::new(data.career_base_year);
+    assert_eq!(
+        c.date(data.pc_epoch_day),
+        goat_core::chronology::CivilDate {
+            year: data.career_base_year + 1,
+            month: 7,
+            day: 1
+        }
+    );
+    assert_eq!(data.season_round, 38);
+    assert_eq!(data.pc_age_weeks, 16 * 52 + data.pc_epoch_day / 7);
+    assert_eq!(
+        data.pc_development_history.weeks.len(),
+        (data.pc_epoch_day / 7) as usize
+    );
+    for (week, row) in data.pc_development_history.weeks.iter().enumerate() {
+        assert_eq!(row.epoch_day, week as u32 * 7);
+    }
+    assert_eq!(data.pc_played_fixture_ids.len(), 38);
+    let output = run_scripted_calendar("L\n1\nZ\n2\nQ\n", Some(&dir), false)
+        .expect("dated save must resume");
+    let resumed = goat_save::save::load_from_file(goat_save::save::slot_path(dir.join("saves"), 2))
+        .unwrap_or_else(|e| panic!("{e:?}\n{output}"));
+    assert_eq!(
+        resumed.pc_seasons_played, data.pc_seasons_played,
+        "closed season must not be banked twice after loading"
+    );
+    assert_eq!(resumed.pc_played_fixture_ids, data.pc_played_fixture_ids);
+    assert_eq!(resumed.pc_epoch_day, data.pc_epoch_day);
+    let _ = std::fs::remove_dir_all(&dir);
+    let frame = c.frame(1);
+    assert!(data
+        .npc_match_loads
+        .iter()
+        .all(|l| l.epoch_day >= frame.start_day && l.epoch_day <= frame.end_day));
+    let ids: std::collections::BTreeSet<_> =
+        data.npc_match_loads.iter().map(|l| l.fixture_id).collect();
+    assert_eq!(ids.len(), 38);
+}
+
+#[test]
+fn ranked_deep_leagues_are_active_in_the_live_tui() {
+    let dir = std::env::temp_dir().join(format!("goat_deep_leagues_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = format!(
+        "N\nDeep Probe\n1\n42\n1\n3\n1\nN\nS\n{}K\nZ\n1\nQ\n",
+        "W\n".repeat(8)
+    );
+    let output =
+        run_scripted_calendar(&script, Some(&dir), false).expect("ranked leagues must advance");
+    let data = goat_save::save::load_from_file(goat_save::save::slot_path(dir.join("saves"), 1))
+        .unwrap_or_else(|e| panic!("{e:?}\n{output}"));
+    assert!(!data.deep_results.is_empty());
+    let scope = data.deep_scopes.last().unwrap();
+    assert!(scope.leagues.contains(&(data.pc_div_idx as u32)));
+    let world = goat_world::world::WorldGenesis::generate(data.world_seed);
+    let expected = goat_world::deep::select_leagues(
+        &world,
+        data.pc_div_idx as usize,
+        5,
+        &goat_world::deep::initial_scores(&world),
+    );
+    assert_eq!(
+        scope.leagues,
+        expected.iter().map(|&id| id as u32).collect::<Vec<_>>()
+    );
+    assert!(data
+        .deep_results
+        .iter()
+        .all(|r| scope.leagues.contains(&r.league) && r.epoch_day <= data.pc_epoch_day));
+    let pc_results = data
+        .deep_results
+        .iter()
+        .filter(|r| r.league == data.pc_div_idx as u32 && r.round == 0)
+        .count();
+    assert_eq!(
+        pc_results, 10,
+        "PC engine and nine named NPC fixtures share one round"
+    );
+    let _ = std::fs::remove_dir_all(dir);
 }

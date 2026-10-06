@@ -21,12 +21,18 @@ use crate::roles::NUM_ROLES;
 use crate::tactical_identity::TacticalIdentity;
 use crate::tuning::{ENERGY_START, START_AGE_WEEKS};
 use crate::tuning::{FAM_XP_AWKWARD, FAM_XP_COMPETENT, FAM_XP_UNCONVINCING};
-use crate::week::{advance_week, DevelopmentEvent, Routine};
+use crate::week::{DevelopmentEvent, Routine};
 
 /// The entire world state for a single save.
 #[derive(Debug, Clone)]
 pub struct WorldState {
     pub pc_development_history: crate::history::DevelopmentHistory,
+    pub dated_calendar: bool,
+    pub deep_scopes: Vec<crate::deep::DeepScope>,
+    pub deep_results: Vec<crate::deep::DeepFixtureResult>,
+    pub pc_played_fixture_ids: Vec<u64>,
+    pc_active_fixture_id: Option<u64>,
+    pub npc_match_loads: Vec<crate::history::NpcMatchLoad>,
     pub players: PlayerStore,
     /// The player-controlled player's id. `None` before character creation.
     pub pc_player_id: Option<PlayerId>,
@@ -356,6 +362,38 @@ pub struct OrbitMatchRecord {
 }
 
 impl WorldState {
+    /// The stable vector index remains its league round; selection follows actual dates.
+    pub fn next_dated_fixture(&self) -> Option<(usize, &goat_calendar::Fixture)> {
+        if !self.dated_calendar {
+            return None;
+        }
+        self.pc_season_fixtures
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| !self.pc_played_fixture_ids.contains(&f.id))
+            .min_by_key(|(_, f)| (f.scheduled_day, f.id))
+    }
+    pub fn chronology(&self) -> Option<crate::chronology::Chronology> {
+        self.dated_calendar
+            .then(|| crate::chronology::Chronology::new(self.career_base_year))
+    }
+    pub fn pc_age_years(&self) -> u32 {
+        self.chronology().map_or_else(
+            || {
+                self.pc_player_id
+                    .map_or(16, |id| self.players.get_age_weeks(id) / 52)
+            },
+            |c| c.age_years(16, 0, self.pc_epoch_day),
+        )
+    }
+    pub fn pc_display_view(&self) -> crate::player::PlayerView {
+        let mut view = self.players.snapshot(self.pc_player_id.unwrap());
+        if let Some(c) = self.chronology() {
+            view.age_weeks = c.display_age_weeks(16, 0, self.pc_epoch_day);
+        }
+        view
+    }
+
     pub fn new() -> Self {
         Self {
             players: PlayerStore::new(),
@@ -454,6 +492,12 @@ impl WorldState {
             orbit_records: Vec::new(),
             pc_injury_return_week: None,
             pc_development_history: Default::default(),
+            npc_match_loads: Vec::new(),
+            dated_calendar: false,
+            deep_scopes: Vec::new(),
+            deep_results: Vec::new(),
+            pc_played_fixture_ids: Vec::new(),
+            pc_active_fixture_id: None,
         }
     }
 
@@ -515,11 +559,26 @@ impl Default for WorldState {
 /// Player intents the renderer sends to the core.
 #[derive(Debug, Clone)]
 pub enum Intent {
+    BeginDatedFixture {
+        fixture_id: u64,
+    },
+    EnableDatedCalendar {
+        base_year: u32,
+    },
+    /// V9: advance every complete global seven-day period, retain partial days.
+    AdvanceToDate {
+        epoch_day: u32,
+        train: bool,
+    },
+
     /// No-op — advance without changing anything. Heartbeat / test sentinel.
     NoOp,
 
     /// Create the PC player. Idempotent: if a PC already exists, ignored.
-    CreatePlayer { seed: u64, choices: CreationChoices },
+    CreatePlayer {
+        seed: u64,
+        choices: CreationChoices,
+    },
 
     /// Apply a signed delta to one attribute, clamped to [1, 99] and potential.
     ApplyAttrDelta {
@@ -530,13 +589,17 @@ pub enum Intent {
 
     // ── Phase 3 intents ───────────────────────────────────────────────────────
     /// Replace the current weekly training routine.
-    SetRoutine { routine: Routine },
+    SetRoutine {
+        routine: Routine,
+    },
 
     /// Advance one week, collecting development events.
     AdvanceWeek,
 
     /// Advance up to `n` weeks, stopping early when a noteworthy event fires.
-    AdvanceWeeks { n: u32 },
+    AdvanceWeeks {
+        n: u32,
+    },
 
     // ── Phase 4 intents ───────────────────────────────────────────────────────
     /// Apply the effects of a completed match to persistent state.
@@ -616,17 +679,30 @@ pub enum Intent {
     /// Hard-set manager relation (clamped 0–100). Sent by the TUI on club arrival
     /// (new game / transfer) with the base derived from the club's manager profile;
     /// core stays headless and never derives manager data itself.
-    SetManagerRelation { trust: i32, favor: i32 },
+    SetManagerRelation {
+        trust: i32,
+        favor: i32,
+    },
     /// Apply signed deltas to manager trust/favor (clamped 0–100).
-    ApplyManagerRelation { trust_delta: i32, favor_delta: i32 },
+    ApplyManagerRelation {
+        trust_delta: i32,
+        favor_delta: i32,
+    },
 
     // ── Phase 9 intents ───────────────────────────────────────────────────────
     /// Seed the peer cohort at career start.
-    InitPeers { peers: Vec<PeerState> },
+    InitPeers {
+        peers: Vec<PeerState>,
+    },
     /// Advance all peers one season via batch-tick.
-    BatchTickPeers { season: u32 },
+    BatchTickPeers {
+        season: u32,
+    },
     /// Declare a rival (crystallised from cohort).
-    DeclareRival { peer_idx: usize, season: u32 },
+    DeclareRival {
+        peer_idx: usize,
+        season: u32,
+    },
 
     // ── Design round 2, Doc B — national-team call-ups ────────────────────────
     /// Record the outcome of one international-break call-up window (rolled by the
@@ -647,31 +723,48 @@ pub enum Intent {
     /// championships_won` — folded into those career totals via
     /// `ApplySeasonEndLegacy`'s `season_world_cups_won`/`season_continental_
     /// championships_won` fields exactly like every other season-live accumulator.
-    ApplyNationalTournamentWin { is_world_cup: bool },
+    ApplyNationalTournamentWin {
+        is_world_cup: bool,
+    },
 
     // ── Phase 10 intents ──────────────────────────────────────────────────────
     // Lifestyle is no longer a settable intent (bible §8.5/§8.6) — it is derived
     // weekly from `pc_lifestyle_score`, nudged by routine intensity, dev-investment
     // level (in `tick_one_week`) and sponsor tier (in `SignSponsor` below).
     /// Set the development-investment level 0–3 (ceiling-capped growth multiplier).
-    SetDevInvestment { level: u8 },
+    SetDevInvestment {
+        level: u8,
+    },
     /// Move savings into the business/investment portfolio (thousands).
-    InvestInBusiness { amount: i64 },
+    InvestInBusiness {
+        amount: i64,
+    },
     /// End-of-season economy settlement: wage + bonus in, upkeep + dev-cost out, business
     /// return applied, bankruptcy checked. `rng` drives the investment-return variance.
-    SettleSeasonEconomy { season_bonus: i64 },
+    SettleSeasonEconomy {
+        season_bonus: i64,
+    },
     /// Set marketability 0–100 (driven by output/icon at season end).
-    SetMarketability { value: i32 },
+    SetMarketability {
+        value: i32,
+    },
     /// Sign a sponsor at a tier (0=drop, 1=local, 2=national, 3=global). Gated by
     /// marketability; signing above your sporting merit dents Sporting reputation.
-    SignSponsor { tier: u8 },
+    SignSponsor {
+        tier: u8,
+    },
     /// Apply a life event to a relationship thread (0=partner,1=family,2=friend); `delta`
     /// strains (−) or strengthens (+) it. A thread falling below the rupture threshold
     /// triggers a scandal (Character + marketability hit).
-    ApplyLifeEvent { thread: u8, delta: i32 },
+    ApplyLifeEvent {
+        thread: u8,
+        delta: i32,
+    },
     /// Respond to a media flashpoint (after a red card / scandal). `contrite` rebuilds
     /// Character at a Sporting cost; defiant does the reverse — a real trade-off.
-    RespondToMedia { contrite: bool },
+    RespondToMedia {
+        contrite: bool,
+    },
     /// Retire the player. Triggers the final-verdict flow in the TUI.
     Retire,
 
@@ -759,12 +852,81 @@ pub enum Intent {
 
     /// Record the individual NPC residue of one deep-simmed PC match (PA2 M3).
     /// Append-only; replayed into the population on rebuild.
-    RecordOrbitMatch { record: OrbitMatchRecord },
+    RecordOrbitMatch {
+        record: OrbitMatchRecord,
+    },
+    SelectDeepScope {
+        scope: crate::deep::DeepScope,
+    },
+    RecordDeepFixture {
+        result: crate::deep::DeepFixtureResult,
+    },
+    RecordNpcMatchLoads {
+        loads: Vec<crate::history::NpcMatchLoad>,
+    },
 }
 
 /// Advance the simulation by one intent.
 pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -> WorldState {
     match intent {
+        Intent::SelectDeepScope { mut scope } => {
+            if state.dated_calendar
+                && scope.season == state.season_number
+                && scope.epoch_day <= state.pc_epoch_day
+            {
+                scope.leagues.sort_unstable();
+                scope.leagues.dedup();
+                if scope.leagues.contains(&scope.pc_league)
+                    && state.deep_scopes.last().is_none_or(|old| {
+                        old.season != scope.season
+                            || old.pc_league != scope.pc_league
+                            || old.pc_club != scope.pc_club
+                            || old.leagues != scope.leagues
+                    })
+                {
+                    state.deep_scopes.push(scope);
+                }
+            }
+            state
+        }
+        Intent::RecordDeepFixture { result } => {
+            if state.dated_calendar
+                && result.season == state.season_number
+                && result.epoch_day <= state.pc_epoch_day
+                && result.home != result.away
+                && !state
+                    .deep_results
+                    .iter()
+                    .any(|old| old.key() == result.key())
+            {
+                state.deep_results.push(result);
+            }
+            state
+        }
+        Intent::BeginDatedFixture { fixture_id } => {
+            if state.dated_calendar
+                && state
+                    .pc_season_fixtures
+                    .iter()
+                    .any(|f| f.id == fixture_id && f.scheduled_day == state.pc_epoch_day)
+                && !state.pc_played_fixture_ids.contains(&fixture_id)
+            {
+                state.pc_active_fixture_id = Some(fixture_id);
+            }
+            state
+        }
+        Intent::EnableDatedCalendar { base_year } => {
+            if state.pc_epoch_day == 0
+                && state.season_number == 0
+                && (1..=9999).contains(&base_year)
+            {
+                state.dated_calendar = true;
+                state.career_base_year = base_year;
+            }
+            state
+        }
+        Intent::AdvanceToDate { epoch_day, train } => advance_to_date(state, epoch_day, train, rng),
+
         Intent::NoOp => state,
 
         Intent::CreatePlayer { seed, choices } => {
@@ -1251,6 +1413,19 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
         }
 
         Intent::StartSeason { fixtures } => {
+            if state.dated_calendar
+                && state.season_number > 0
+                && state.pc_epoch_day
+                    < state
+                        .chronology()
+                        .unwrap()
+                        .frame(state.season_number)
+                        .next_preparation_start
+            {
+                return state;
+            }
+            state.pc_played_fixture_ids.clear();
+            state.pc_active_fixture_id = None;
             state.pc_season_fixtures = fixtures;
             state.season_number += 1;
             state.season_round = 0;
@@ -1274,7 +1449,15 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             // In-season play ticks ~41 weeks (one per round + skipped breaks);
             // the remainder elapses here as rest weeks, so at the start of
             // season N the invariant holds: age == START_AGE + (N−1)·52.
-            if let Some(pc_id) = state.pc_player_id {
+            if state.dated_calendar {
+                let target = state
+                    .chronology()
+                    .unwrap()
+                    .frame(state.season_number)
+                    .preparation_start;
+                state = advance_to_date(state, target, false, rng);
+                state.pc_week_training_done = false;
+            } else if let Some(pc_id) = state.pc_player_id {
                 let target = START_AGE_WEEKS + (state.season_number - 1) * 52;
                 // These backfilled weeks are the tail of the season that JUST ended
                 // (calendar-year summer, roughly day ~266-364), not the new one
@@ -1317,6 +1500,15 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             rest_weeks,
             week_ends,
         } => {
+            if state.dated_calendar {
+                let Some(id) = state.pc_active_fixture_id.take() else {
+                    return state;
+                };
+                if state.pc_played_fixture_ids.contains(&id) {
+                    return state;
+                }
+                state.pc_played_fixture_ids.push(id);
+            }
             // ── Suspension serves one match per round resolved (bible AC-06: a
             // ban counts down by matches actually played, not by elapsed days) —
             // scoped to THIS competition only (Design round 4, Slice 5 §5.1) ──
@@ -1328,7 +1520,9 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             // the next round elapse as rest. Between two fixtures of the SAME
             // week no time passes — the flag stays set so the week can neither
             // tick again nor open a second training session.
-            if state.pc_player_id.is_some() {
+            if state.dated_calendar {
+                state.pc_week_training_done = false;
+            } else if state.pc_player_id.is_some() {
                 if !state.pc_week_training_done {
                     state = tick_one_rest_week(state);
                 }
@@ -1426,8 +1620,41 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state
         }
 
+        Intent::RecordNpcMatchLoads { loads } => {
+            let mut seen = state
+                .npc_match_loads
+                .iter()
+                .map(|l| (l.pop_idx, l.fixture_id))
+                .collect::<std::collections::BTreeSet<_>>();
+            for load in loads {
+                if load.minutes <= 120
+                    && load.competition_id > 0
+                    && seen.insert((load.pop_idx, load.fixture_id))
+                {
+                    state.npc_match_loads.push(load);
+                }
+            }
+            state
+                .npc_match_loads
+                .sort_by_key(|l| (l.epoch_day, l.pop_idx, l.fixture_id));
+            state
+        }
         Intent::RecordOrbitMatch { record } => {
-            state.orbit_records.push(record);
+            if state.dated_calendar {
+                if let Some(old) = state.orbit_records.iter_mut().find(|r| {
+                    r.season == record.season && r.round == record.round && r.div == record.div
+                }) {
+                    for credit in record.credits {
+                        if !old.credits.iter().any(|c| c.pop_idx == credit.pop_idx) {
+                            old.credits.push(credit);
+                        }
+                    }
+                } else {
+                    state.orbit_records.push(record);
+                }
+            } else {
+                state.orbit_records.push(record);
+            }
             state
         }
     }
@@ -1477,6 +1704,50 @@ fn decisive_effective_importance_x10(state: &WorldState, importance: FixtureImpo
     }
 }
 
+fn advance_clock(state: &mut WorldState, target: u32) {
+    let (day, flashpoints, fixtures) = crate::calendar_loop::advance_dated_calendar(
+        state.pc_epoch_day,
+        target,
+        state.career_base_year,
+        state.world_seed,
+        &state.pc_season_fixtures,
+    );
+    state.pc_epoch_day = day;
+    state.last_week_flashpoints = flashpoints;
+    for fixture in &mut state.pc_season_fixtures {
+        if let Some(updated) = fixtures.iter().find(|f| f.id == fixture.id) {
+            *fixture = updated.clone();
+        }
+    }
+}
+fn advance_to_date(
+    mut state: WorldState,
+    target: u32,
+    train: bool,
+    rng: &mut impl RngSource,
+) -> WorldState {
+    if !state.dated_calendar || target < state.pc_epoch_day {
+        return state;
+    }
+    let Some(id) = state.pc_player_id else {
+        return state;
+    };
+    let mut flashes = Vec::new();
+    while (state.players.get_age_weeks(id) - START_AGE_WEEKS + 1) * 7 <= target {
+        state = if train {
+            tick_one_week(state, rng)
+        } else {
+            tick_one_rest_week(state)
+        };
+        flashes.append(&mut state.last_week_flashpoints);
+    }
+    advance_clock(&mut state, target);
+    flashes.append(&mut state.last_week_flashpoints);
+    state.last_week_flashpoints = flashes;
+    state.pc_week_training_done = true;
+    state
+}
+
 /// One REST week: time passes without a training session (untrained match
 /// weeks, break weeks, off-season). Age/injury/energy/decay run via
 /// `week::advance_rest_week`; the live calendar engine still ticks 7 days so
@@ -1490,17 +1761,27 @@ fn tick_one_rest_week(mut state: WorldState) -> WorldState {
         None => return state,
     };
     let cap = START_AGE_WEEKS + state.season_number * 52;
-    if state.players.get_age_weeks(pc_id) >= cap {
+    if !state.dated_calendar && state.players.get_age_weeks(pc_id) >= cap {
         return state;
     }
 
+    let period_day = if state.dated_calendar {
+        (state.players.get_age_weeks(pc_id) - START_AGE_WEEKS) * 7
+    } else {
+        state.pc_epoch_day
+    };
     let energy_before = state.players.get_energy(pc_id);
     let injury_before = state.players.get_injury_weeks(pc_id);
     let age_weeks = state.players.get_age_weeks(pc_id);
     let before: Fixed = (0..NUM_ATTRS)
         .map(|a| state.players.get_current(pc_id, a))
         .fold(Fixed::ZERO, |a, b| a + b);
-    crate::week::advance_rest_week(&mut state.players, pc_id, state.pc_lifestyle);
+    if state.dated_calendar {
+        let age = state.pc_age_years();
+        crate::week::advance_rest_week_at_age(&mut state.players, pc_id, state.pc_lifestyle, age);
+    } else {
+        crate::week::advance_rest_week(&mut state.players, pc_id, state.pc_lifestyle);
+    }
     let injury_after = state.players.get_injury_weeks(pc_id);
     if injury_before > 0 && injury_after == 0 {
         state.pc_injury_return_week = Some((state.pc_epoch_day + 7) / 7);
@@ -1508,7 +1789,7 @@ fn tick_one_rest_week(mut state: WorldState) -> WorldState {
             .pc_development_history
             .health
             .push(crate::history::HealthEvent {
-                epoch_day: state.pc_epoch_day + 7,
+                epoch_day: period_day + 7,
                 kind: 2,
                 remaining_weeks: 0,
             });
@@ -1517,7 +1798,7 @@ fn tick_one_rest_week(mut state: WorldState) -> WorldState {
         .pc_development_history
         .weeks
         .push(crate::history::TrainingWeek {
-            epoch_day: state.pc_epoch_day,
+            epoch_day: period_day,
             age_weeks,
             focus_mask: 0,
             requested_intensity: state.pc_routine.intensity as u8,
@@ -1533,14 +1814,19 @@ fn tick_one_rest_week(mut state: WorldState) -> WorldState {
                 - before,
         });
 
-    let (new_epoch, flashpoints) = advance_calendar_week(
-        state.pc_epoch_day,
-        state.world_seed,
-        state.season_number,
-        &state.pc_season_fixtures,
-    );
-    state.pc_epoch_day = new_epoch;
-    state.last_week_flashpoints = flashpoints;
+    if state.dated_calendar {
+        let next = (state.players.get_age_weeks(pc_id) - START_AGE_WEEKS) * 7;
+        advance_clock(&mut state, next);
+    } else {
+        let (new_epoch, flashpoints) = advance_calendar_week(
+            state.pc_epoch_day,
+            state.world_seed,
+            state.season_number,
+            &state.pc_season_fixtures,
+        );
+        state.pc_epoch_day = new_epoch;
+        state.last_week_flashpoints = flashpoints;
+    }
     state
 }
 
@@ -1559,6 +1845,11 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
     state.pc_lifestyle = lifestyle_tier_from_score(state.pc_lifestyle_score);
 
     // Snapshot current attrs to compute growth delta for TUI display.
+    let period_day = if state.dated_calendar {
+        (state.players.get_age_weeks(pc_id) - START_AGE_WEEKS) * 7
+    } else {
+        state.pc_epoch_day
+    };
     let before: [Fixed; NUM_ATTRS] = core::array::from_fn(|a| state.players.get_current(pc_id, a));
     let injury_before = state.players.get_injury_weeks(pc_id);
     let energy_before = state.players.get_energy(pc_id);
@@ -1577,7 +1868,8 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
         * dev_mult
         * goat_fixed::Fixed::raw(state.pc_staff_mods.growth_pct);
 
-    let events = advance_week(
+    let age = state.pc_age_years();
+    let events = crate::week::advance_week_at_age(
         &mut state.players,
         pc_id,
         &state.pc_routine,
@@ -1585,12 +1877,17 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
         state.pc_lifestyle,
         state.pc_staff_mods.injury_duration_pct,
         rng,
+        age,
     );
 
     // PA2 M4: mark the week an injury ran out — the manager may ease him back
     // with a late cameo instead of a full start.
     if injury_before > 0 && state.players.get_injury_weeks(pc_id) == 0 {
-        state.pc_injury_return_week = Some(state.pc_epoch_day / 7);
+        state.pc_injury_return_week = Some(if state.dated_calendar {
+            (period_day + 7) / 7
+        } else {
+            state.pc_epoch_day / 7
+        });
     }
 
     // Record per-attribute delta.
@@ -1603,7 +1900,11 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
                 .pc_development_history
                 .health
                 .push(crate::history::HealthEvent {
-                    epoch_day: state.pc_epoch_day,
+                    epoch_day: if state.dated_calendar {
+                        period_day + 7
+                    } else {
+                        period_day
+                    },
                     kind: 0,
                     remaining_weeks: *weeks,
                 });
@@ -1628,7 +1929,7 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
             .pc_development_history
             .health
             .push(crate::history::HealthEvent {
-                epoch_day: state.pc_epoch_day + 7,
+                epoch_day: period_day + 7,
                 kind: 2,
                 remaining_weeks: 0,
             });
@@ -1637,7 +1938,7 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
         .pc_development_history
         .weeks
         .push(crate::history::TrainingWeek {
-            epoch_day: state.pc_epoch_day,
+            epoch_day: period_day,
             age_weeks: state.players.get_age_weeks(pc_id) - 1,
             focus_mask: state
                 .pc_routine
@@ -1668,14 +1969,19 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
     // Advance the CalendarEngine 7 days on its OWN RNG stream (seeded from
     // world_seed) — independent of the growth RNG above, so attribute goldens are
     // untouched. Surfaces window-opening flashpoints for the renderer.
-    let (new_epoch, flashpoints) = advance_calendar_week(
-        state.pc_epoch_day,
-        state.world_seed,
-        state.season_number,
-        &state.pc_season_fixtures,
-    );
-    state.pc_epoch_day = new_epoch;
-    state.last_week_flashpoints = flashpoints;
+    if state.dated_calendar {
+        let next = (state.players.get_age_weeks(pc_id) - START_AGE_WEEKS) * 7;
+        advance_clock(&mut state, next);
+    } else {
+        let (new_epoch, flashpoints) = advance_calendar_week(
+            state.pc_epoch_day,
+            state.world_seed,
+            state.season_number,
+            &state.pc_season_fixtures,
+        );
+        state.pc_epoch_day = new_epoch;
+        state.last_week_flashpoints = flashpoints;
+    }
 
     state
 }
@@ -1722,7 +2028,7 @@ pub fn lifestyle_tier_from_score(score: Fixed) -> u8 {
 pub fn should_retire(state: &WorldState) -> bool {
     use crate::tuning::{RETIRE_AGE_HARD, RETIRE_AGE_SOFT};
     let age_years = match state.pc_player_id {
-        Some(id) => state.players.get_age_weeks(id) / 52,
+        Some(_) => state.pc_age_years(),
         None => return false,
     };
     age_years >= RETIRE_AGE_HARD

@@ -640,6 +640,7 @@ pub struct MatchResult {
     /// follow-up) — the live game owes them appearances/goal credits too.
     /// Empty for stub sheets (ids are None) and every harness/golden match.
     pub opp_subs_on: Vec<u32>,
+    pub npc_minutes: Vec<goat_core::history::NpcMinutes>,
     /// PC contests won/lost against the opposition danger man (per-match
     /// only). Both zero when the opposition had no danger man or the PC never
     /// drew him. `danger_man_name` names the man last faced, for the recap.
@@ -759,6 +760,8 @@ pub struct ActiveMatchState {
     /// Population ids of opposition players subbed on (for the live game's
     /// appearance/goal-credit bookkeeping).
     opp_subs_on: Vec<u32>,
+    /// id, stint start (None when substituted off), accumulated minutes.
+    npc_stints: std::collections::BTreeMap<u32, (Option<u32>, u32)>,
     pub familiarity_xp: [Fixed; NUM_ROLES],
     pub is_complete: bool,
     pub final_result: Option<MatchResult>,
@@ -847,6 +850,25 @@ fn initialize_match(
     } else {
         Possession::Opp
     };
+    let npc_stints = setup
+        .own_squad
+        .players
+        .iter()
+        .chain(setup.opp_squad.players.iter())
+        .filter(|p| !p.is_pc)
+        .filter_map(|p| p.id)
+        .map(|id| (id, (Some(0), 0)))
+        .chain(
+            setup
+                .own_squad
+                .bench
+                .iter()
+                .chain(setup.opp_squad.bench.iter())
+                .filter(|p| !p.is_pc)
+                .filter_map(|p| p.id)
+                .map(|id| (id, (None, 0))),
+        )
+        .collect();
     let mut ms = ActiveMatchState {
         shared_model,
         unified,
@@ -889,6 +911,7 @@ fn initialize_match(
             .map(|c| GoatRng::new(c.seed ^ OPP_SUB_STREAM_SALT)),
         opp_subs_done: 0,
         opp_subs_on: Vec::new(),
+        npc_stints,
         setup,
         minute: 0,
         possession,
@@ -1438,6 +1461,16 @@ fn maybe_opp_substitute(ms: &mut ActiveMatchState) {
     });
     if let Some((off, on)) = swap {
         let on_p = ms.setup.opp_squad.bench.remove(on);
+        if let Some(id) = ms.setup.opp_squad.players[off].id {
+            if let Some((start, total)) = ms.npc_stints.get_mut(&id) {
+                if let Some(start) = start.take() {
+                    *total += ms.minute.saturating_sub(start);
+                }
+            }
+        }
+        if let Some(id) = on_p.id {
+            ms.npc_stints.insert(id, (Some(ms.minute), 0));
+        }
         if let Some(id) = on_p.id {
             ms.opp_subs_on.push(id);
         }
@@ -2243,6 +2276,17 @@ fn build_result(ms: &ActiveMatchState) -> MatchResult {
         goal_credits: ms.goal_credits.clone(),
         minutes_played,
         opp_subs_on: ms.opp_subs_on.clone(),
+        npc_minutes: ms
+            .npc_stints
+            .iter()
+            .map(
+                |(&pop_idx, &(start, total))| goat_core::history::NpcMinutes {
+                    pop_idx,
+                    minutes: (total + start.map_or(0, |start| ms.minute.saturating_sub(start)))
+                        .min(FULL_TIME) as u16,
+                },
+            )
+            .collect(),
         danger_duels_won: ms.danger_duels_won,
         danger_duels_lost: ms.danger_duels_lost,
         danger_man_name: ms.danger_man_name.clone(),

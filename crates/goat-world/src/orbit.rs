@@ -122,6 +122,67 @@ pub fn rebuild_population_lived(
     pop
 }
 
+pub fn rebuild_population_scheduled(
+    world_seed: u64,
+    season: u32,
+    records: &[OrbitMatchRecord],
+    loads: &[goat_core::history::NpcMatchLoad],
+) -> Population {
+    let mut world = WorldGenesis::generate(world_seed);
+    let mut cache = crate::promotion::ReplayCache::new_scheduled(&world, world_seed);
+    for _ in 1..season {
+        for load in loads {
+            cache.record_match_load(*load);
+        }
+        cache.advance_one_season_with_orbit(&mut world, records);
+    }
+    let mut pop = cache.into_population();
+    for load in loads {
+        pop.record_match_load(*load);
+    }
+    for record in records.iter().filter(|r| r.season == season) {
+        apply_orbit_record(&mut pop, record);
+    }
+    pop
+}
+
+pub fn rebuild_population_dated(
+    seed: u64,
+    base_year: u32,
+    season: u32,
+    records: &[OrbitMatchRecord],
+    loads: &[goat_core::history::NpcMatchLoad],
+) -> Population {
+    rebuild_population_deep(seed, base_year, season, records, loads, &[])
+}
+
+/// Fresh counterpart of the retained deep session, including actual standings.
+pub fn rebuild_population_deep(
+    seed: u64,
+    base_year: u32,
+    season: u32,
+    records: &[OrbitMatchRecord],
+    loads: &[goat_core::history::NpcMatchLoad],
+    scores: &[goat_core::deep::DeepFixtureResult],
+) -> Population {
+    let mut world = WorldGenesis::generate(seed);
+    let mut cache = crate::promotion::ReplayCache::new_dated(&world, seed, base_year);
+    for _ in 1..season {
+        for load in loads {
+            cache.record_match_load(*load);
+        }
+        cache.advance_one_season_with_deep(&mut world, records, scores);
+    }
+    let mut pop = cache.into_population();
+    for load in loads {
+        pop.record_match_load(*load);
+    }
+    for record in records.iter().filter(|r| r.season == season) {
+        apply_orbit_record(&mut pop, record);
+    }
+    pop
+}
+
 fn rebuild_population_model(
     world_seed: u64,
     season: u32,
@@ -354,6 +415,43 @@ mod lived_replay_tests {
             assert_eq!(
                 rebuilt.injury_history(idx, 104),
                 cache.pop().injury_history(idx, 104)
+            );
+            assert_eq!(
+                rebuilt.current_ovr(idx, 104),
+                cache.pop().current_ovr(idx, 104)
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod scheduled_replay_tests {
+    use super::*;
+    #[test]
+    fn dated_minutes_replay_preserves_health_growth_and_career() {
+        let seed = 42;
+        let mut world = WorldGenesis::generate(seed);
+        let mut cache = crate::promotion::ReplayCache::new_scheduled(&world, seed);
+        let loads = [goat_core::history::NpcMatchLoad {
+            competition_id: 1,
+            pop_idx: 0,
+            fixture_id: crate::workload::league_fixture_id(seed, 1, 0, 0),
+            epoch_day: 81,
+            minutes: 30,
+        }];
+        assert!(cache.record_match_load(loads[0]));
+        cache.advance_one_season_with_orbit(&mut world, &[]);
+        let rebuilt = rebuild_population_scheduled(seed, 2, &[], &loads);
+        assert_eq!(rebuilt.fingerprint(), cache.pop().fingerprint());
+        assert_eq!(
+            rebuilt.career_fingerprint(),
+            cache.pop().career_fingerprint()
+        );
+        assert_eq!(rebuilt.observed_match_loads(0), loads);
+        for idx in (0..rebuilt.len()).step_by(997) {
+            assert_eq!(
+                rebuilt.training_history(idx, 0, 104),
+                cache.pop().training_history(idx, 0, 104)
             );
             assert_eq!(
                 rebuilt.current_ovr(idx, 104),

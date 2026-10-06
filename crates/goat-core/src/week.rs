@@ -163,12 +163,35 @@ pub fn advance_week(
     injury_duration_pct: i32,
     rng: &mut impl RngSource,
 ) -> Vec<DevelopmentEvent> {
+    let age = players.get_age_weeks(pc_id) / 52;
+    advance_week_at_age(
+        players,
+        pc_id,
+        routine,
+        facilities_mult,
+        lifestyle,
+        injury_duration_pct,
+        rng,
+        age,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn advance_week_at_age(
+    players: &mut PlayerStore,
+    pc_id: PlayerId,
+    routine: &Routine,
+    facilities_mult: Fixed,
+    lifestyle: u8,
+    injury_duration_pct: i32,
+    rng: &mut impl RngSource,
+    age_years: u32,
+) -> Vec<DevelopmentEvent> {
     let mut events: Vec<DevelopmentEvent> = Vec::new();
 
     // ── Age advancement (always) ──────────────────────────────────────────────
     let age_weeks = players.get_age_weeks(pc_id);
     players.set_age_weeks(pc_id, age_weeks + 1);
-    let age_years = age_weeks / 52;
 
     // ── Injured? Rest and return early ────────────────────────────────────────
     let injury = players.get_injury_weeks(pc_id);
@@ -287,12 +310,21 @@ pub fn advance_rest_week(
     pc_id: PlayerId,
     lifestyle: u8,
 ) -> Vec<DevelopmentEvent> {
+    let age = players.get_age_weeks(pc_id) / 52;
+    advance_rest_week_at_age(players, pc_id, lifestyle, age)
+}
+
+pub fn advance_rest_week_at_age(
+    players: &mut PlayerStore,
+    pc_id: PlayerId,
+    lifestyle: u8,
+    age_years: u32,
+) -> Vec<DevelopmentEvent> {
     let events: Vec<DevelopmentEvent> = Vec::new();
 
     // ── Age advancement (always) ──────────────────────────────────────────────
     let age_weeks = players.get_age_weeks(pc_id);
     players.set_age_weeks(pc_id, age_weeks + 1);
-    let age_years = age_weeks / 52;
 
     // ── Injured? Rest and return early (same as the training tick) ───────────
     let injury = players.get_injury_weeks(pc_id);

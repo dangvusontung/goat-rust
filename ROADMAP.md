@@ -1,5 +1,15 @@
 # ROADMAP — Become the GOAT
 
+The current core enhancement sequence is recorded in
+[CORE-ENHANCEMENT-ROADMAP.md](docs/CORE-ENHANCEMENT-ROADMAP.md).
+
+Latest implementation: [v10 ranked deep leagues](docs/DEEP-LEAGUES.md) — PC league plus
+top 5, named NPC fixture minutes/credits, authoritative standings replay; save 25.
+
+Latest checkpoint (2026-10-06): [implemented v9 season chronology](docs/SEASON-CHRONOLOGY.md),
+15 August–30 June, continuous training/health and dated replay; save layout 24.
+Legacy factory descriptions below remain applicable to their compatibility paths.
+
 Current checkpoint: see [DEVELOPMENT-STATUS.md](docs/DEVELOPMENT-STATUS.md).
 Current direction: **complete the core simulation first; use the TUI for testing**.
 The proposed next milestone is [shared headless simulation](tasks/TASK-CORE-SHARED-SIMULATION.md).
@@ -93,3 +103,8 @@ and mobile session caching remain pending; this does not mark every core phase c
 NPC enhancement (2026-10-06): [v7 individual health and drills](docs/NPC-INDIVIDUAL-LIFE.md)
 is implemented. Next: session replay cache/mobile measurements, then fixture-based
 NPC workload and role/familiarity development. The 150-country task remains deferred.
+
+Current update (2026-10-06): [v8 dated NPC fixture workload](docs/NPC-FIXTURE-WORKLOAD.md),
+SIM_VERSION 8 / save layout 23. Observed engine minutes override background
+plans; rest gaps and congestion affect energy and injury risk. Weekly training
+and 364/365-day clock differences remain documented limitations.

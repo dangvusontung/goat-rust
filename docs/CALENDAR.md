@@ -660,3 +660,11 @@ At each pause: show me the file tree of what you added, the key type definitions
    returns nothing.
 6. Short summary of what changed and which bible/tech-doc sections it implements
    (expected: §2.2, §2.3, §5.4, §9).
+
+## Owner amendment — 2026-10-06: explicit season dates
+
+The new model's club competition season is **15 August–30 June**, inclusive;
+**1 July–14 August** is summer time for rest, national-team games and friendlies.
+This supersedes the earlier fixed 52-week season-year/drifting opener assumption.
+The v9 chronology migration is implemented for core, NPC and the TUI.
+Earlier implementation descriptions above remain historical. See [canonical decision and migration requirements](SEASON-CHRONOLOGY.md).

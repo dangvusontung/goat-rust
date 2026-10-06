@@ -15,9 +15,12 @@ pub struct NpcHealthState {
     pub injury_weeks: u32,
     pub(crate) available_mask: u64,
     pub(crate) elapsed_weeks: u32,
+    pub(crate) last_match_day: Option<u32>,
+    pub(crate) season_apps: u32,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NpcTrainingWeek {
+    pub epoch_day: u32,
     pub week: u32,
     pub focus_mask: u32,
     pub effective_intensity: u8,
@@ -26,6 +29,11 @@ pub struct NpcTrainingWeek {
     pub injury_before: u32,
     pub injury_after: u32,
     pub new_injury: bool,
+    pub minutes_played: u16,
+    pub match_count: u8,
+    pub league_match_count: u8,
+    pub min_rest_days: Option<u32>,
+    pub injury_risk_per_1000: u32,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NpcInjuryEpisode {
@@ -69,9 +77,88 @@ pub(crate) fn tick(
     health: &mut NpcHealthState,
     attrs: Option<(&mut [Fixed; NUM_ATTRS], &[Fixed; NUM_ATTRS])>,
 ) -> NpcTrainingWeek {
+    tick_internal(
+        seed, week, age, position, durability, e, health, attrs, None, true, None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tick_scheduled(
+    seed: u64,
+    week: u32,
+    age: u32,
+    position: u8,
+    durability: u8,
+    e: NpcExposure,
+    health: &mut NpcHealthState,
+    attrs: Option<(&mut [Fixed; NUM_ATTRS], &[Fixed; NUM_ATTRS])>,
+    doses: &[crate::workload::MatchDose],
+) -> NpcTrainingWeek {
+    tick_internal(
+        seed,
+        week,
+        age,
+        position,
+        durability,
+        e,
+        health,
+        attrs,
+        Some(doses),
+        true,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn tick_dated(
+    seed: u64,
+    week: u32,
+    age: u32,
+    position: u8,
+    durability: u8,
+    e: NpcExposure,
+    health: &mut NpcHealthState,
+    attrs: Option<(&mut [Fixed; NUM_ATTRS], &[Fixed; NUM_ATTRS])>,
+    doses: &[crate::workload::MatchDose],
+    life_days: (u32, u32),
+) -> NpcTrainingWeek {
+    tick_internal(
+        seed,
+        week,
+        age,
+        position,
+        durability,
+        e,
+        health,
+        attrs,
+        Some(doses),
+        false,
+        Some(life_days),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn tick_internal(
+    seed: u64,
+    week: u32,
+    age: u32,
+    position: u8,
+    durability: u8,
+    e: NpcExposure,
+    health: &mut NpcHealthState,
+    attrs: Option<(&mut [Fixed; NUM_ATTRS], &[Fixed; NUM_ATTRS])>,
+    doses: Option<&[crate::workload::MatchDose]>,
+    reset_52: bool,
+    life_days: Option<(u32, u32)>,
+) -> NpcTrainingWeek {
+    let start_day = life_days.map_or(week * 7, |(entry, _)| entry.max(week * 7));
+    let end_day = life_days.map_or((week + 1) * 7, |(_, end)| end.min((week + 1) * 7));
+    let active_days = end_day.saturating_sub(start_day);
+    let fraction = Fixed::raw(active_days as i32 * 1000 / 7);
     let before = *health;
     let mut record = NpcTrainingWeek {
         week,
+        epoch_day: start_day,
         focus_mask: 0,
         effective_intensity: 3,
         energy_before: before.energy,
@@ -79,14 +166,59 @@ pub(crate) fn tick(
         injury_before: before.injury_weeks,
         injury_after: before.injury_weeks,
         new_injury: false,
+        minutes_played: 0,
+        match_count: 0,
+        league_match_count: 0,
+        min_rest_days: None,
+        injury_risk_per_1000: 0,
     };
     if health.injury_weeks > 0 {
         health.injury_weeks -= 1;
-        health.energy = (health.energy + ENERGY_RECOVERY_INJURED).min(ENERGY_MAX);
+        health.energy = (health.energy + ENERGY_RECOVERY_INJURED * fraction).min(ENERGY_MAX);
+        if let Some(doses) = doses {
+            for dose in doses.iter().filter(|d| {
+                d.observed && d.minutes > 0 && d.epoch_day >= start_day && d.epoch_day < end_day
+            }) {
+                record.minutes_played += dose.minutes;
+                record.match_count += 1;
+                if dose.competition_id == goat_core::calendar_loop::LEAGUE_COMPETITION_ID {
+                    record.league_match_count += 1;
+                }
+                health.energy = (health.energy - Fixed::raw(dose.minutes as i32 * 20_000 / 90))
+                    .max(Fixed::ZERO);
+                health.last_match_day = Some(dose.epoch_day);
+            }
+        }
     } else {
-        // 20 energy per appearance is a first calibration assumption, not real minutes.
-        let load = Fixed::raw(e.workload_apps as i32 * 20_000 / 52);
-        let energy = (health.energy - load).max(Fixed::ZERO);
+        let energy = if let Some(doses) = doses {
+            let mut energy = health.energy;
+            for day in start_day..end_day {
+                let mut played = false;
+                for dose in doses.iter().filter(|d| d.epoch_day == day && d.minutes > 0) {
+                    if let Some(last) = health.last_match_day {
+                        let rest = day.saturating_sub(last);
+                        record.min_rest_days =
+                            Some(record.min_rest_days.map_or(rest, |r| r.min(rest)));
+                    }
+                    health.last_match_day = Some(day);
+                    record.minutes_played += dose.minutes;
+                    record.match_count += 1;
+                    if dose.competition_id == goat_core::calendar_loop::LEAGUE_COMPETITION_ID {
+                        record.league_match_count += 1;
+                    }
+                    energy =
+                        (energy - Fixed::raw(dose.minutes as i32 * 20_000 / 90)).max(Fixed::ZERO);
+                    played = true;
+                }
+                if !played {
+                    energy = (energy + Fixed::from_int(6)).min(ENERGY_MAX);
+                }
+            }
+            energy
+        } else {
+            let load = Fixed::raw(e.workload_apps as i32 * 20_000 / 52);
+            (health.energy - load).max(Fixed::ZERO)
+        };
         let intensity = if energy < ENERGY_AUTO_DOWNGRADE {
             0
         } else {
@@ -112,13 +244,29 @@ pub(crate) fn tick(
                 INTENSITY_CEILING_MED,
             ),
         };
-        health.energy = (energy - cost + ENERGY_PASSIVE_RECOVERY).clamp(Fixed::ZERO, ENERGY_MAX);
+        health.energy = (energy - cost * fraction
+            + if doses.is_some() {
+                Fixed::ZERO
+            } else {
+                ENERGY_PASSIVE_RECOVERY
+            })
+        .clamp(Fixed::ZERO, ENERGY_MAX);
         let mut rng = GoatRng::new(
             seed ^ 0x4E50_4348_4541_4C54 ^ (week as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15),
         );
-        if rng.next_range_u32(0, 999)
-            < injury_prob(health.energy, kind, age, e.lifestyle, durability)
-        {
+        let base_risk = injury_prob(health.energy, kind, age, e.lifestyle, durability);
+        let pressure = if doses.is_some() {
+            1000 + record.minutes_played.saturating_sub(90) as u32 * 500 / 90
+                + if record.min_rest_days.is_some_and(|r| r < 3) {
+                    500
+                } else {
+                    0
+                }
+        } else {
+            1000
+        };
+        record.injury_risk_per_1000 = (base_risk * pressure / 1000 * active_days / 7).min(999);
+        if rng.next_range_u32(0, 999) < record.injury_risk_per_1000 {
             let duration = rng.next_range_u8(INJURY_WEEKS_MIN, INJURY_WEEKS_MAX) as i32;
             health.injury_weeks = (duration * e.injury_duration_pct / 1000).max(1) as u32;
             record.new_injury = true;
@@ -170,16 +318,23 @@ pub(crate) fn tick(
                                 },
                         ) + Fixed::raw(variance))
                         .clamp(Fixed::ZERO, GROWTH_SINGLE_WEEK_CAP);
-                        current[a] = (current[a] + delta).clamp(
+                        current[a] = (current[a] + delta * fraction).clamp(
                             Fixed::MIN_ATTR,
                             (potential[a] * ceiling * lifestyle_ceiling).max(Fixed::MIN_ATTR),
                         );
                     }
-                    current[a] = (current[a] - weekly_decay(ATTR_ARCHETYPES[a], age, decline))
+                    current[a] = (current[a]
+                        - weekly_decay(ATTR_ARCHETYPES[a], age, decline) * fraction)
                         .max(Fixed::MIN_ATTR);
                 }
             }
         }
+    }
+    if doses.is_some() {
+        if reset_52 && week.is_multiple_of(52) {
+            health.season_apps = 0;
+        }
+        health.season_apps += record.league_match_count as u32;
     }
     health.available_mask = ((health.available_mask << 1)
         | u64::from(before.injury_weeks == 0 && health.injury_weeks == 0))
@@ -213,6 +368,8 @@ mod tests {
             injury_weeks: 2,
             available_mask: 0,
             elapsed_weeks: 0,
+            last_match_day: None,
+            season_apps: 0,
         };
         let mut attrs = [Fixed::from_int(50); NUM_ATTRS];
         let potential = [Fixed::from_int(99); NUM_ATTRS];
@@ -257,6 +414,8 @@ mod tests {
                     injury_weeks: 0,
                     available_mask: 0,
                     elapsed_weeks: 0,
+                    last_match_day: None,
+                    season_apps: 0,
                 };
                 !tick(
                     seed,
@@ -276,6 +435,8 @@ mod tests {
             injury_weeks: 0,
             available_mask: 0,
             elapsed_weeks: 0,
+            last_match_day: None,
+            season_apps: 0,
         };
         let mut attrs = [Fixed::from_int(50); NUM_ATTRS];
         let potential = [Fixed::from_int(99); NUM_ATTRS];
@@ -311,5 +472,84 @@ mod tests {
         advance_week(&mut store, id, &routine, Fixed::ONE, 1, 1000, &mut rng);
         assert_eq!(attrs, store.snapshot(id).current);
         assert_eq!(state.energy, store.get_energy(id));
+    }
+}
+
+#[cfg(test)]
+mod workload_tests {
+    use super::*;
+    use crate::workload::MatchDose;
+    fn health() -> NpcHealthState {
+        NpcHealthState {
+            energy: Fixed::from_int(75),
+            injury_weeks: 0,
+            available_mask: 0,
+            elapsed_weeks: 0,
+            last_match_day: None,
+            season_apps: 0,
+        }
+    }
+    fn dose(day: u32, minutes: u16) -> MatchDose {
+        MatchDose {
+            competition_id: 1,
+            fixture_id: day as u64 + 1,
+            epoch_day: day,
+            minutes,
+            observed: true,
+        }
+    }
+    #[test]
+    fn minutes_and_short_rest_raise_fatigue_and_risk_without_offseason_phantom_load() {
+        let e = NpcExposure::balanced(0, Fixed::ONE);
+        let run = |doses: &[MatchDose]| {
+            let mut h = health();
+            tick_scheduled(42, 0, 25, 1, 10, e, &mut h, None, doses)
+        };
+        let rested = run(&[]);
+        let short = run(&[dose(5, 30)]);
+        let full = run(&[dose(5, 90)]);
+        let spread = run(&[dose(1, 90), dose(5, 90)]);
+        let tight = run(&[dose(4, 90), dose(5, 90)]);
+        assert!(rested.energy_after > short.energy_after);
+        assert!(short.energy_after > full.energy_after);
+        assert!(full.energy_after > spread.energy_after);
+        assert_eq!(spread.energy_after, tight.energy_after);
+        assert!(tight.injury_risk_per_1000 > spread.injury_risk_per_1000);
+        assert_eq!(tight.min_rest_days, Some(1));
+        assert_eq!(rested.minutes_played, 0);
+        assert_eq!(spread.minutes_played, 180);
+    }
+    #[test]
+    fn cup_minutes_affect_health_but_do_not_create_league_appearances() {
+        let mut h = health();
+        let mut cup = dose(5, 90);
+        cup.competition_id = 2;
+        let r = tick_scheduled(
+            42,
+            0,
+            25,
+            1,
+            10,
+            NpcExposure::balanced(0, Fixed::ONE),
+            &mut h,
+            None,
+            &[cup],
+        );
+        assert_eq!(r.match_count, 1);
+        assert_eq!(r.league_match_count, 0);
+        assert_eq!(h.season_apps, 0);
+    }
+    #[test]
+    fn unavailable_players_skip_plans_but_observed_minutes_are_authoritative() {
+        let mut h = health();
+        h.injury_weeks = 2;
+        let mut planned = dose(5, 90);
+        planned.observed = false;
+        let e = NpcExposure::balanced(0, Fixed::ONE);
+        let r = tick_scheduled(42, 0, 25, 1, 10, e, &mut h, None, &[planned]);
+        assert_eq!(r.minutes_played, 0);
+        assert_eq!(h.injury_weeks, 1);
+        let r = tick_scheduled(42, 1, 25, 1, 10, e, &mut h, None, &[dose(12, 20)]);
+        assert_eq!(r.minutes_played, 20);
     }
 }

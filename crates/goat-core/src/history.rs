@@ -44,3 +44,19 @@ pub struct DevelopmentHistory {
     pub health: Vec<HealthEvent>,
     pub matches: Vec<MatchWorkload>,
 }
+
+/// Path-dependent minutes from an engine-resolved fixture; zero records an actual DNP.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NpcMatchLoad {
+    pub competition_id: u32,
+    pub pop_idx: u32,
+    pub fixture_id: u64,
+    pub epoch_day: u32,
+    pub minutes: u16,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NpcMinutes {
+    pub pop_idx: u32,
+    pub minutes: u16,
+}

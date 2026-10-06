@@ -34,7 +34,11 @@ fn goal_weight_x10(position: u8) -> u32 {
 fn effective_goal_weight(pop: &Population, idx: usize, week: u32) -> u32 {
     let base = goal_weight_x10(pop.position[idx]) * pop.current_ovr(idx, week) as u32;
     if pop.uses_individual_health() {
-        base * pop.appearance_quota(idx, week, 1000) / 1000
+        base * if pop.uses_scheduled_load() {
+            pop.appearance_quota(idx, week, 0).min(38)
+        } else {
+            pop.appearance_quota(idx, week, 1000)
+        } / if pop.uses_scheduled_load() { 38 } else { 1000 }
     } else {
         base
     }
@@ -269,6 +273,46 @@ pub fn batch_tick_season_orbit_with_match_points(
     elapsed_weeks: u32,
     orbit: Option<&OrbitSeasonOverlay>,
 ) -> (Vec<SeasonResult>, Vec<Table>, Vec<(ClubId, u8)>) {
+    batch_tick_season_deep_with_match_points(
+        pop,
+        world,
+        league_clubs,
+        world_seed,
+        season,
+        elapsed_weeks,
+        orbit,
+        &[],
+    )
+}
+
+/// Detailed scores replace the corresponding light fixture; unplayed fixtures retain
+/// the legacy RNG stream, so adding a deep fixture cannot reroll a distant league.
+#[allow(clippy::too_many_arguments)]
+pub fn batch_tick_season_deep_with_match_points(
+    pop: &mut Population,
+    world: &WorldGenesis,
+    league_clubs: &[Vec<ClubId>],
+    world_seed: u64,
+    season: u32,
+    elapsed_weeks: u32,
+    orbit: Option<&OrbitSeasonOverlay>,
+    scores: &[goat_core::deep::DeepFixtureResult],
+) -> (Vec<SeasonResult>, Vec<Table>, Vec<(ClubId, u8)>) {
+    let scored = scores
+        .iter()
+        .filter(|r| r.season == season)
+        .map(|r| {
+            (
+                (
+                    r.league as usize,
+                    r.round as usize,
+                    r.home as usize,
+                    r.away as usize,
+                ),
+                (r.home_goals, r.away_goals),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
     let squads = squads_by_club(pop, world.clubs.len());
     let strengths: Vec<u8> = (0..world.clubs.len())
         .map(|c| pop.live_strength_from_squad(&squads[c], elapsed_weeks))
@@ -290,6 +334,10 @@ pub fn batch_tick_season_orbit_with_match_points(
                 } else {
                     sim_team_match
                 })(strengths[f.home], strengths[f.away], &mut rng);
+                let (gf, ga) = scored
+                    .get(&(div, round, f.home, f.away))
+                    .copied()
+                    .unwrap_or((gf, ga));
                 table.apply_result(f.home, f.away, gf, ga);
                 let (home_pts, away_pts) = points_from_result(gf, ga);
                 match_points.push((f.home, home_pts));

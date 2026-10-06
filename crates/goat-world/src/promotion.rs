@@ -167,6 +167,28 @@ pub fn sim_league_season(
     world_seed: u64,
     season: u32,
 ) -> Table {
+    sim_league_season_with_scores(world, league_id, clubs, world_seed, season, &[])
+}
+
+/// Live promotion uses the same played outcomes as replay; missing fixtures stay light.
+pub fn sim_league_season_with_scores(
+    world: &WorldGenesis,
+    league_id: LeagueId,
+    clubs: &[ClubId],
+    world_seed: u64,
+    season: u32,
+    scores: &[goat_core::deep::DeepFixtureResult],
+) -> Table {
+    let scored = scores
+        .iter()
+        .filter(|r| r.season == season && r.league as usize == league_id)
+        .map(|r| {
+            (
+                (r.round as usize, r.home as usize, r.away as usize),
+                (r.home_goals, r.away_goals),
+            )
+        })
+        .collect::<std::collections::BTreeMap<_, _>>();
     let mut table = Table::new(clubs);
     for round in 0..crate::fixtures::ROUNDS_PER_SEASON {
         let mut rng = GoatRng::new(
@@ -182,6 +204,10 @@ pub fn sim_league_season(
                 world.clubs[f.away].strength,
                 &mut rng,
             );
+            let (gf, ga) = scored
+                .get(&(round, f.home, f.away))
+                .copied()
+                .unwrap_or((gf, ga));
             table.apply_result(f.home, f.away, gf, ga);
         }
     }
@@ -366,6 +392,20 @@ impl ReplayCache {
         cache
     }
 
+    pub fn new_scheduled(world: &WorldGenesis, world_seed: u64) -> Self {
+        let mut cache = Self::new(world, world_seed);
+        cache.pop = crate::population::genesis_scheduled(world_seed, world);
+        cache
+    }
+    pub fn new_dated(world: &WorldGenesis, world_seed: u64, base_year: u32) -> Self {
+        let mut cache = Self::new(world, world_seed);
+        cache.pop = crate::population::genesis_dated(world_seed, world, base_year);
+        cache
+    }
+    pub fn record_match_load(&mut self, load: goat_core::history::NpcMatchLoad) -> bool {
+        self.pop.record_match_load(load)
+    }
+
     /// Overlay path-dependent state loaded from an existing save
     /// (`WorldState::club_budgets`/`academy_boosts`/manager-pool fields) onto a
     /// freshly-`new()`-constructed cache, for resuming a career rather than starting one.
@@ -408,8 +448,17 @@ impl ReplayCache {
         &self.managers
     }
 
+    /// Canonical membership after the resolved season boundaries.
+    pub fn membership(&self) -> &[Vec<ClubId>] {
+        &self.membership
+    }
+
     pub fn pop(&self) -> &Population {
         &self.pop
+    }
+
+    pub(crate) fn population_mut(&mut self) -> &mut Population {
+        &mut self.pop
     }
 
     pub(crate) fn into_population(self) -> Population {
@@ -464,8 +513,18 @@ impl ReplayCache {
         world: &mut WorldGenesis,
         records: &[goat_core::state::OrbitMatchRecord],
     ) -> Vec<PromoRelegationEvent> {
+        self.advance_one_season_with_deep(world, records, &[])
+    }
+
+    /// Preserve played deep scorelines through standings, title and promotion replay.
+    pub fn advance_one_season_with_deep(
+        &mut self,
+        world: &mut WorldGenesis,
+        records: &[goat_core::state::OrbitMatchRecord],
+        scores: &[goat_core::deep::DeepFixtureResult],
+    ) -> Vec<PromoRelegationEvent> {
         let season = self.resolved_through + 1;
-        let elapsed_weeks = season * 52;
+        let elapsed_weeks = self.pop.season_end_week(season);
         let apps_before = self.pop.career_apps.clone();
         for record in records.iter().filter(|r| r.season == season) {
             crate::orbit::apply_orbit_record(&mut self.pop, record);
@@ -506,8 +565,8 @@ impl ReplayCache {
         run_academy_investment_pass(world); // Slice 6 §6.4's always-invest-the-cap policy
 
         // 2. The season's matches — captures per-match points for manager form (Slice 8.1).
-        let (_results, tables, match_points) = if overlay.is_some() {
-            crate::batch_tick::batch_tick_season_orbit_with_match_points(
+        let (_results, tables, match_points) = if overlay.is_some() || !scores.is_empty() {
+            crate::batch_tick::batch_tick_season_deep_with_match_points(
                 &mut self.pop,
                 world,
                 &self.membership,
@@ -515,6 +574,7 @@ impl ReplayCache {
                 season,
                 elapsed_weeks,
                 overlay.as_ref(),
+                scores,
             )
         } else {
             batch_tick_season_with_match_points(

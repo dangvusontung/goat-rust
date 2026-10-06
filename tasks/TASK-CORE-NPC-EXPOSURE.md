@@ -39,3 +39,8 @@ lineups, appearance quotas and goal attribution use simulated health. Earlier
 expected factories remain available. Workload is still an appearance proxy;
 fixture-specific load, NPC breakthroughs/familiarity and saved override editing
 remain outside this implementation.
+
+V8 completed 2026-10-06: [dated fixture workload](../docs/NPC-FIXTURE-WORKLOAD.md)
+replaces the annual energy proxy with fixture minutes, observed overrides and
+rest-gap/congestion risk. Full XI rotation, non-league ingestion, daily medical
+events and unified season chronology remain follow-up work.

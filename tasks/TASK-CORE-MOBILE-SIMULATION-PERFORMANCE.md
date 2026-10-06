@@ -1,6 +1,8 @@
 # Task — Mobile simulation performance and session replay cache
 
-Status: next, after v7 individual NPC training/health.
+Status: retained core session and live league integration implemented; native ARM64
+measurement and additional intervention integration remain pending.
+Report: [session implementation](../docs/DEEP-LIGHT-SESSION.md).
 Context: [measured core costs](../docs/DEVELOPMENT-HISTORY.md).
 
 Retain the current lived population/replay cache across match rounds instead of rebuilding
@@ -23,3 +25,22 @@ the core cache. The 150-country task remains separate.
 V7 cache state includes energy, remaining injury duration and rolling availability
 mask as well as attributes. Test those fields and individual injury/training
 history when reusing or rebuilding the session cache. See [v7 measurements](../docs/NPC-INDIVIDUAL-LIFE.md).
+
+V8 adds the last played match day, season appearance count and sparse observed
+fixture minutes to cached/replayed state. Include moved fixtures and zero-minute
+DNP overrides in cache revision tests. See [v8 report](../docs/NPC-FIXTURE-WORKLOAD.md).
+
+Approved tiering direction: [deep/light simulation](TASK-CORE-DEEP-LIGHT-SIMULATION.md).
+The retained session cache is its first implementation step; detailed candidate
+inspection must not force full-world weekly simulation.
+
+V9 checkpoint: retained session cache now keys on calendar base year; tests cover
+calendar age, fixture reschedules, completed IDs and partial-period save/load.
+Native ARM64 and 200k capacity measurements remain pending. See
+[season chronology](../docs/SEASON-CHRONOLOGY.md) for the current desktop benchmark.
+
+V10 measured six selected leagues/2,280 detailed NPC fixtures: native release
+round median 27.782 ms, season 1.070 s, annual boundary 0.773 s and peak process
+RSS about 35.0 MiB. This is a 20-country desktop scenario; 200k and native ARM64
+budgets remain unmeasured. DNP/minute journal compaction is now a concrete follow-up.
+See [ranked deep leagues](../docs/DEEP-LEAGUES.md).

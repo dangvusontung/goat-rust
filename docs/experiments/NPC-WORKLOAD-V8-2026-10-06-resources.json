@@ -1,0 +1,18 @@
+[
+  {
+    "run": 1,
+    "wall_seconds": 20.03542345599999,
+    "cumulative_child_peak_rss_kib": 52488
+  },
+  {
+    "run": 2,
+    "wall_seconds": 20.188182072999552,
+    "cumulative_child_peak_rss_kib": 53260
+  },
+  {
+    "run": 3,
+    "wall_seconds": 20.0730426250002,
+    "child_peak_rss_kib": 53516,
+    "note": "Replacement measured after final test gate; initial overlapping measurement discarded."
+  }
+]

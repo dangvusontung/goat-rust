@@ -1,5 +1,12 @@
 # Development checkpoint — 2026-10-05
 
+Latest implementation: [v10 ranked deep leagues](DEEP-LEAGUES.md) — PC league plus
+top 5, named NPC fixture minutes/credits, authoritative standings replay; save 25.
+
+Latest checkpoint (2026-10-06): [implemented v9 season chronology](SEASON-CHRONOLOGY.md),
+15 August–30 June, continuous training/health and dated replay; save layout 24.
+Legacy factory descriptions below remain applicable to their compatibility paths.
+
 Owner direction: **core realism first; TUI is a testing adapter**. This checkpoint
 is supplemented by the [simulation audit](SIMULATION-AUDIT.md). Documentation
 and two diagnostic 10,000-match samples were added after baseline stabilization;
@@ -93,3 +100,21 @@ cargo test --locked -p goat-tui --test smoke_stdin live_league_season
 The quality gate includes formatting, Clippy, workspace tests, seed-42 career
 invariants and the seed scanner. Preserve frozen golden values. Use the existing
 isolated checkout; do not create a worktree unless explicitly requested.
+
+Current update (2026-10-06): [v8 dated NPC fixture workload](NPC-FIXTURE-WORKLOAD.md),
+SIM_VERSION 8 / save layout 23. Observed engine minutes override background
+plans; rest gaps and congestion affect energy and injury risk. Weekly training
+and 364/365-day clock differences remain documented limitations.
+
+Owner-approved direction (2026-10-06): [deep/light simulation](../tasks/TASK-CORE-DEEP-LIGHT-SIMULATION.md).
+Keep detailed simulation around the PC and lazy seasonal simulation for distant
+leagues. Tier transition work and retained session caching remain pending; the
+200k-NPC estimate is a capacity scenario, not a measured mobile result.
+
+Latest: [retained deep/light session](DEEP-LIGHT-SESSION.md) implemented in core and live
+league adapter. Incremental journal synchronization preserves v8 fresh replay;
+no save-layout or simulation-version bump. Orbit policy, chronology and 200k
+capacity validation remain pending.
+
+Owner chronology decision: [15 August–30 June season frame](SEASON-CHRONOLOGY.md),
+with July–14 August summer activity. Documented; migration not yet implemented.

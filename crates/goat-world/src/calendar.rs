@@ -248,6 +248,20 @@ fn weekday_of_jul1(year: u32) -> usize {
     ((dow_sun_origin + 6) % 7) as usize
 }
 
+/// V9 league dates: first Saturday on/after August 15, existing rest/double grid.
+/// The grid is fixture spacing only; a season frame closes June 30 independently.
+pub fn dated_fixture_day(
+    calendar: goat_core::chronology::Chronology,
+    season: u32,
+    round: usize,
+) -> u32 {
+    let frame = calendar.frame(season);
+    let first_saturday = frame.start_day + (5 + 7 - calendar.weekday(frame.start_day)) % 7;
+    let week = round_to_week(round);
+    let slot = round - week_to_rounds(week).start;
+    first_saturday + week_day_offset(week, slot) - week_day_offset(PRE_SEASON_WEEKS, 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

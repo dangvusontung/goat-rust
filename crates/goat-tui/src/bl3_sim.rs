@@ -31,7 +31,7 @@ fn main() {
         .unwrap_or(3);
 
     let mut world = WorldGenesis::generate(seed);
-    let mut cache = ReplayCache::new_lived(&world, seed);
+    let mut cache = ReplayCache::new_scheduled(&world, seed);
 
     println!(
         "BL3 season-tick playability check — seed {seed}, {seasons} season(s), {} clubs\n",

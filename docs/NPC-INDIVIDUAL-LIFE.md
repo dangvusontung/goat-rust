@@ -1,5 +1,7 @@
 # Individual NPC training and health — simulation version 7
 
+Historical v7 report. Current model: [v8 dated fixture workload](NPC-FIXTURE-WORKLOAD.md).
+
 Implemented 2026-10-06. The version-6 expected background health model remains
 available, while the current model samples individual NPC weeks after world
 entry. PC weekly behavior and the match opportunity kernel are unchanged.

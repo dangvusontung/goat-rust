@@ -53,6 +53,17 @@ type DevelopmentCache = Option<(u32, [Fixed; goat_core::attrs::NUM_ATTRS], u8)>;
 pub struct Population {
     dated_exposure: bool,
     sampled_health: bool,
+    scheduled_load: bool,
+    chronology: Option<goat_core::chronology::Chronology>,
+    dated_fixtures: RefCell<Vec<Vec<crate::workload::MatchDose>>>,
+    fixture_seasons: std::cell::Cell<u32>,
+    calendar_through_day: std::cell::Cell<u32>,
+    week_cycles: RefCell<Vec<u32>>,
+    entry_days: Vec<u32>,
+    entry_cycles: Vec<u32>,
+    retirement_days: Vec<u32>,
+    load_world_seed: u64,
+    observed_loads: crate::workload::LoadColumns,
     availability_cache: RefCell<Vec<Option<(u32, u32, u32)>>>,
     life_cache: RefCell<Vec<Option<(u32, crate::npc_life::NpcHealthState)>>>,
     exposures: crate::exposure::ExposureColumns,
@@ -229,6 +240,33 @@ pub fn genesis_lived(world_seed: u64, world: &WorldGenesis) -> Population {
     pop
 }
 
+/// Version 8: actual fixture dates and minutes feed weekly health/development.
+pub fn genesis_scheduled(world_seed: u64, world: &WorldGenesis) -> Population {
+    let mut pop = genesis_lived(world_seed, world);
+    pop.scheduled_load = true;
+    pop.load_world_seed = world_seed;
+    pop.observed_loads.heads = vec![None; pop.len()];
+    pop
+}
+
+/// V9 explicit Gregorian season frames. Legacy factories keep their frozen clocks.
+pub fn genesis_dated(seed: u64, world: &WorldGenesis, base_year: u32) -> Population {
+    let mut pop = genesis_scheduled(seed, world);
+    let c = goat_core::chronology::Chronology::new(base_year);
+    pop.chronology = Some(c);
+    pop.entry_days = vec![0; pop.len()];
+    pop.entry_cycles = vec![1; pop.len()];
+    let limits: Vec<u32> = (0..=RETIRE_AGE_YEARS)
+        .map(|age| c.frame(1 + RETIRE_AGE_YEARS - age).preparation_start)
+        .collect();
+    pop.retirement_days = pop
+        .birth_age_weeks
+        .iter()
+        .map(|age| limits[(age / 52).min(RETIRE_AGE_YEARS) as usize])
+        .collect();
+    pop
+}
+
 // ── Formula-driven background growth + lazy-promote (bible §245–246) ───────────
 
 /// Closed-form development curve: the fraction of potential a player has realised at a
@@ -327,6 +365,16 @@ impl Population {
                     self.shared_facilities[idx],
                 )
             })
+    }
+
+    /// Accumulated individual energy at the completed weekly boundary.
+    pub fn energy_at(&self, idx: usize, week: u32) -> Fixed {
+        if let Some((date, health)) = self.life_cache.borrow()[idx] {
+            if date == week {
+                return health.energy;
+            }
+        }
+        self.shared_view(idx, week).energy
     }
 
     pub fn expected_health_at(
@@ -430,6 +478,219 @@ impl Population {
         }
     }
 
+    pub fn chronology(&self) -> Option<goat_core::chronology::Chronology> {
+        self.chronology
+    }
+    pub(crate) fn season_end_week(&self, season: u32) -> u32 {
+        self.chronology
+            .map_or(season * 52, |c| c.frame(season).next_preparation_start / 7)
+    }
+    fn entry_day(&self, idx: usize) -> u32 {
+        if self.chronology.is_some() {
+            self.entry_days[idx]
+        } else {
+            self.intake_week[idx] * 7
+        }
+    }
+    fn retirement_week(&self, idx: usize) -> u32 {
+        if self.chronology.is_some() {
+            self.retirement_days[idx].div_ceil(7)
+        } else {
+            self.intake_week[idx]
+                + (RETIRE_AGE_YEARS * 52).saturating_sub(self.birth_age_weeks[idx])
+        }
+    }
+    fn retirement_day(&self, idx: usize) -> u32 {
+        if self.chronology.is_some() {
+            self.retirement_days[idx]
+        } else {
+            self.retirement_week(idx) * 7
+        }
+    }
+    #[allow(clippy::too_many_arguments)]
+    fn life_tick(
+        &self,
+        idx: usize,
+        date: u32,
+        durability: u8,
+        e: crate::exposure::NpcExposure,
+        health: &mut crate::npc_life::NpcHealthState,
+        attrs: Option<(&mut [Fixed; NUM_ATTRS], &[Fixed; NUM_ATTRS])>,
+        doses: &[crate::workload::MatchDose],
+    ) -> crate::npc_life::NpcTrainingWeek {
+        if self.chronology.is_some() {
+            crate::npc_life::tick_dated(
+                self.seed[idx],
+                date,
+                self.age_years_at(idx, date),
+                self.position[idx],
+                durability,
+                e,
+                health,
+                attrs,
+                doses,
+                (self.entry_day(idx), self.retirement_day(idx)),
+            )
+        } else {
+            crate::npc_life::tick_scheduled(
+                self.seed[idx],
+                date,
+                self.age_years_at(idx, date),
+                self.position[idx],
+                durability,
+                e,
+                health,
+                attrs,
+                doses,
+            )
+        }
+    }
+    fn ensure_calendar_week(&self, week: u32) {
+        if (week + 1) * 7 < self.calendar_through_day.get() {
+            return;
+        }
+        let c = self.chronology.unwrap();
+        let needed = c.planning_season((week + 1) * 7);
+        if self.fixture_seasons.get() < needed {
+            let mut grid = self.dated_fixtures.borrow_mut();
+            for season in self.fixture_seasons.get() + 1..=needed {
+                grid.resize_with(
+                    c.frame(season).next_preparation_start.div_ceil(7) as usize + 1,
+                    Vec::new,
+                );
+                for round in 0..crate::fixtures::ROUNDS_PER_SEASON {
+                    let day = crate::calendar::dated_fixture_day(c, season, round);
+                    let w = crate::calendar::round_to_week(round);
+                    let slot = round - crate::calendar::week_to_rounds(w).start;
+                    grid[(day / 7) as usize].push(crate::workload::MatchDose {
+                        competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
+                        fixture_id: crate::workload::league_fixture_id(
+                            self.load_world_seed,
+                            season,
+                            round,
+                            slot,
+                        ),
+                        epoch_day: day,
+                        minutes: 0,
+                        observed: false,
+                    });
+                }
+            }
+            self.fixture_seasons.set(needed);
+            self.calendar_through_day
+                .set(c.frame(needed).next_preparation_start);
+            let mut cycles = self.week_cycles.borrow_mut();
+            for week in cycles.len()..grid.len() {
+                cycles.push(c.planning_season(week as u32 * 7));
+            }
+        }
+    }
+    fn doses(
+        &self,
+        schedule: &crate::workload::Schedule,
+        idx: usize,
+        week: u32,
+        e: crate::exposure::NpcExposure,
+    ) -> Vec<crate::workload::MatchDose> {
+        let Some(_) = self.chronology else {
+            return schedule.week(self.seed[idx], self.load_world_seed, week, e);
+        };
+        self.ensure_calendar_week(week);
+        schedule.week_with_plan(
+            self.seed[idx],
+            week,
+            e,
+            &self.dated_fixtures.borrow()[week as usize],
+        )
+    }
+    fn reset_calendar_apps(&self, week: u32, health: &mut crate::npc_life::NpcHealthState) {
+        if self.chronology.is_some() {
+            let cycles = self.week_cycles.borrow();
+            if week == 0 || cycles[week as usize] != cycles[(week - 1) as usize] {
+                health.season_apps = 0;
+            }
+        }
+    }
+    pub fn uses_scheduled_load(&self) -> bool {
+        self.scheduled_load
+    }
+
+    pub fn observed_match_loads(&self, idx: usize) -> Vec<goat_core::history::NpcMatchLoad> {
+        if !self.scheduled_load || idx >= self.len() {
+            return Vec::new();
+        }
+        self.observed_loads.history(idx)
+    }
+
+    pub fn record_match_load(&mut self, load: goat_core::history::NpcMatchLoad) -> bool {
+        let idx = load.pop_idx as usize;
+        if self.chronology.is_some_and(|c| {
+            load.competition_id == goat_core::calendar_loop::LEAGUE_COMPETITION_ID
+                && c.active_season(load.epoch_day).is_none()
+        }) {
+            return false;
+        }
+        if !self.scheduled_load
+            || idx >= self.len()
+            || load.minutes > 120
+            || load.competition_id == 0
+            || load.epoch_day < self.entry_day(idx)
+        {
+            return false;
+        }
+        if let Some(old) = self
+            .observed_match_loads(idx)
+            .iter()
+            .find(|old| old.fixture_id == load.fixture_id)
+        {
+            return *old == load;
+        }
+        // Retain state before the earliest affected period. A reschedule suppresses
+        // the original planned date, so using only the new date would reuse stale health.
+        let affected_week = self.chronology.map(|_| {
+            self.ensure_calendar_week(load.epoch_day / 7);
+            self.dated_fixtures
+                .borrow()
+                .iter()
+                .flatten()
+                .filter(|dose| dose.fixture_id == load.fixture_id)
+                .map(|dose| dose.epoch_day)
+                .min()
+                .unwrap_or(load.epoch_day)
+                .min(load.epoch_day)
+                / 7
+        });
+        self.observed_loads.push(load);
+        if !affected_week.is_some_and(|week| {
+            self.shared_cache.get_mut()[idx].is_some_and(|(date, _, _)| date <= week)
+        }) {
+            self.shared_cache.get_mut()[idx] = None;
+            self.life_cache.get_mut()[idx] = None;
+        }
+        if !affected_week.is_some_and(|week| {
+            self.availability_cache.get_mut()[idx].is_some_and(|(date, _, _)| date <= week)
+        }) {
+            self.availability_cache.get_mut()[idx] = None;
+        }
+        true
+    }
+
+    pub fn fixture_minutes_for_week(
+        &self,
+        idx: usize,
+        week: u32,
+    ) -> Vec<crate::workload::MatchDose> {
+        if !self.scheduled_load || idx >= self.len() || week < self.intake_week[idx] {
+            return Vec::new();
+        }
+        self.doses(
+            &crate::workload::Schedule::new(self.observed_match_loads(idx)),
+            idx,
+            week,
+            self.exposure_at(idx, week),
+        )
+    }
+
     pub fn uses_individual_health(&self) -> bool {
         self.sampled_health
     }
@@ -443,6 +704,8 @@ impl Population {
             injury_weeks: 0,
             available_mask: 0,
             elapsed_weeks: 0,
+            last_match_day: None,
+            season_apps: 0,
         };
         let cached = self.shared_cache.borrow()[idx];
         let cached_health = self.life_cache.borrow()[idx];
@@ -481,30 +744,51 @@ impl Population {
                 age = end;
             }
         }
+        let schedule = crate::workload::Schedule::new(self.observed_match_loads(idx));
         let changes = self.exposure_history(idx);
         let mut e = self.exposure_at(idx, start);
         let mut next = changes.partition_point(|e| e.start_week <= start);
-        let end = week.min(
-            self.intake_week[idx]
-                + (RETIRE_AGE_YEARS * 52).saturating_sub(self.birth_age_weeks[idx]),
-        );
+        let end = week.min(self.retirement_week(idx));
         for date in start..end {
             while next < changes.len() && changes[next].start_week <= date {
                 e = changes[next];
                 next += 1;
             }
-            tick(
-                self.seed[idx],
-                date,
-                (self.birth_age_weeks[idx] + date - self.intake_week[idx]) / 52,
-                self.position[idx],
-                view.durability_x10,
-                e,
-                &mut health,
-                Some((&mut view.current, &view.potential)),
-            );
+            if self.scheduled_load {
+                let doses = self.doses(&schedule, idx, date, e);
+                self.reset_calendar_apps(date, &mut health);
+                self.life_tick(
+                    idx,
+                    date,
+                    view.durability_x10,
+                    e,
+                    &mut health,
+                    Some((&mut view.current, &view.potential)),
+                    &doses,
+                );
+            } else {
+                tick(
+                    self.seed[idx],
+                    date,
+                    self.age_years_at(idx, date),
+                    self.position[idx],
+                    view.durability_x10,
+                    e,
+                    &mut health,
+                    Some((&mut view.current, &view.potential)),
+                );
+            }
         }
-        view.age_weeks = self.birth_age_weeks[idx] + week.saturating_sub(self.intake_week[idx]);
+        view.age_weeks = self.chronology.map_or(
+            self.birth_age_weeks[idx] + week.saturating_sub(self.intake_week[idx]),
+            |c| {
+                c.display_age_weeks(
+                    self.birth_age_weeks[idx] / 52,
+                    self.entry_day(idx),
+                    week * 7,
+                )
+            },
+        );
         view.energy = health.energy;
         view.injury_weeks = health.injury_weeks;
         self.shared_cache.borrow_mut()[idx] = Some((
@@ -546,27 +830,36 @@ impl Population {
             injury_weeks: 0,
             available_mask: 0,
             elapsed_weeks: 0,
+            last_match_day: None,
+            season_apps: 0,
         };
+        let schedule = crate::workload::Schedule::new(self.observed_match_loads(idx));
         let changes = self.exposure_history(idx);
         let mut e = self.exposure_at(idx, start);
         let mut next = changes.partition_point(|e| e.start_week <= start);
-        let end = to.min(start + (RETIRE_AGE_YEARS * 52).saturating_sub(self.birth_age_weeks[idx]));
+        let end = to.min(self.retirement_week(idx));
         let mut out = Vec::new();
         for date in start..end {
             while next < changes.len() && changes[next].start_week <= date {
                 e = changes[next];
                 next += 1;
             }
-            let record = crate::npc_life::tick(
-                self.seed[idx],
-                date,
-                (self.birth_age_weeks[idx] + date - start) / 52,
-                self.position[idx],
-                view.durability_x10,
-                e,
-                &mut health,
-                None,
-            );
+            let record = if self.scheduled_load {
+                let doses = self.doses(&schedule, idx, date, e);
+                self.reset_calendar_apps(date, &mut health);
+                self.life_tick(idx, date, view.durability_x10, e, &mut health, None, &doses)
+            } else {
+                crate::npc_life::tick(
+                    self.seed[idx],
+                    date,
+                    self.age_years_at(idx, date),
+                    self.position[idx],
+                    view.durability_x10,
+                    e,
+                    &mut health,
+                    None,
+                )
+            };
             if date >= from {
                 out.push(record);
             }
@@ -587,14 +880,10 @@ impl Population {
         .into_iter()
         .filter(|w| w.new_injury)
         .map(|w| crate::npc_life::NpcInjuryEpisode {
-            onset_week: w.week,
+            onset_week: w.week + u32::from(self.chronology.is_some()),
             expected_recovery_week: w.week + 1 + w.injury_after,
-            recovered_week: (w.week + 1 + w.injury_after
-                <= through.min(
-                    self.intake_week[idx]
-                        + (RETIRE_AGE_YEARS * 52).saturating_sub(self.birth_age_weeks[idx]),
-                ))
-            .then_some(w.week + 1 + w.injury_after),
+            recovered_week: (w.week + 1 + w.injury_after <= through.min(self.retirement_week(idx)))
+                .then_some(w.week + 1 + w.injury_after),
             duration_weeks: w.injury_after,
         })
         .collect()
@@ -604,7 +893,9 @@ impl Population {
         if !self.sampled_health {
             return quota;
         }
-        if let Some((date, healthy, total)) = self.availability_cache.borrow()[idx] {
+        if let Some((date, healthy, total)) =
+            self.availability_cache.borrow()[idx].filter(|_| !self.scheduled_load)
+        {
             if date == week {
                 return quota * healthy / total.max(1);
             }
@@ -614,6 +905,27 @@ impl Population {
             self.shared_view(idx, week);
         }
         let (_, health) = self.life_cache.borrow()[idx].unwrap();
+        if self.scheduled_load {
+            if let Some(c) = self.chronology {
+                let season = c.planning_season((week * 7).saturating_sub(1));
+                let end = c.frame(season).next_preparation_start;
+                if week == end / 7 && !end.is_multiple_of(7) {
+                    let doses = self.fixture_minutes_for_week(idx, week);
+                    let tail = doses
+                        .iter()
+                        .filter(|d| {
+                            d.epoch_day < end
+                                && d.minutes > 0
+                                && d.competition_id
+                                    == goat_core::calendar_loop::LEAGUE_COMPETITION_ID
+                                && (d.observed || health.injury_weeks == 0)
+                        })
+                        .count() as u32;
+                    return health.season_apps + tail;
+                }
+            }
+            return health.season_apps;
+        }
         let total = health.elapsed_weeks.min(52);
         let healthy = health.available_mask.count_ones();
         self.availability_cache.borrow_mut()[idx] = Some((week, healthy, total));
@@ -744,8 +1056,14 @@ impl Population {
     /// `pub(crate)`, not private: Round 5 Slice 3-4's `scouting` module (a sibling in this
     /// crate) reads this directly for its cheap SoA target-search scan.
     pub(crate) fn age_years_at(&self, idx: usize, elapsed_weeks: u32) -> u32 {
-        let weeks_since_intake = elapsed_weeks.saturating_sub(self.intake_week[idx]);
-        (self.birth_age_weeks[idx] + weeks_since_intake) / 52
+        if self.chronology.is_some() {
+            self.ensure_calendar_week(elapsed_weeks);
+            self.birth_age_weeks[idx] / 52
+                + self.week_cycles.borrow()[elapsed_weeks as usize]
+                    .saturating_sub(self.entry_cycles[idx])
+        } else {
+            (self.birth_age_weeks[idx] + elapsed_weeks.saturating_sub(self.intake_week[idx])) / 52
+        }
     }
 
     /// Cheap O(1) current OVR of a background player at a date (epoch weeks since genesis),
@@ -1198,7 +1516,7 @@ pub fn apply_youth_intake(
     world_seed: u64,
     season: u32,
 ) -> u32 {
-    let elapsed_weeks = season * 52;
+    let elapsed_weeks = pop.season_end_week(season);
     let mut total_added = 0u32;
 
     for club in &world.clubs {
@@ -1232,6 +1550,14 @@ pub fn apply_youth_intake(
             pop.birth_age_weeks.push(INTAKE_AGE_YEARS * 52);
             pop.potential_ovr.push(potential_ovr);
             pop.intake_week.push(elapsed_weeks);
+            if let Some(c) = pop.chronology {
+                pop.entry_days.push(c.frame(season + 1).preparation_start);
+                pop.entry_cycles.push(season + 1);
+                pop.retirement_days.push(
+                    c.frame(season + 1 + RETIRE_AGE_YEARS - INTAKE_AGE_YEARS)
+                        .preparation_start,
+                );
+            }
             pop.career_goals.push(0);
             pop.career_apps.push(0);
             pop.career_titles.push(0);
@@ -1245,6 +1571,9 @@ pub fn apply_youth_intake(
                     if pop.sampled_health {
                         pop.life_cache.get_mut().push(None);
                         pop.availability_cache.get_mut().push(None);
+                        if pop.scheduled_load {
+                            pop.observed_loads.heads.push(None);
+                        }
                     }
                 }
             }
@@ -1256,6 +1585,55 @@ pub fn apply_youth_intake(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fixture_loads_use_calendar_rescheduling_and_cold_replay() {
+        let world = WorldGenesis::generate(42);
+        let mut pop = genesis_scheduled(42, &world);
+        let idx = (0..pop.len())
+            .find(|&i| pop.training_history(i, 7, 8)[0].minutes_played > 0)
+            .unwrap();
+        assert!(pop.fixture_minutes_for_week(idx, 0).is_empty());
+        assert_eq!(pop.fixture_minutes_for_week(idx, 8).len(), 2);
+        assert!(pop.fixture_minutes_for_week(idx, 11).is_empty());
+        let fixture = pop.fixture_minutes_for_week(idx, 7)[0];
+        let past = pop.training_history(idx, 0, 7);
+        let load = goat_core::history::NpcMatchLoad {
+            competition_id: 1,
+            pop_idx: idx as u32,
+            fixture_id: fixture.fixture_id,
+            epoch_day: fixture.epoch_day + 28,
+            minutes: 30,
+        };
+        assert!(pop.record_match_load(load));
+        assert!(pop.record_match_load(load));
+        assert!(!pop.record_match_load(goat_core::history::NpcMatchLoad {
+            minutes: 90,
+            ..load
+        }));
+        assert!(pop.fixture_minutes_for_week(idx, 7).is_empty());
+        let moved = pop.fixture_minutes_for_week(idx, 11);
+        assert_eq!(moved.len(), 1);
+        assert!(moved[0].observed);
+        assert_eq!(moved[0].minutes, 30);
+        assert_eq!(pop.training_history(idx, 0, 7), past);
+        for week in [12, 52, 53, 104] {
+            let warm = pop.shared_view(idx, week);
+            let mut cold = pop.clone();
+            cold.shared_cache.get_mut().fill(None);
+            cold.life_cache.get_mut().fill(None);
+            let reference = cold.shared_view(idx, week);
+            assert_eq!(warm.current, reference.current);
+            assert_eq!(warm.energy, reference.energy);
+            assert_eq!(warm.injury_weeks, reference.injury_weeks);
+        }
+        let apps: u32 = pop
+            .training_history(idx, 0, 52)
+            .iter()
+            .map(|w| w.league_match_count as u32)
+            .sum();
+        assert_eq!(pop.appearance_quota(idx, 52, 30), apps);
+    }
+
     #[test]
     fn individual_history_replay_cache_and_availability_agree() {
         let world = WorldGenesis::generate(42);
@@ -2116,5 +2494,74 @@ mod tests {
         }
         let pct = out * 100 / total;
         assert!((1..=6).contains(&pct), "NPC outage {pct}% (target ~3%)");
+    }
+}
+
+#[cfg(test)]
+mod calendar_tests {
+    use super::*;
+    #[test]
+    fn summer_has_no_league_plan_but_observed_national_load_and_june_tail_count() {
+        let world = WorldGenesis::generate(42);
+        let mut pop = genesis_dated(42, &world, 2023);
+        let c = pop.chronology().unwrap();
+        let close = c.frame(1).next_preparation_start;
+        let id = crate::workload::league_fixture_id(42, 1, 0, 0);
+        // Moving the opener to June 30 removes its original date, even at a partial week.
+        assert!(pop.record_match_load(goat_core::history::NpcMatchLoad {
+            competition_id: 1,
+            pop_idx: 0,
+            fixture_id: id,
+            epoch_day: close - 1,
+            minutes: 30
+        }));
+        assert!(!pop.record_match_load(goat_core::history::NpcMatchLoad {
+            competition_id: 1,
+            pop_idx: 0,
+            fixture_id: 999,
+            epoch_day: close + 3,
+            minutes: 90
+        }));
+        let full = pop.training_history(0, 0, close / 7);
+        let played: u32 = full.iter().map(|w| w.league_match_count as u32).sum();
+        assert_eq!(pop.appearance_quota(0, close / 7, 0), played + 1);
+        let summer = close + 10;
+        assert!(pop.record_match_load(goat_core::history::NpcMatchLoad {
+            competition_id: 6,
+            pop_idx: 0,
+            fixture_id: 999,
+            epoch_day: summer,
+            minutes: 90
+        }));
+        let doses = pop.fixture_minutes_for_week(0, summer / 7);
+        assert!(doses
+            .iter()
+            .any(|d| d.observed && d.minutes == 90 && d.competition_id == 6));
+        assert!(doses.iter().all(|d| d.competition_id != 1));
+        let rows = pop.training_history(0, summer / 7, summer / 7 + 1);
+        assert_eq!(rows[0].minutes_played, 90);
+        assert_eq!(rows[0].league_match_count, 0);
+        for season in 1..=20 {
+            let f = c.frame(season);
+            for round in 0..crate::fixtures::ROUNDS_PER_SEASON {
+                let day = crate::calendar::dated_fixture_day(c, season, round);
+                assert!(day >= f.start_day && day <= f.end_day);
+                assert_eq!(
+                    c.weekday(day),
+                    if crate::calendar::WEEK_MATCH_COUNTS[crate::calendar::round_to_week(round)]
+                        == 2
+                        && round
+                            == crate::calendar::week_to_rounds(crate::calendar::round_to_week(
+                                round
+                            ))
+                            .start
+                    {
+                        1
+                    } else {
+                        5
+                    }
+                );
+            }
+        }
     }
 }

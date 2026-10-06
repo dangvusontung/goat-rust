@@ -18,6 +18,7 @@ pub mod academy;
 pub mod batch_tick;
 pub mod calendar;
 pub mod continental;
+pub mod deep;
 pub mod domestic_cup;
 pub mod economy;
 pub mod exposure;
@@ -38,6 +39,7 @@ pub mod scouting;
 pub mod season;
 pub mod staff;
 pub mod transfers;
+pub mod workload;
 pub mod world;
 pub mod worldgen;
 
@@ -88,3 +90,5 @@ pub use world::{
     ACADEMY_BOOST_MAX, CLUBS_PER_DIV, NUM_CLUBS, NUM_DIVISIONS, NUM_NATIONS, PROMO_RELEGATION_N,
     TIERS_PER_NATION,
 };
+
+pub mod session;

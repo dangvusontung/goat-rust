@@ -131,7 +131,7 @@ impl CalendarEngine {
     ///
     /// Idempotent: once at most one orbit fixture remains on `day`, this is a no-op —
     /// safe to call every tick even on days with no clash.
-    fn resolve_conflicts_for_day(&mut self, day: u32) {
+    pub fn resolve_conflicts_for_day(&mut self, day: u32) {
         let mut todays = self.fixtures_for_day(day);
         if todays.len() <= 1 {
             return;

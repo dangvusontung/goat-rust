@@ -1,0 +1,17 @@
+[
+  {
+    "run": 1,
+    "wall_seconds": 1.8795446879994415,
+    "cumulative_child_peak_rss_kib": 35820
+  },
+  {
+    "run": 2,
+    "wall_seconds": 1.8532816719998664,
+    "cumulative_child_peak_rss_kib": 35888
+  },
+  {
+    "run": 3,
+    "wall_seconds": 1.8223374989975127,
+    "cumulative_child_peak_rss_kib": 35888
+  }
+]

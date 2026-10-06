@@ -79,7 +79,10 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// version numbers (local v8–v13 vs remote v8–v20), so neither parent's old
 /// saves are readable — pre-21 saves also fail the SIM_VERSION gate anyway.
 /// v22 adds factual PC development/health history before the simulation trailer.
-pub const VERSION: u32 = 22;
+/// v23 adds observed per-fixture NPC workload (dated minutes).
+/// v24 adds Gregorian chronology selection and sparse fixture date overrides.
+// v25 adds dated deep-scope decisions and authoritative NPC fixture scorelines.
+pub const VERSION: u32 = 25;
 
 /// The SIMULATION-BEHAVIOUR version — independent of the layout VERSION above.
 /// Bump this whenever a change alters sim outcomes without changing the binary layout
@@ -93,12 +96,22 @@ pub const VERSION: u32 = 22;
 /// 3: shared opportunity/conversion and per-attribute NPC development.
 /// 4: PC dismissal continues NPC play to full time with manpower effects.
 /// 5: PC/NPC team opportunity ledger and shared finishing conversion.
-pub const SIM_VERSION: u32 = 7;
+/// 6: dated development exposure and PC history.
+/// 7: individual NPC training, accumulated energy and sampled injuries.
+/// 8: dated fixture minutes, recovery gaps and congestion risk.
+/// 9: explicit Gregorian club season August 15–June 30 and continuous summer.
+pub const SIM_VERSION: u32 = 10;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
 pub struct SaveData {
     pub pc_development_history: goat_core::history::DevelopmentHistory,
+    pub dated_calendar: bool,
+    pub deep_scopes: Vec<goat_core::deep::DeepScope>,
+    pub deep_results: Vec<goat_core::deep::DeepFixtureResult>,
+    pub pc_played_fixture_ids: Vec<u64>,
+    pub fixture_reschedules: Vec<(u64, u32)>,
+    pub npc_match_loads: Vec<goat_core::history::NpcMatchLoad>,
     // ── World seed ────────────────────────────────────────────────────────────
     pub world_seed: u64,
     // ── PC creation ───────────────────────────────────────────────────────────
@@ -300,7 +313,11 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_current_attrs: current_attrs,
         pc_familiarity: familiarity_bytes,
         pc_familiarity_xp: familiarity_xp,
-        pc_age_weeks: view.age_weeks,
+        pc_age_weeks: if state.dated_calendar {
+            state.players.get_age_weeks(state.pc_player_id.unwrap())
+        } else {
+            view.age_weeks
+        },
         pc_energy: view.energy.to_raw(),
         pc_injury_weeks: view.injury_weeks,
         routine_attrs,
@@ -383,6 +400,17 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         orbit_records: state.orbit_records.clone(),
         pc_injury_return_week: state.pc_injury_return_week,
         pc_development_history: state.pc_development_history.clone(),
+        npc_match_loads: state.npc_match_loads.clone(),
+        dated_calendar: state.dated_calendar,
+        deep_scopes: state.deep_scopes.clone(),
+        deep_results: state.deep_results.clone(),
+        pc_played_fixture_ids: state.pc_played_fixture_ids.clone(),
+        fixture_reschedules: state
+            .pc_season_fixtures
+            .iter()
+            .filter(|f| state.dated_calendar && f.scheduled_day != f.original_day)
+            .map(|f| (f.id, f.scheduled_day))
+            .collect(),
     }
 }
 
@@ -846,6 +874,43 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.orbit_records = data.orbit_records.clone();
     state.pc_injury_return_week = data.pc_injury_return_week;
     state.pc_development_history = data.pc_development_history.clone();
+    state.npc_match_loads = data.npc_match_loads.clone();
+    state.dated_calendar = data.dated_calendar;
+    state.deep_scopes = data.deep_scopes.clone();
+    state.deep_results = data.deep_results.clone();
+    state.pc_played_fixture_ids = data.pc_played_fixture_ids.clone();
+    if data.dated_calendar && data.season_number > 0 {
+        let c = goat_core::chronology::Chronology::new(data.career_base_year);
+        state.pc_season_fixtures = (0..goat_world::fixtures::ROUNDS_PER_SEASON)
+            .map(|round| {
+                let w = goat_world::calendar::round_to_week(round);
+                let slot = round - goat_world::calendar::week_to_rounds(w).start;
+                let id = goat_world::workload::league_fixture_id(
+                    data.world_seed,
+                    data.season_number,
+                    round,
+                    slot,
+                );
+                let original_day =
+                    goat_world::calendar::dated_fixture_day(c, data.season_number, round);
+                let scheduled_day = data
+                    .fixture_reschedules
+                    .iter()
+                    .find(|(key, _)| *key == id)
+                    .map_or(original_day, |(_, day)| *day);
+                goat_calendar::Fixture {
+                    id,
+                    competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
+                    scheduled_day,
+                    original_day,
+                    is_orbit: true,
+                    importance: goat_calendar::FixtureImportance::League,
+                    leg_for_id: None,
+                }
+            })
+            .collect();
+    }
+
     for (i, &(q, w)) in data.pc_personal_staff.iter().enumerate() {
         state.pc_personal_staff[i] = goat_core::staff::PersonalStaff {
             quality: q,
@@ -1037,6 +1102,59 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
     }
     // v20+ — simulation-behaviour version (one trailing u32). Always the CURRENT
     // constant on write; the guard lives in `from_bytes`.
+    if !d.npc_match_loads.is_empty() {
+        push_u32(&mut v, 0x4E4C_4F44); // NLOD extension
+        push_u32(&mut v, d.npc_match_loads.len() as u32);
+        for l in &d.npc_match_loads {
+            push_u32(&mut v, l.competition_id);
+            push_u32(&mut v, l.pop_idx);
+            push_u64(&mut v, l.fixture_id);
+            push_u32(&mut v, l.epoch_day);
+            push_u32(&mut v, l.minutes as u32);
+        }
+    }
+    if d.dated_calendar {
+        push_u32(&mut v, 0x4341_4C39);
+        push_u32(&mut v, 1);
+        push_u32(&mut v, d.fixture_reschedules.len() as u32);
+        for &(id, day) in &d.fixture_reschedules {
+            push_u64(&mut v, id);
+            push_u32(&mut v, day);
+        }
+        push_u32(&mut v, d.pc_played_fixture_ids.len() as u32);
+        for id in &d.pc_played_fixture_ids {
+            push_u64(&mut v, *id);
+        }
+    }
+    if !d.deep_scopes.is_empty() || !d.deep_results.is_empty() {
+        push_u32(&mut v, 0x4445_4550);
+        push_u32(&mut v, d.deep_scopes.len() as u32);
+        for scope in &d.deep_scopes {
+            push_u32(&mut v, scope.season);
+            push_u32(&mut v, scope.epoch_day);
+            push_u32(&mut v, scope.pc_league);
+            push_u32(&mut v, scope.pc_club);
+            push_u32(&mut v, scope.leagues.len() as u32);
+            for &league in &scope.leagues {
+                push_u32(&mut v, league);
+            }
+        }
+        push_u32(&mut v, d.deep_results.len() as u32);
+        for r in &d.deep_results {
+            for value in [
+                r.season,
+                r.round,
+                r.league,
+                r.epoch_day,
+                r.home,
+                r.away,
+                r.home_goals,
+                r.away_goals,
+            ] {
+                push_u32(&mut v, value);
+            }
+        }
+    }
     push_u32(&mut v, SIM_VERSION);
     v
 }
@@ -1367,6 +1485,149 @@ fn parse(b: &[u8], strict_history: bool) -> Result<(SaveData, u32), SaveError> {
         Default::default()
     };
 
+    let mut npc_match_loads = Vec::new();
+    if ver >= 23
+        && b.get(cur..cur + 4)
+            .is_some_and(|tag| tag == 0x4E4C_4F44u32.to_le_bytes())
+    {
+        cur += 4;
+        let n = read_u32(b, &mut cur)? as usize;
+        if n > b.len().saturating_sub(cur) / 24 {
+            return Err(SaveError::Corrupt("truncated NPC workload"));
+        }
+        for _ in 0..n {
+            let competition_id = read_u32(b, &mut cur)?;
+            let pop_idx = read_u32(b, &mut cur)?;
+            let fixture_id = read_u64(b, &mut cur)?;
+            let epoch_day = read_u32(b, &mut cur)?;
+            let minutes = read_u32(b, &mut cur)?;
+            if minutes > 120 || competition_id == 0 {
+                return Err(SaveError::Corrupt("invalid NPC minutes"));
+            }
+            npc_match_loads.push(goat_core::history::NpcMatchLoad {
+                competition_id,
+                pop_idx,
+                fixture_id,
+                epoch_day,
+                minutes: minutes as u16,
+            });
+        }
+    }
+
+    let mut fixture_reschedules = Vec::new();
+    let mut pc_played_fixture_ids = Vec::new();
+    let dated_calendar = if ver >= 24
+        && b.get(cur..cur + 4)
+            .is_some_and(|t| t == 0x4341_4C39u32.to_le_bytes())
+    {
+        cur += 4;
+        if read_u32(b, &mut cur)? != 1 {
+            return Err(SaveError::Corrupt("invalid chronology model"));
+        }
+        if !(1..=9999).contains(&career_base_year) {
+            return Err(SaveError::Corrupt("invalid calendar year"));
+        }
+        let n = read_u32(b, &mut cur)? as usize;
+        if n > b.len().saturating_sub(cur) / 12 {
+            return Err(SaveError::Corrupt("truncated fixture dates"));
+        }
+        for _ in 0..n {
+            fixture_reschedules.push((read_u64(b, &mut cur)?, read_u32(b, &mut cur)?));
+        }
+        let n = read_u32(b, &mut cur)? as usize;
+        if n > goat_world::fixtures::ROUNDS_PER_SEASON || n > b.len().saturating_sub(cur) / 8 {
+            return Err(SaveError::Corrupt("invalid played fixture count"));
+        }
+        for _ in 0..n {
+            let id = read_u64(b, &mut cur)?;
+            if pc_played_fixture_ids.contains(&id) {
+                return Err(SaveError::Corrupt("duplicate played fixture"));
+            }
+            pc_played_fixture_ids.push(id);
+        }
+        true
+    } else {
+        false
+    };
+    let mut deep_scopes = Vec::new();
+    let mut deep_results = Vec::new();
+    if ver >= 25
+        && b.get(cur..cur + 4)
+            .is_some_and(|t| t == 0x4445_4550u32.to_le_bytes())
+    {
+        cur += 4;
+        if !dated_calendar {
+            return Err(SaveError::Corrupt("deep sim needs chronology"));
+        }
+        let n = read_u32(b, &mut cur)? as usize;
+        if n > b.len().saturating_sub(cur) / 20 {
+            return Err(SaveError::Corrupt("truncated deep scopes"));
+        }
+        for _ in 0..n {
+            let season = read_u32(b, &mut cur)?;
+            let epoch_day = read_u32(b, &mut cur)?;
+            let pc_league = read_u32(b, &mut cur)?;
+            let pc_club = read_u32(b, &mut cur)?;
+            let count = read_u32(b, &mut cur)? as usize;
+            if count > goat_world::world::NUM_DIVISIONS || count > b.len().saturating_sub(cur) / 4 {
+                return Err(SaveError::Corrupt("invalid deep scope size"));
+            }
+            let mut leagues = Vec::new();
+            for _ in 0..count {
+                leagues.push(read_u32(b, &mut cur)?);
+            }
+            if season == 0
+                || season > season_number
+                || epoch_day > pc_epoch_day
+                || pc_league >= goat_world::world::NUM_DIVISIONS as u32
+                || pc_club >= goat_world::world::NUM_CLUBS as u32
+                || !leagues.contains(&pc_league)
+                || leagues.windows(2).any(|v| v[0] >= v[1])
+                || leagues
+                    .iter()
+                    .any(|&id| id >= goat_world::world::NUM_DIVISIONS as u32)
+            {
+                return Err(SaveError::Corrupt("invalid deep scope"));
+            }
+            deep_scopes.push(goat_core::deep::DeepScope {
+                season,
+                epoch_day,
+                pc_league,
+                pc_club,
+                leagues,
+            });
+        }
+        let n = read_u32(b, &mut cur)? as usize;
+        if n > b.len().saturating_sub(cur) / 32 {
+            return Err(SaveError::Corrupt("truncated deep scores"));
+        }
+        let mut seen = std::collections::BTreeSet::new();
+        for _ in 0..n {
+            let r = goat_core::deep::DeepFixtureResult {
+                season: read_u32(b, &mut cur)?,
+                round: read_u32(b, &mut cur)?,
+                league: read_u32(b, &mut cur)?,
+                epoch_day: read_u32(b, &mut cur)?,
+                home: read_u32(b, &mut cur)?,
+                away: read_u32(b, &mut cur)?,
+                home_goals: read_u32(b, &mut cur)?,
+                away_goals: read_u32(b, &mut cur)?,
+            };
+            if r.season == 0
+                || r.season > season_number
+                || r.epoch_day > pc_epoch_day
+                || r.round >= goat_world::ROUNDS_PER_SEASON as u32
+                || r.league >= goat_world::world::NUM_DIVISIONS as u32
+                || r.home >= goat_world::world::NUM_CLUBS as u32
+                || r.away >= goat_world::world::NUM_CLUBS as u32
+                || r.home == r.away
+                || !seen.insert(r.key())
+            {
+                return Err(SaveError::Corrupt("invalid deep score"));
+            }
+            deep_results.push(r);
+        }
+    }
     // Sim-behaviour version (v20+). The field only EXISTS in v20+ layouts: for older
     // layout tags the cursor isn't at the trailer, so we must not read there at all —
     // a pre-20 save's sim_version is definitionally 0 (unknown/legacy semantics).
@@ -1380,6 +1641,12 @@ fn parse(b: &[u8], strict_history: bool) -> Result<(SaveData, u32), SaveError> {
     Ok((
         SaveData {
             pc_development_history,
+            npc_match_loads,
+            dated_calendar,
+            deep_scopes,
+            deep_results,
+            pc_played_fixture_ids,
+            fixture_reschedules,
             world_seed,
             pc_name,
             pc_position,

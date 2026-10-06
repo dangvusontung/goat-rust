@@ -25,3 +25,5 @@ pub use engine::{should_flush_soft, CalendarEngine, StopResult};
 pub use rng_stream::RngStream;
 pub use subsystem::{DayContext, DayReport, StateMutation, StopClass, Subsystem, SubsystemId};
 pub use tuning::SIM_VERSION;
+
+pub mod chronology;
