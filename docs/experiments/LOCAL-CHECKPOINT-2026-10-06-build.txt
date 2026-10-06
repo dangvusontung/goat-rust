@@ -1,0 +1,3 @@
+   Compiling goat-world v0.1.0 (/workspace/goat-rust/crates/goat-world)
+   Compiling goat-save v0.1.0 (/workspace/goat-rust/crates/goat-save)
+    Finished `release` profile [optimized] target(s) in 8.68s

@@ -1509,3 +1509,290 @@ fn deep_scope_scores_and_sorted_journals_resume_without_rerolling() {
     invalid.deep_results.push(invalid.deep_results[0]);
     assert!(from_bytes(&to_bytes(&invalid)).is_err());
 }
+
+#[test]
+fn compact_journal_preserves_multi_season_health_and_future_replay() {
+    use goat_core::history::NpcMatchLoad;
+    use goat_save::save::{from_bytes, to_bytes};
+    let mut state = setup_state();
+    state.dated_calendar = true;
+    state.career_base_year = 2023;
+    state.season_number = 3;
+    state.pc_epoch_day = 735;
+    let id = state.pc_player_id.unwrap();
+    state.players.set_injury_weeks(id, 4);
+    state.pc_injury_return_week = Some(102);
+    // Match the save fixture to its deterministic age clock.
+    state
+        .players
+        .set_age_weeks(id, goat_core::tuning::START_AGE_WEEKS + 105);
+    for fixture in 0..120u32 {
+        for player in 0..50u32 {
+            state.npc_match_loads.push(NpcMatchLoad {
+                competition_id: if fixture % 5 == 0 { 6 } else { 1 },
+                fixture_id: fixture as u64 + 100,
+                epoch_day: fixture * 6,
+                pop_idx: player,
+                minutes: if player % 3 == 0 { 0 } else { 90 },
+            });
+        }
+    }
+    state
+        .orbit_records
+        .push(goat_core::state::OrbitMatchRecord {
+            season: 1,
+            round: 0,
+            div: 1,
+            credits: (1..50)
+                .filter(|idx| idx % 3 != 0)
+                .map(|pop_idx| goat_core::state::NpcMatchCredit {
+                    pop_idx,
+                    goals: u8::from(pop_idx == 7),
+                    assists: u8::from(pop_idx == 8),
+                    result: 1,
+                })
+                .collect(),
+        });
+    let view = state.players.snapshot(id);
+    let mut baseline = from_world_state(&state, &view);
+    baseline.npc_match_loads.clear();
+    let base_size = to_bytes(&baseline).len();
+    let bytes = to_bytes(&from_world_state(&state, &view));
+    assert!(bytes.len() - base_size < state.npc_match_loads.len() * 8);
+    let loaded = from_bytes(&bytes).unwrap();
+    let mut resumed = to_world_state(&loaded, &test_world());
+    assert_eq!(resumed.npc_match_loads, state.npc_match_loads);
+    assert_eq!(resumed.orbit_records, state.orbit_records);
+    assert_eq!(resumed.pc_medical_status(), state.pc_medical_status());
+    let mut live = goat_world::session::SimulationSession::new();
+    let mut cold = goat_world::session::SimulationSession::new();
+    assert_eq!(
+        live.population_deep(&state).career_fingerprint(),
+        cold.population_deep(&resumed).career_fingerprint()
+    );
+    for idx in [0, 7, 49] {
+        assert_eq!(
+            live.population_deep(&state).training_history(idx, 0, 105),
+            cold.population_deep(&resumed).training_history(idx, 0, 105)
+        );
+        assert_eq!(
+            live.population_deep(&state).medical_status(idx, 105),
+            cold.population_deep(&resumed).medical_status(idx, 105)
+        );
+    }
+    let end = state.pc_epoch_day + 35;
+    let mut rng_a = GoatRng::new(77);
+    let mut rng_b = GoatRng::new(77);
+    state = reduce(
+        state,
+        Intent::AdvanceToDate {
+            epoch_day: end,
+            train: false,
+        },
+        &mut rng_a,
+    );
+    resumed = reduce(
+        resumed,
+        Intent::AdvanceToDate {
+            epoch_day: end,
+            train: false,
+        },
+        &mut rng_b,
+    );
+    assert_eq!(state.pc_medical_status(), resumed.pc_medical_status());
+    assert_eq!(state.pc_development_history, resumed.pc_development_history);
+    assert_eq!(state.players.get_injury_weeks(id), 0);
+}
+
+#[test]
+fn v25_workload_layout_can_be_read_without_silently_accepting_old_simulation() {
+    use goat_save::save::{from_bytes, to_bytes};
+    let state = setup_state();
+    let mut data = from_world_state(&state, &state.players.snapshot(state.pc_player_id.unwrap()));
+    let load = goat_core::history::NpcMatchLoad {
+        competition_id: 1,
+        fixture_id: 99,
+        epoch_day: 20,
+        pop_idx: 7,
+        minutes: 0,
+    };
+    data.npc_match_loads.push(load);
+    let mut bytes = to_bytes(&data);
+    let start = bytes
+        .windows(4)
+        .rposition(|w| w == 0x4E4C_4F44u32.to_le_bytes())
+        .unwrap();
+    bytes.truncate(start + 4);
+    bytes.extend_from_slice(&1u32.to_le_bytes());
+    bytes.extend_from_slice(&load.competition_id.to_le_bytes());
+    bytes.extend_from_slice(&load.pop_idx.to_le_bytes());
+    bytes.extend_from_slice(&load.fixture_id.to_le_bytes());
+    bytes.extend_from_slice(&load.epoch_day.to_le_bytes());
+    bytes.extend_from_slice(&(load.minutes as u32).to_le_bytes());
+    bytes.extend_from_slice(&11u32.to_le_bytes());
+    bytes[4..8].copy_from_slice(&25u32.to_le_bytes());
+    assert_eq!(
+        from_bytes_layout_only(&bytes).unwrap().npc_match_loads,
+        vec![load]
+    );
+    assert!(matches!(
+        from_bytes(&bytes),
+        Err(goat_save::SaveError::SimVersionMismatch { .. })
+    ));
+}
+
+#[test]
+fn reactive_npc_cards_save_and_next_fixture_are_exact_after_loading() {
+    use goat_save::save::{from_bytes, to_bytes};
+    let world = test_world();
+    let mut state = setup_state();
+    state.dated_calendar = true;
+    state.realistic_npc = true;
+    state.career_base_year = 2023;
+    let calendar = state.chronology().unwrap();
+    state.pc_epoch_day = goat_world::calendar::dated_fixture_day(calendar, 1, 0);
+    let mut warm = goat_world::session::SimulationSession::new();
+    state = warm.advance_deep(state, &world);
+    assert!(!state.npc_cards.is_empty());
+    let bytes = to_bytes(&from_world_state(
+        &state,
+        &state.players.snapshot(state.pc_player_id.unwrap()),
+    ));
+    let mut loaded = to_world_state(&from_bytes(&bytes).unwrap(), &world);
+    assert!(loaded.realistic_npc);
+    assert_eq!(loaded.npc_cards, state.npc_cards);
+    let mut cold = goat_world::session::SimulationSession::new();
+    state.pc_epoch_day = goat_world::calendar::dated_fixture_day(calendar, 1, 1);
+    loaded.pc_epoch_day = state.pc_epoch_day;
+    state = warm.advance_deep(state, &world);
+    loaded = cold.advance_deep(loaded, &world);
+    assert_eq!(state.deep_results, loaded.deep_results);
+    assert_eq!(state.npc_cards, loaded.npc_cards);
+    assert_eq!(state.npc_match_loads, loaded.npc_match_loads);
+    assert_eq!(state.orbit_records, loaded.orbit_records);
+    assert_eq!(
+        warm.population_deep(&state).career_fingerprint(),
+        cold.population_deep(&loaded).career_fingerprint()
+    );
+    let offset = bytes
+        .windows(4)
+        .rposition(|w| w == 0x4E50_4344u32.to_le_bytes())
+        .unwrap();
+    let mut bad = bytes.clone();
+    bad[offset + 5..offset + 9].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(from_bytes(&bad).is_err());
+    let mut bad = bytes.clone();
+    bad[offset + 4] = 2;
+    assert!(from_bytes(&bad).is_err());
+    let mut bad = bytes.clone();
+    bad[offset + 9 + 25] = 3;
+    assert!(from_bytes(&bad).is_err());
+    let mut duplicate = bytes.clone();
+    let first = duplicate[offset + 9..offset + 35].to_vec();
+    duplicate[offset + 35..offset + 61].copy_from_slice(&first);
+    assert!(from_bytes(&duplicate).is_err());
+    let mut reordered = bytes.clone();
+    let second = reordered[offset + 35..offset + 61].to_vec();
+    reordered[offset + 9..offset + 35].copy_from_slice(&second);
+    reordered[offset + 35..offset + 61].copy_from_slice(&first);
+    assert!(from_bytes(&reordered).is_err());
+    for end in offset + 4..bytes.len() {
+        assert!(from_bytes(&bytes[..end]).is_err());
+    }
+}
+
+#[test]
+fn local_resume_checkpoint_roundtrips_and_replays_next_fixture() {
+    use goat_save::save::{from_bytes, from_world_state_with_session, session_from_save, to_bytes};
+    let world = test_world();
+    let mut state = setup_state();
+    state.dated_calendar = true;
+    state.realistic_npc = true;
+    state.career_base_year = 2023;
+    state.pc_epoch_day = goat_world::calendar::dated_fixture_day(state.chronology().unwrap(), 1, 0);
+    let mut warm = goat_world::session::SimulationSession::new();
+    state = warm.advance_deep(state, &world);
+    let data = from_world_state_with_session(
+        &state,
+        &state.players.snapshot(state.pc_player_id.unwrap()),
+        &mut warm,
+    );
+    assert!(!data.resume_checkpoint.is_empty());
+    let bytes = to_bytes(&data);
+    let decoded = from_bytes(&bytes).unwrap();
+    assert_eq!(data.resume_checkpoint, decoded.resume_checkpoint);
+    let mut loaded = to_world_state(&decoded, &world);
+    let mut resumed = session_from_save(&decoded, &loaded);
+    assert_eq!(resumed.rebuild_count(), 0);
+    assert_eq!(
+        warm.population_deep(&state).fingerprint(),
+        resumed.population_deep(&loaded).fingerprint()
+    );
+    assert_eq!(resumed.rebuild_count(), 0);
+    state.pc_epoch_day = goat_world::calendar::dated_fixture_day(state.chronology().unwrap(), 1, 1);
+    loaded.pc_epoch_day = state.pc_epoch_day;
+    state = warm.advance_deep(state, &world);
+    loaded = resumed.advance_deep(loaded, &world);
+    assert_eq!(state.deep_results, loaded.deep_results);
+    assert_eq!(state.npc_match_loads, loaded.npc_match_loads);
+    assert_eq!(state.npc_cards, loaded.npc_cards);
+    assert_eq!(state.orbit_records, loaded.orbit_records);
+    let mut corrupted = decoded.clone();
+    let end = corrupted.resume_checkpoint.len() - 1;
+    corrupted.resume_checkpoint[end] ^= 1;
+    let valid_state = to_world_state(&decoded, &world);
+    let mut fallback = session_from_save(&corrupted, &valid_state);
+    assert_eq!(
+        fallback.population_deep(&valid_state).career_fingerprint(),
+        warm.population_deep(&valid_state).career_fingerprint()
+    );
+    assert_eq!(fallback.rebuild_count(), 1);
+    let offset = bytes
+        .windows(4)
+        .rposition(|w| w == 0x4350_4B54u32.to_le_bytes())
+        .unwrap();
+    let mut bad = bytes.clone();
+    bad[offset + 4..offset + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(from_bytes(&bad).is_err());
+    for end in [offset + 4, offset + 8, bytes.len() - 1] {
+        assert!(from_bytes(&bytes[..end]).is_err());
+    }
+}
+#[test]
+fn layout_27_without_checkpoint_remains_compatible_with_same_simulation() {
+    assert_eq!(goat_save::save::SIM_VERSION, goat_world::checkpoint::MODEL);
+    use goat_save::save::{from_bytes, to_bytes};
+    let state = setup_state();
+    let mut bytes = to_bytes(&from_world_state(
+        &state,
+        &state.players.snapshot(state.pc_player_id.unwrap()),
+    ));
+    bytes[4..8].copy_from_slice(&27u32.to_le_bytes());
+    let data = from_bytes(&bytes).unwrap();
+    assert!(data.resume_checkpoint.is_empty());
+}
+
+#[test]
+fn atomic_save_replaces_complete_file_and_cleans_failed_rename() {
+    let dir = std::env::temp_dir().join(format!("goat_atomic_save_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut state = WorldState::new();
+    let view = goat_core::player::PlayerView::default();
+    let path = dir.join("career.gsav");
+    save_to_file(&from_world_state(&state, &view), &path).unwrap();
+    state.world_seed = 9876;
+    save_to_file(&from_world_state(&state, &view), &path).unwrap();
+    assert_eq!(load_from_file(&path).unwrap().world_seed, 9876);
+    let occupied = dir.join("occupied");
+    std::fs::create_dir_all(&occupied).unwrap();
+    let marker = occupied.join("preserve");
+    std::fs::write(&marker, b"existing").unwrap();
+    assert!(save_to_file(&from_world_state(&state, &view), &occupied).is_err());
+    assert_eq!(std::fs::read(&marker).unwrap(), b"existing");
+    assert!(std::fs::read_dir(&dir).unwrap().all(|entry| !entry
+        .unwrap()
+        .file_name()
+        .to_string_lossy()
+        .ends_with(".tmp")));
+    std::fs::remove_dir_all(dir).unwrap();
+}

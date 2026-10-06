@@ -6,15 +6,33 @@ use std::collections::BTreeMap;
 
 struct RetainedWorld {
     seed: u64,
+    ranked: bool,
     calendar: Option<goat_core::chronology::Chronology>,
     season: u32,
     world: WorldGenesis,
     replay: ReplayCache,
+    past_loads: Vec<u8>,
+    past_records: Vec<u8>,
     records: Vec<OrbitMatchRecord>,
     loads: Vec<NpcMatchLoad>,
     deep_results: Vec<goat_core::deep::DeepFixtureResult>,
     // Undo the in-progress credits before the season pipeline applies them itself.
     originals: BTreeMap<usize, (u32, u32, i16)>,
+}
+
+impl RetainedWorld {
+    fn active_start(&self) -> u32 {
+        self.calendar.unwrap().frame(self.season).preparation_start
+    }
+    fn past_matches(&self, records: &[OrbitMatchRecord], loads: &[NpcMatchLoad]) -> bool {
+        goat_core::journal::matches_loads(
+            &self.past_loads,
+            loads.iter().filter(|v| v.epoch_day < self.active_start()),
+        ) && goat_core::journal::matches_records(
+            &self.past_records,
+            records.iter().filter(|v| v.season < self.season),
+        )
+    }
 }
 
 /// One bounded population/world cache, not a cache of every queried date.
@@ -78,6 +96,15 @@ impl SimulationSession {
             &state.npc_match_loads,
             Some(&state.deep_results),
         )
+    }
+    /// Season-opening scores use completed history only, independent of menu reads.
+    pub fn league_scores(
+        &mut self,
+        state: &goat_core::state::WorldState,
+    ) -> Vec<crate::deep::LeagueScore> {
+        self.population_deep(state);
+        let r = self.retained.as_ref().unwrap();
+        r.replay.league_scores(&r.world)
     }
     pub(crate) fn deep_world(&self) -> Option<WorldGenesis> {
         self.retained.as_ref().map(|r| {
@@ -157,47 +184,50 @@ impl SimulationSession {
         let season = season.max(1);
         let unchanged = self.retained.as_ref().is_some_and(|r| {
             r.seed == seed
+                && r.ranked == deep.is_some()
                 && r.calendar == calendar
                 && r.season == season
-                && r.records == records
-                && r.loads == loads
+                && if r.ranked {
+                    r.past_matches(records, loads)
+                        && r.records
+                            .iter()
+                            .eq(records.iter().filter(|v| v.season >= r.season))
+                        && r.loads
+                            .iter()
+                            .eq(loads.iter().filter(|v| v.epoch_day >= r.active_start()))
+                } else {
+                    r.records == records && r.loads == loads
+                }
                 && r.deep_results == deep.unwrap_or(&[])
         });
         if unchanged {
             return self.retained.as_ref().unwrap().replay.pop();
         }
         let reset = self.retained.as_ref().is_none_or(|r| {
-            if r.seed != seed || r.calendar != calendar || season < r.season {
+            if r.seed != seed
+                || r.ranked != deep.is_some()
+                || r.calendar != calendar
+                || season < r.season
+            {
                 return true;
             }
             if let Some(scores) = deep {
-                let old_loads = r
-                    .loads
+                let incoming_records = records
                     .iter()
-                    .map(|l| ((l.pop_idx, l.fixture_id), l))
-                    .collect::<BTreeMap<_, _>>();
-                let old_records = r
-                    .records
+                    .filter(|v| v.season >= r.season)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let incoming_loads = loads
                     .iter()
-                    .map(|v| ((v.season, v.round, v.div), v))
-                    .collect::<BTreeMap<_, _>>();
-                !journals_extend(&r.records, records, &r.loads, loads)
+                    .filter(|v| v.epoch_day >= r.active_start())
+                    .copied()
+                    .collect::<Vec<_>>();
+                !r.past_matches(records, loads)
+                    || !journals_extend(&r.records, &incoming_records, &r.loads, &incoming_loads)
                     || !scores.starts_with(&r.deep_results)
                     || scores[r.deep_results.len().min(scores.len())..]
                         .iter()
                         .any(|v| v.season < r.season)
-                    || records.iter().any(|v| {
-                        v.season < r.season
-                            && old_records
-                                .get(&(v.season, v.round, v.div))
-                                .is_none_or(|old| **old != *v)
-                    })
-                    || loads.iter().any(|v| {
-                        v.epoch_day < calendar.unwrap().frame(r.season).preparation_start
-                            && old_loads
-                                .get(&(v.pop_idx, v.fixture_id))
-                                .is_none_or(|old| **old != *v)
-                    })
             } else {
                 !records.starts_with(&r.records)
                     || !loads.starts_with(&r.loads)
@@ -216,14 +246,23 @@ impl SimulationSession {
             let world = WorldGenesis::generate(seed);
             let replay = calendar.map_or_else(
                 || ReplayCache::new_scheduled(&world, seed),
-                |c| ReplayCache::new_dated(&world, seed, c.base_year),
+                |c| {
+                    if deep.is_some() {
+                        ReplayCache::new_ranked(&world, seed, c.base_year)
+                    } else {
+                        ReplayCache::new_dated(&world, seed, c.base_year)
+                    }
+                },
             );
             self.retained = Some(RetainedWorld {
                 seed,
+                ranked: deep.is_some(),
                 calendar,
                 season: 1,
                 world,
                 replay,
+                past_loads: Vec::new(),
+                past_records: Vec::new(),
                 records: Vec::new(),
                 loads: Vec::new(),
                 deep_results: Vec::new(),
@@ -237,10 +276,10 @@ impl SimulationSession {
             .iter()
             .map(|l| ((l.pop_idx, l.fixture_id), *l))
             .collect::<BTreeMap<_, _>>();
-        for load in loads
-            .iter()
-            .filter(|l| !old_loads.contains_key(&(l.pop_idx, l.fixture_id)))
-        {
+        let active_start = if r.ranked { r.active_start() } else { 0 };
+        for load in loads.iter().filter(|l| {
+            l.epoch_day >= active_start && !old_loads.contains_key(&(l.pop_idx, l.fixture_id))
+        }) {
             r.replay.record_match_load(*load);
         }
         let advanced = season > r.season;
@@ -312,8 +351,32 @@ impl SimulationSession {
                 },
             );
         }
-        r.records = records.to_vec();
-        r.loads = loads.to_vec();
+        if r.ranked {
+            let start_day = r.active_start();
+            if r.past_loads.is_empty() || advanced {
+                r.past_loads.clear();
+                goat_core::journal::write_iter(
+                    &mut r.past_loads,
+                    loads.iter().filter(|v| v.epoch_day < start_day),
+                );
+                r.past_records = goat_core::journal::pack_records(
+                    records.iter().filter(|v| v.season < r.season),
+                );
+            }
+            r.records = records
+                .iter()
+                .filter(|v| v.season >= r.season)
+                .cloned()
+                .collect();
+            r.loads = loads
+                .iter()
+                .filter(|v| v.epoch_day >= start_day)
+                .copied()
+                .collect();
+        } else {
+            r.records = records.to_vec();
+            r.loads = loads.to_vec();
+        }
         r.deep_results = deep.unwrap_or(&[]).to_vec();
         r.replay.pop()
     }
@@ -532,5 +595,212 @@ mod dated_tests {
         assert_eq!(changed.fingerprint(), fresh.fingerprint());
         assert_eq!(changed.career_fingerprint(), fresh.career_fingerprint());
         assert_eq!(session.rebuild_count(), 2);
+    }
+}
+
+// Stored session inputs are bound exactly to the canonical journals, not just a digest.
+crate::checkpoint::fields!(CheckpointBinding {
+    model,
+    seed,
+    year,
+    season,
+    day,
+    realistic,
+    scopes,
+    cards,
+    scores,
+    loads,
+    records
+});
+struct CheckpointBinding {
+    model: u32,
+    seed: u64,
+    year: u32,
+    season: u32,
+    day: u32,
+    realistic: bool,
+    scopes: Vec<goat_core::deep::DeepScope>,
+    cards: Vec<goat_core::discipline::NpcCardEvent>,
+    scores: Vec<goat_core::deep::DeepFixtureResult>,
+    loads: Vec<u8>,
+    records: Vec<u8>,
+}
+impl CheckpointBinding {
+    fn matches(&self, state: &goat_core::state::WorldState) -> bool {
+        self.model == crate::checkpoint::MODEL
+            && self.seed == state.world_seed
+            && self.year == state.career_base_year
+            && self.season == state.season_number
+            && self.day == state.pc_epoch_day
+            && self.realistic == state.realistic_npc
+            && self.scopes == state.deep_scopes
+            && self.cards == state.npc_cards
+            && self.scores == state.deep_results
+            && goat_core::journal::matches_loads(&self.loads, state.npc_match_loads.iter())
+            && goat_core::journal::matches_records(&self.records, state.orbit_records.iter())
+    }
+}
+impl SimulationSession {
+    /// Materialize one exact local resume cache. First synchronize canonical inputs;
+    /// a fresh session may need a one-time replay before its first checkpoint exists.
+    pub fn resume_checkpoint(&mut self, state: &goat_core::state::WorldState) -> Option<Vec<u8>> {
+        use crate::checkpoint::Snapshot;
+        if !state.dated_calendar || state.season_number == 0 {
+            return None;
+        }
+        self.population_deep(state);
+        let retained = self.retained.as_ref()?;
+        let mut loads = Vec::new();
+        goat_core::journal::write(&mut loads, &state.npc_match_loads);
+        let binding = CheckpointBinding {
+            model: crate::checkpoint::MODEL,
+            seed: state.world_seed,
+            year: state.career_base_year,
+            season: state.season_number,
+            day: state.pc_epoch_day,
+            realistic: state.realistic_npc,
+            scopes: state.deep_scopes.clone(),
+            cards: state.npc_cards.clone(),
+            scores: state.deep_results.clone(),
+            loads,
+            records: goat_core::journal::pack_records(state.orbit_records.iter()),
+        };
+        let mut out = Vec::new();
+        crate::checkpoint::FORMAT.write(&mut out);
+        binding.write(&mut out);
+        retained.replay.write(&mut out);
+        retained
+            .world
+            .clubs
+            .iter()
+            .map(|c| (c.budget, c.academy_boost, c.tactical_identity.clone()))
+            .collect::<Vec<_>>()
+            .write(&mut out);
+        retained
+            .world
+            .leagues
+            .iter()
+            .map(|l| l.clubs.clone())
+            .collect::<Vec<_>>()
+            .write(&mut out);
+        retained.past_loads.write(&mut out);
+        retained.past_records.write(&mut out);
+        retained.records.write(&mut out);
+        retained.loads.write(&mut out);
+        retained.deep_results.write(&mut out);
+        retained.originals.write(&mut out);
+        if out.len() > crate::checkpoint::MAX_BYTES - 8 {
+            return None;
+        }
+        let sum = crate::checkpoint::checksum(&out);
+        sum.write(&mut out);
+        Some(out)
+    }
+    /// Restore the optional cache only after integrity, structure and exact input checks.
+    /// Failure leaves this session untouched; callers can use normal seed replay.
+    pub fn restore_checkpoint(
+        &mut self,
+        state: &goat_core::state::WorldState,
+        bytes: &[u8],
+    ) -> bool {
+        self.decode_checkpoint(state, bytes)
+            .is_some_and(|retained| {
+                self.retained = Some(retained);
+                self.deep_progress = None;
+                true
+            })
+    }
+    fn decode_checkpoint(
+        &self,
+        state: &goat_core::state::WorldState,
+        bytes: &[u8],
+    ) -> Option<RetainedWorld> {
+        use crate::checkpoint::{Reader, Snapshot};
+        if bytes.len() < 12
+            || bytes.len() > crate::checkpoint::MAX_BYTES
+            || !state.dated_calendar
+            || state.season_number == 0
+        {
+            return None;
+        }
+        let body = &bytes[..bytes.len() - 8];
+        let expected = u64::from_le_bytes(bytes[bytes.len() - 8..].try_into().ok()?);
+        if crate::checkpoint::checksum(body) != expected {
+            return None;
+        }
+        let mut r = Reader::new(body);
+        if u32::read(&mut r)? != crate::checkpoint::FORMAT {
+            return None;
+        }
+        let binding = CheckpointBinding::read(&mut r)?;
+        if !binding.matches(state) {
+            return None;
+        }
+        let replay = ReplayCache::read(&mut r)?;
+        let mut world = WorldGenesis::generate(state.world_seed);
+        let clubs = Vec::<(i64, u8, goat_core::tactical_identity::TacticalIdentity)>::read(&mut r)?;
+        if clubs.len() != world.clubs.len() {
+            return None;
+        }
+        for (club, (budget, boost, tactics)) in world.clubs.iter_mut().zip(clubs) {
+            if boost > crate::world::ACADEMY_BOOST_MAX {
+                return None;
+            }
+            club.budget = budget;
+            club.academy_boost = boost;
+            club.tactical_identity = tactics;
+        }
+        let members = Vec::<Vec<usize>>::read(&mut r)?;
+        if members.len() != world.leagues.len() {
+            return None;
+        }
+        for (league, members) in world.leagues.iter_mut().zip(members) {
+            if members.len() != league.max_clubs as usize
+                || members.iter().any(|&id| id >= world.clubs.len())
+            {
+                return None;
+            }
+            league.clubs = members;
+        }
+        let calendar = state.chronology()?;
+        let retained = RetainedWorld {
+            seed: state.world_seed,
+            ranked: true,
+            calendar: Some(calendar),
+            season: state.season_number,
+            world,
+            replay,
+            past_loads: Vec::<u8>::read(&mut r)?,
+            past_records: Vec::<u8>::read(&mut r)?,
+            records: Vec::read(&mut r)?,
+            loads: Vec::read(&mut r)?,
+            deep_results: Vec::read(&mut r)?,
+            originals: BTreeMap::read(&mut r)?,
+        };
+        if r.remaining() != 0
+            || !retained.replay.checkpoint_valid(
+                &retained.world,
+                state.world_seed,
+                state.season_number,
+                calendar,
+            )
+            || !retained.past_matches(&state.orbit_records, &state.npc_match_loads)
+            || !retained.records.iter().eq(state
+                .orbit_records
+                .iter()
+                .filter(|v| v.season >= retained.season))
+            || !retained.loads.iter().eq(state
+                .npc_match_loads
+                .iter()
+                .filter(|v| v.epoch_day >= retained.active_start()))
+            || retained.deep_results != state.deep_results
+            || retained
+                .originals
+                .keys()
+                .any(|&i| i >= retained.replay.pop().len())
+        {
+            return None;
+        }
+        Some(retained)
     }
 }

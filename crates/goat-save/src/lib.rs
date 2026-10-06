@@ -7,6 +7,6 @@
 
 pub mod save;
 pub use save::{
-    from_world_state, list_slots, load_from_file, save_to_file, slot_path, to_world_state,
-    SaveData, SaveError, SaveSlotSummary,
+    from_world_state, from_world_state_with_session, list_slots, load_from_file, save_to_file,
+    session_from_save, slot_path, to_world_state, SaveData, SaveError, SaveSlotSummary,
 };

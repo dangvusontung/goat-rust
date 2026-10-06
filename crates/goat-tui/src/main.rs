@@ -40,8 +40,8 @@ use goat_meta::{
 };
 use goat_rng::{GoatRng, RngSource};
 use goat_save::save::{
-    from_world_state, list_slots, load_from_file, save_to_file, slot_path, to_world_state,
-    SaveSlotSummary,
+    from_world_state_with_session, list_slots, load_from_file, save_to_file, session_from_save,
+    slot_path, to_world_state, SaveSlotSummary,
 };
 use goat_traits::PlayerTraits;
 use goat_world::{
@@ -171,6 +171,8 @@ fn main() {
                                                 state.pc_club_idx as usize,
                                             );
                                         }
+                                        let simulation_session = session_from_save(&data, &state);
+                                        drop(data);
                                         run_game_loop(
                                             &mut lines,
                                             &mut out,
@@ -178,6 +180,7 @@ fn main() {
                                             &beat_lib,
                                             PlayerTraits::default(),
                                             world,
+                                            simulation_session,
                                         );
                                     }
                                     Err(e) => writeln!(out, "  Load failed: {e}").unwrap(),
@@ -433,6 +436,7 @@ fn run_new_game(
                             },
                             &mut GoatRng::new(0),
                         );
+                        state = reduce(state, Intent::EnableRealisticNpc, &mut GoatRng::new(0));
                     }
                     let fixtures = build_career_fixtures(
                         &state,
@@ -453,7 +457,15 @@ fn run_new_game(
                     if !state.dated_calendar {
                         state.career_base_year = current_year();
                     }
-                    run_game_loop(lines, out, state, beat_lib, pc_traits, world);
+                    run_game_loop(
+                        lines,
+                        out,
+                        state,
+                        beat_lib,
+                        pc_traits,
+                        world,
+                        goat_world::session::SimulationSession::new(),
+                    );
                     return;
                 }
                 "R" | "REROLL" | "RE-ROLL" => {
@@ -769,6 +781,7 @@ fn run_game_loop(
     beat_lib: &BeatLibrary,
     pc_traits: PlayerTraits,
     mut world: WorldGenesis,
+    mut simulation_session: goat_world::session::SimulationSession,
 ) {
     // Season number for which the season-end pipeline (wage collection, awards,
     // legacy accrual, peer batch-tick, transfer window, contract renewal, retirement
@@ -777,7 +790,6 @@ fn run_game_loop(
     // which must be a read-only side trip) — this guard keeps the pipeline itself to
     // exactly one run per season boundary while still letting the post-pipeline menu
     // (and read-only views from it) redisplay freely.
-    let mut simulation_session = goat_world::session::SimulationSession::new();
     let mut season_end_done_for = if state.dated_calendar
         && state.season_number > 0
         && state.pc_seasons_played >= state.season_number
@@ -1047,7 +1059,7 @@ fn run_game_loop(
                         continue;
                     }
                     "Z" => {
-                        run_save(lines, out, &state);
+                        run_save(lines, out, &state, &mut simulation_session);
                         return;
                     }
                     _ => return,
@@ -1362,7 +1374,7 @@ fn run_game_loop(
                     render_legacy_screen(out, &ev, &state);
                 }
                 "Z" => {
-                    run_save(lines, out, &state);
+                    run_save(lines, out, &state, &mut simulation_session);
                 }
                 "V" => {
                     let choices = CreationChoices {
@@ -1777,9 +1789,10 @@ fn run_next_round(
                     )
                     .unwrap();
                 }
-                let returning_from_injury = state
-                    .pc_injury_return_week
-                    .is_some_and(|w| (state.pc_epoch_day / 7).saturating_sub(w) <= 1);
+                let returning_from_injury = matches!(
+                    state.pc_medical_status().map(|s| s.phase),
+                    Some(goat_core::medical::RecoveryPhase::Returning { .. })
+                );
                 let sub_context = goat_match::sim::SubContext {
                     seed: match_seed ^ 0x5DB5_5EED_5EED_5EED,
                     pc_starts_on_bench: !pc_starts,
@@ -4492,6 +4505,7 @@ fn run_save(
     lines: &mut impl Iterator<Item = io::Result<String>>,
     out: &mut impl Write,
     state: &WorldState,
+    session: &mut goat_world::session::SimulationSession,
 ) {
     let Some(_pc_id) = state.pc_player_id else {
         return;
@@ -4523,7 +4537,7 @@ fn run_save(
     }
 
     let view = state.pc_display_view();
-    let data = from_world_state(state, &view);
+    let data = from_world_state_with_session(state, &view, session);
     match save_to_file(&data, slot_path(SAVE_DIR, slot)) {
         Ok(()) => writeln!(out, "  Saved to slot {slot}.").unwrap(),
         Err(e) => writeln!(out, "  Save failed: {e}").unwrap(),

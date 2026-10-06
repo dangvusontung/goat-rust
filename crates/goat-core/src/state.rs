@@ -33,6 +33,8 @@ pub struct WorldState {
     pub pc_played_fixture_ids: Vec<u64>,
     pc_active_fixture_id: Option<u64>,
     pub npc_match_loads: Vec<crate::history::NpcMatchLoad>,
+    pub npc_cards: Vec<crate::discipline::NpcCardEvent>,
+    pub realistic_npc: bool,
     pub players: PlayerStore,
     /// The player-controlled player's id. `None` before character creation.
     pub pc_player_id: Option<PlayerId>,
@@ -362,6 +364,17 @@ pub struct OrbitMatchRecord {
 }
 
 impl WorldState {
+    /// Read-only medical phase; neither heals injuries nor consumes RNG.
+    pub fn pc_medical_status(&self) -> Option<crate::medical::MedicalStatus> {
+        let id = self.pc_player_id?;
+        Some(crate::medical::MedicalStatus::at_week(
+            self.pc_epoch_day / 7,
+            self.players.get_energy(id),
+            self.players.get_injury_weeks(id),
+            self.pc_injury_return_week,
+        ))
+    }
+
     /// The stable vector index remains its league round; selection follows actual dates.
     pub fn next_dated_fixture(&self) -> Option<(usize, &goat_calendar::Fixture)> {
         if !self.dated_calendar {
@@ -493,6 +506,8 @@ impl WorldState {
             pc_injury_return_week: None,
             pc_development_history: Default::default(),
             npc_match_loads: Vec::new(),
+            npc_cards: Vec::new(),
+            realistic_npc: false,
             dated_calendar: false,
             deep_scopes: Vec::new(),
             deep_results: Vec::new(),
@@ -562,6 +577,7 @@ pub enum Intent {
     BeginDatedFixture {
         fixture_id: u64,
     },
+    EnableRealisticNpc,
     EnableDatedCalendar {
         base_year: u32,
     },
@@ -861,6 +877,9 @@ pub enum Intent {
     RecordDeepFixture {
         result: crate::deep::DeepFixtureResult,
     },
+    RecordNpcCards {
+        cards: Vec<crate::discipline::NpcCardEvent>,
+    },
     RecordNpcMatchLoads {
         loads: Vec<crate::history::NpcMatchLoad>,
     },
@@ -912,6 +931,12 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 && !state.pc_played_fixture_ids.contains(&fixture_id)
             {
                 state.pc_active_fixture_id = Some(fixture_id);
+            }
+            state
+        }
+        Intent::EnableRealisticNpc => {
+            if state.dated_calendar && state.deep_results.is_empty() && state.npc_cards.is_empty() {
+                state.realistic_npc = true;
             }
             state
         }
@@ -1620,6 +1645,28 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             state
         }
 
+        Intent::RecordNpcCards { cards } => {
+            let mut seen = state
+                .npc_cards
+                .iter()
+                .map(|c| (c.pop_idx, c.fixture_id, c.minute, c.kind))
+                .collect::<std::collections::BTreeSet<_>>();
+            for card in cards {
+                if card.season > 0
+                    && card.competition_id > 0
+                    && card.kind <= 2
+                    && (1..=90).contains(&card.minute)
+                    && seen.insert((card.pop_idx, card.fixture_id, card.minute, card.kind))
+                {
+                    state.npc_cards.push(card);
+                }
+            }
+            state
+                .npc_cards
+                .sort_by_key(|c| (c.epoch_day, c.fixture_id, c.minute, c.pop_idx, c.kind));
+            state
+        }
+
         Intent::RecordNpcMatchLoads { loads } => {
             let mut seen = state
                 .npc_match_loads
@@ -1784,7 +1831,11 @@ fn tick_one_rest_week(mut state: WorldState) -> WorldState {
     }
     let injury_after = state.players.get_injury_weeks(pc_id);
     if injury_before > 0 && injury_after == 0 {
-        state.pc_injury_return_week = Some((state.pc_epoch_day + 7) / 7);
+        state.pc_injury_return_week = Some(if state.dated_calendar {
+            (period_day + 7) / 7
+        } else {
+            (state.pc_epoch_day + 7) / 7
+        });
         state
             .pc_development_history
             .health
@@ -2062,6 +2113,39 @@ mod tests {
         state.pc_player_id = Some(id);
         state.pc_club = "Riverside Town".to_string();
         id
+    }
+
+    #[test]
+    fn dated_rest_recovery_records_elapsed_endpoint_during_clock_catchup() {
+        let mut state = WorldState::new();
+        let id = push_uniform_player(&mut state, 50, 99);
+        state.dated_calendar = true;
+        state.career_base_year = 2023;
+        state.season_number = 2;
+        state.players.set_age_weeks(id, START_AGE_WEEKS + 50);
+        state.players.set_injury_weeks(id, 1);
+        state.pc_epoch_day = 400;
+        let after = tick_one_rest_week(state);
+        assert_eq!(after.pc_injury_return_week, Some(51));
+        assert_eq!(
+            after
+                .pc_development_history
+                .health
+                .last()
+                .unwrap()
+                .epoch_day,
+            357
+        );
+        assert_eq!(after.players.get_injury_weeks(id), 0);
+        assert_eq!(
+            after
+                .pc_development_history
+                .weeks
+                .last()
+                .unwrap()
+                .injury_before,
+            1
+        );
     }
 
     #[test]

@@ -30,9 +30,11 @@ pub mod names;
 pub mod national_tournament;
 pub mod nations;
 pub mod npc_life;
+pub mod npc_match;
 pub mod orbit;
 pub mod population;
 pub mod promotion;
+pub mod ranking;
 pub mod rival;
 pub mod scout;
 pub mod scouting;
@@ -92,3 +94,6 @@ pub use world::{
 };
 
 pub mod session;
+
+/// Optional local resume cache codec; canonical seed/journals remain authoritative.
+pub mod checkpoint;

@@ -1,5 +1,13 @@
 # Ranked deep leagues — simulation version 10
 
+Latest: [v13 reactive NPC matches and compact runtime journals](CORE-STEPS-2-3.md).
+The abstract keeper and fixed substitutions described below are the frozen v10
+model, retained for explicit legacy APIs. New dated careers enable the v13 model.
+
+Update: [v11 rolling coefficients](LEAGUE-COEFFICIENTS.md) replaces the bootstrap
+ranking after completed seasons. The v10 implementation and measurements below
+remain the historical checkpoint.
+
 Implemented 2026-10-06. The owner selected the PC's league and the highest-ranked
 leagues as the permanent deep set. The initial budget is **top 5 plus the PC league**;
 if the PC league is in that top 5, it is counted once. All other leagues remain light.

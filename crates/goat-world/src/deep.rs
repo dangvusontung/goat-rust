@@ -43,7 +43,7 @@ pub fn initial_scores(world: &WorldGenesis) -> Vec<LeagueScore> {
 }
 
 /// The PC league is mandatory, even outside the top N. Equal scores use stable IDs.
-/// Supplied scores allow a future coefficient system without changing this policy.
+/// The ranked model supplies rolling continental coefficients through this policy.
 pub fn select_leagues(
     world: &WorldGenesis,
     pc_league: LeagueId,
@@ -86,6 +86,7 @@ pub(crate) struct DeepProgress {
     pc_league: u8,
     pc_club: u16,
     absent_round: Option<usize>,
+    realistic: bool,
 }
 
 /// Shared annual close output for headless and live adapters.
@@ -268,6 +269,133 @@ fn loads(side: &Side, fixture_id: u64, day: u32) -> Vec<NpcMatchLoad> {
         .collect()
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
+fn realistic_fixture(
+    pop: &Population,
+    squads: [&Vec<usize>; 2],
+    clubs: [&crate::world::Club; 2],
+    state: &WorldState,
+    card_index: &std::collections::BTreeMap<u32, Vec<goat_core::discipline::NpcCardEvent>>,
+    calendar_index: &std::collections::BTreeMap<u64, u32>,
+    fixture_id: u64,
+    day: u32,
+    rng: &mut impl RngSource,
+) -> (
+    u32,
+    u32,
+    Vec<NpcMatchCredit>,
+    Vec<NpcMatchLoad>,
+    Vec<goat_core::discipline::NpcCardEvent>,
+) {
+    use crate::npc_match::{Candidate, MatchRules};
+    use goat_core::{
+        attrs::AttrId,
+        discipline::{status, NpcCardEvent},
+        tactical::TacticalProfile,
+    };
+    let week = day / 7;
+    let calendar = state.chronology().unwrap();
+    let mut dates = Vec::new();
+    for season in state.season_number.saturating_sub(1).max(1)..=state.season_number {
+        dates.extend(
+            (0..crate::ROUNDS_PER_SEASON)
+                .map(|r| crate::calendar::dated_fixture_day(calendar, season, r)),
+        );
+    }
+    let candidates = squads.map(|squad| {
+        squad
+            .iter()
+            .copied()
+            .filter(|&idx| pop.is_available(idx, week))
+            .map(|idx| {
+                let events = card_index.get(&(idx as u32)).map_or(&[][..], Vec::as_slice);
+                let mut actual_dates = dates.clone();
+                if !events.is_empty() {
+                    for load in pop
+                        .observed_match_loads(idx)
+                        .iter()
+                        .filter(|l| l.competition_id == 1)
+                    {
+                        if let Some(&original) = calendar_index.get(&load.fixture_id) {
+                            if original != load.epoch_day {
+                                actual_dates.retain(|&d| d != original);
+                                actual_dates.push(load.epoch_day);
+                            }
+                        }
+                    }
+                    actual_dates.sort_unstable();
+                }
+                let view = pop.shared_view(idx, week);
+                let returning = pop.medical_status(idx, week).is_some_and(|m| {
+                    matches!(m.phase, goat_core::medical::RecoveryPhase::Returning { .. })
+                });
+                Candidate {
+                    player: idx as u32,
+                    position: pop.position[idx],
+                    keeper: pop.goalkeeper[idx],
+                    rating: pop.current_ovr(idx, week),
+                    keeping: pop.goalkeeper_skill(idx, week),
+                    energy: pop.match_energy(idx, day),
+                    stamina: view.current[AttrId::Stamina as usize].to_int().clamp(1, 99) as u8,
+                    aggression: view.current[AttrId::Aggression as usize]
+                        .to_int()
+                        .clamp(1, 99) as u8,
+                    returning,
+                    banned: status(events, state.season_number, day, 1, &actual_dates).ban_games
+                        > 0,
+                }
+            })
+            .collect::<Vec<_>>()
+    });
+    let profiles =
+        clubs.map(|c| TacticalProfile::derive(c.strength, c.id as u32, state.world_seed));
+    let detail = crate::npc_match::simulate(
+        [&candidates[0], &candidates[1]],
+        profiles,
+        MatchRules::default(),
+        rng,
+    );
+    let outcome = detail.goals[0].cmp(&detail.goals[1]) as i8;
+    let mut rows = Vec::new();
+    let mut doses = Vec::new();
+    for (side, squad) in squads.iter().enumerate() {
+        for appearance in &detail.appearances[side] {
+            rows.push(NpcMatchCredit {
+                pop_idx: appearance.player,
+                goals: appearance.goals,
+                assists: appearance.assists,
+                result: if side == 0 { outcome } else { -outcome },
+            });
+        }
+        for &idx in *squad {
+            doses.push(NpcMatchLoad {
+                competition_id: 1,
+                pop_idx: idx as u32,
+                fixture_id,
+                epoch_day: day,
+                minutes: detail.appearances[side]
+                    .iter()
+                    .find(|a| a.player == idx as u32)
+                    .map_or(0, |a| a.minutes),
+            });
+        }
+    }
+    let cards = detail
+        .cards
+        .iter()
+        .map(|c| NpcCardEvent {
+            season: state.season_number,
+            competition_id: 1,
+            pop_idx: c.player,
+            fixture_id,
+            epoch_day: day,
+            minute: c.minute,
+            kind: c.kind,
+        })
+        .collect();
+    (detail.goals[0], detail.goals[1], rows, doses, cards)
+}
+
 impl SimulationSession {
     /// Advance selected NPC fixtures only through the elapsed date, never future rounds.
     /// PC fixtures are supplied by the match engine; other leagues need no renderer.
@@ -306,17 +434,14 @@ impl SimulationSession {
             pc_league: state.pc_div_idx,
             pc_club: state.pc_club_idx,
             absent_round,
+            realistic: state.realistic_npc,
         };
         if self.deep_progress == Some(progress) {
             return state;
         }
         let pc_league = state.pc_div_idx as usize;
-        let leagues = select_leagues(
-            live_world,
-            pc_league,
-            DEFAULT_TOP_LEAGUES,
-            &initial_scores(live_world),
-        );
+        let scores = self.league_scores(&state);
+        let leagues = select_leagues(live_world, pc_league, DEFAULT_TOP_LEAGUES, &scores);
         let scope = DeepScope {
             season: state.season_number,
             epoch_day: if state
@@ -400,6 +525,24 @@ impl SimulationSession {
         while cursor < fixtures.len() {
             let day = fixtures[cursor].0;
             let end = cursor + fixtures[cursor..].iter().take_while(|f| f.0 == day).count();
+            let mut card_index =
+                std::collections::BTreeMap::<u32, Vec<goat_core::discipline::NpcCardEvent>>::new();
+            for card in state.npc_cards.iter().filter(|e| {
+                e.competition_id == 1 && e.season >= state.season_number.saturating_sub(1)
+            }) {
+                card_index.entry(card.pop_idx).or_default().push(*card);
+            }
+            let mut calendar_index = std::collections::BTreeMap::new();
+            for season in state.season_number.saturating_sub(1).max(1)..=state.season_number {
+                for round in 0..crate::ROUNDS_PER_SEASON {
+                    let w = crate::round_to_week(round);
+                    let slot = round - crate::week_to_rounds(w).start;
+                    calendar_index.insert(
+                        crate::workload::league_fixture_id(state.world_seed, season, round, slot),
+                        crate::calendar::dated_fixture_day(c, season, round),
+                    );
+                }
+            }
             let pop = self.population_deep(&state);
             let mut squads = vec![Vec::new(); world.clubs.len()];
             for i in 0..pop.len() {
@@ -408,20 +551,6 @@ impl SimulationSession {
             let mut pending = Vec::new();
             for &(day, league, f) in &fixtures[cursor..end] {
                 let week = day / 7;
-                let home = side(pop, squads[f.home].clone(), week);
-                let away = side(pop, squads[f.away].clone(), week);
-                let seed = state.world_seed
-                    ^ ((state.season_number as u64) << 32)
-                    ^ ((league as u64) << 48)
-                    ^ ((f.round as u64) << 16)
-                    ^ MATCH_DOMAIN
-                    ^ (f.home as u64).wrapping_mul(HOME_DOMAIN)
-                    ^ (f.away as u64).wrapping_mul(AWAY_DOMAIN);
-                let mut rng = GoatRng::new(seed);
-                let (gf, ga) = simulate_match(home.lines, away.lines, &mut rng);
-                let result = gf.cmp(&ga) as i8; // Ordering discriminants: Less=-1, Equal=0, Greater=1.
-                let mut rows = credits(pop, &home, gf, result, week, &mut rng);
-                rows.extend(credits(pop, &away, ga, -result, week, &mut rng));
                 let local_week = crate::round_to_week(f.round);
                 let slot = f.round - crate::week_to_rounds(local_week).start;
                 let id = crate::workload::league_fixture_id(
@@ -430,8 +559,37 @@ impl SimulationSession {
                     f.round,
                     slot,
                 );
-                let mut doses = loads(&home, id, day);
-                doses.extend(loads(&away, id, day));
+                let seed = state.world_seed
+                    ^ ((state.season_number as u64) << 32)
+                    ^ ((league as u64) << 48)
+                    ^ ((f.round as u64) << 16)
+                    ^ MATCH_DOMAIN
+                    ^ (f.home as u64).wrapping_mul(HOME_DOMAIN)
+                    ^ (f.away as u64).wrapping_mul(AWAY_DOMAIN);
+                let mut rng = GoatRng::new(seed);
+                let (gf, ga, rows, doses, cards) = if state.realistic_npc {
+                    realistic_fixture(
+                        pop,
+                        [&squads[f.home], &squads[f.away]],
+                        [&world.clubs[f.home], &world.clubs[f.away]],
+                        &state,
+                        &card_index,
+                        &calendar_index,
+                        id,
+                        day,
+                        &mut rng,
+                    )
+                } else {
+                    let home = side(pop, squads[f.home].clone(), week);
+                    let away = side(pop, squads[f.away].clone(), week);
+                    let (gf, ga) = simulate_match(home.lines, away.lines, &mut rng);
+                    let result = gf.cmp(&ga) as i8;
+                    let mut rows = credits(pop, &home, gf, result, week, &mut rng);
+                    rows.extend(credits(pop, &away, ga, -result, week, &mut rng));
+                    let mut doses = loads(&home, id, day);
+                    doses.extend(loads(&away, id, day));
+                    (gf, ga, rows, doses, Vec::new())
+                };
                 pending.push((
                     DeepFixtureResult {
                         season: state.season_number,
@@ -445,10 +603,13 @@ impl SimulationSession {
                     },
                     rows,
                     doses,
+                    cards,
                 ));
             }
             let mut all_doses = Vec::new();
-            for (result, rows, doses) in pending {
+            let mut all_cards = Vec::new();
+            for (result, rows, doses, cards) in pending {
+                all_cards.extend(cards);
                 state = reduce(
                     state,
                     Intent::RecordOrbitMatch {
@@ -465,6 +626,13 @@ impl SimulationSession {
                 state = reduce(
                     state,
                     Intent::RecordDeepFixture { result },
+                    &mut GoatRng::new(0),
+                );
+            }
+            if !all_cards.is_empty() {
+                state = reduce(
+                    state,
+                    Intent::RecordNpcCards { cards: all_cards },
                     &mut GoatRng::new(0),
                 );
             }

@@ -1,0 +1,9 @@
+   Compiling goat-save v0.1.0 (/workspace/goat-rust/crates/goat-save)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.40s
+     Running tests/save_roundtrip.rs (target/debug/deps/save_roundtrip-d0724f6bc3e13bfb)
+
+running 1 test
+test dated_npc_minutes_survive_bytes_and_reject_bad_counts ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 43 filtered out; finished in 0.04s
+

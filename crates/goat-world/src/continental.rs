@@ -452,9 +452,21 @@ pub fn simulate_continental(
     tier: ContinentalTier,
 ) -> ContinentalSeasonResult {
     let qualified = qualify_clubs(world, tier1_tables, tier);
+    simulate_continental_with_qualified(world, world_seed, season, tier, &qualified)
+}
+
+/// A disjoint entrant list can be supplied by the ranked model while the legacy
+/// qualification API and RNG streams retain their original behavior.
+pub fn simulate_continental_with_qualified(
+    world: &WorldGenesis,
+    world_seed: u64,
+    season: u32,
+    tier: ContinentalTier,
+    qualified: &[ClubId],
+) -> ContinentalSeasonResult {
     debug_assert_eq!(qualified.len(), tier.group_stage_size());
 
-    let group_pools = draw_groups(world_seed, season, tier, &qualified);
+    let group_pools = draw_groups(world_seed, season, tier, qualified);
     let groups: Vec<[GroupStanding; 4]> = group_pools
         .into_iter()
         .enumerate()

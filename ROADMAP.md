@@ -1,5 +1,17 @@
 # ROADMAP — Become the GOAT
 
+Local resume update: [derived-state checkpoint](docs/LOCAL-RESUME-CHECKPOINT.md) —
+optional exact cache in save layout 28, unchanged SIM13; canonical journals and
+fallback reconstruction retained. Long-career file measurements are recorded there.
+
+Latest core update: [v13 runtime journals and reactive NPC matches](docs/CORE-STEPS-2-3.md) —
+lossless runtime storage, exact replay, score/fatigue substitutions, NPC discipline
+and named keeper coverage; save layout 27/SIM13. Core roadmap milestones 2 and 3
+are implemented for autonomous dated league fixtures; full competition calendar is next.
+
+Previous core update: [v11 five-season league coefficients](docs/LEAGUE-COEFFICIENTS.md) — normalized
+continental results, distinct cup entrants and ranked deep selection; save 25/SIM11.
+
 The current core enhancement sequence is recorded in
 [CORE-ENHANCEMENT-ROADMAP.md](docs/CORE-ENHANCEMENT-ROADMAP.md).
 

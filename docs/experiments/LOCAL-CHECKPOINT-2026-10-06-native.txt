@@ -1,0 +1,42 @@
+completed_season=1 cumulative_wall_us=1819491 rows=113088
+completed_season=2 cumulative_wall_us=6925868 rows=234650
+completed_season=3 cumulative_wall_us=14523866 rows=364762
+warm_game VmHWM:	   58496 kB
+warm_game VmRSS:	   58496 kB
+season=3 plain_save_bytes=2750980 checkpoint_bytes=19622490 full_save_bytes=22373478 export_us=153277 atomic_encode_write_us=28650 disk_decode_restore_first_query_us=170315 snapshot_exact=true rebuilds=0
+diagnostic_with_saved_data_and_two_sessions VmHWM:	  142988 kB
+diagnostic_with_saved_data_and_two_sessions VmRSS:	  124004 kB
+season=3 seed_replay_us=1529963
+season=3 next_season_fixture_us=1878048 next_equal=true active_youth_medical_equal=true
+completed_season=4 cumulative_wall_us=29108188 rows=500916
+completed_season=5 cumulative_wall_us=42463218 rows=636652
+completed_season=6 cumulative_wall_us=63970214 rows=772198
+completed_season=7 cumulative_wall_us=89217798 rows=907896
+completed_season=8 cumulative_wall_us=117651664 rows=1051308
+completed_season=9 cumulative_wall_us=150579141 rows=1198786
+completed_season=10 cumulative_wall_us=187231002 rows=1352496
+warm_game VmHWM:	  182732 kB
+warm_game VmRSS:	  182732 kB
+season=10 plain_save_bytes=10609912 checkpoint_bytes=51418735 full_save_bytes=62028655 export_us=476655 atomic_encode_write_us=112627 disk_decode_restore_first_query_us=610413 snapshot_exact=true rebuilds=0
+diagnostic_with_saved_data_and_two_sessions VmHWM:	  400012 kB
+diagnostic_with_saved_data_and_two_sessions VmRSS:	  335356 kB
+season=10 seed_replay_us=43517324
+season=10 next_season_fixture_us=21763662 next_equal=true active_youth_medical_equal=true
+completed_season=11 cumulative_wall_us=297148974 rows=1510424
+completed_season=12 cumulative_wall_us=341128087 rows=1675382
+completed_season=13 cumulative_wall_us=395388526 rows=1845584
+completed_season=14 cumulative_wall_us=452848925 rows=2022778
+completed_season=15 cumulative_wall_us=509533389 rows=2204798
+completed_season=16 cumulative_wall_us=568831875 rows=2395102
+completed_season=17 cumulative_wall_us=634805342 rows=2590308
+completed_season=18 cumulative_wall_us=706175729 rows=2792012
+completed_season=19 cumulative_wall_us=784797809 rows=2998504
+completed_season=20 cumulative_wall_us=860571735 rows=3211988
+warm_game VmHWM:	  400012 kB
+warm_game VmRSS:	  399080 kB
+season=20 plain_save_bytes=23900138 checkpoint_bytes=107572765 full_save_bytes=131472911 export_us=1055494 atomic_encode_write_us=307937 disk_decode_restore_first_query_us=1490425 snapshot_exact=true rebuilds=0
+diagnostic_with_saved_data_and_two_sessions VmHWM:	  887828 kB
+diagnostic_with_saved_data_and_two_sessions VmRSS:	  715884 kB
+season=20 seed_replay_us=177270943
+season=20 next_season_fixture_us=33961183 next_equal=true active_youth_medical_equal=true
+process_wall_seconds=1077.002051 user_seconds=1050.926604 system_seconds=1.314088 peak_rss_kib=887828 exit=0

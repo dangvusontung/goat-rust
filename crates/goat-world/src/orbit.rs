@@ -153,7 +153,7 @@ pub fn rebuild_population_dated(
     records: &[OrbitMatchRecord],
     loads: &[goat_core::history::NpcMatchLoad],
 ) -> Population {
-    rebuild_population_deep(seed, base_year, season, records, loads, &[])
+    rebuild_population_dated_model(seed, base_year, season, records, loads, &[], false)
 }
 
 /// Fresh counterpart of the retained deep session, including actual standings.
@@ -165,8 +165,24 @@ pub fn rebuild_population_deep(
     loads: &[goat_core::history::NpcMatchLoad],
     scores: &[goat_core::deep::DeepFixtureResult],
 ) -> Population {
+    rebuild_population_dated_model(seed, base_year, season, records, loads, scores, true)
+}
+#[allow(clippy::too_many_arguments)]
+fn rebuild_population_dated_model(
+    seed: u64,
+    base_year: u32,
+    season: u32,
+    records: &[OrbitMatchRecord],
+    loads: &[goat_core::history::NpcMatchLoad],
+    scores: &[goat_core::deep::DeepFixtureResult],
+    ranked: bool,
+) -> Population {
     let mut world = WorldGenesis::generate(seed);
-    let mut cache = crate::promotion::ReplayCache::new_dated(&world, seed, base_year);
+    let mut cache = if ranked {
+        crate::promotion::ReplayCache::new_ranked(&world, seed, base_year)
+    } else {
+        crate::promotion::ReplayCache::new_dated(&world, seed, base_year)
+    };
     for _ in 1..season {
         for load in loads {
             cache.record_match_load(*load);

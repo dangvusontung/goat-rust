@@ -334,6 +334,7 @@ pub struct ReplayCache {
     /// Highest season whose promotion/relegation has been resolved into `membership`.
     /// `0` means genesis-static membership (no season played yet).
     resolved_through: u32,
+    ranking: Option<crate::ranking::RankingHistory>,
     membership: Vec<Vec<ClubId>>,
     /// Population reused across the whole replay — genesis identity/potential columns are
     /// pure functions of `world_seed`, so one `Population` serves the entire cache lifetime.
@@ -363,6 +364,7 @@ impl ReplayCache {
         Self {
             world_seed,
             resolved_through: 0,
+            ranking: None,
             membership: world.static_league_clubs(),
             pop: crate::population::genesis(world_seed, world),
             club_budgets: world.clubs.iter().map(|c| c.budget).collect(),
@@ -401,6 +403,21 @@ impl ReplayCache {
         let mut cache = Self::new(world, world_seed);
         cache.pop = crate::population::genesis_dated(world_seed, world, base_year);
         cache
+    }
+    /// Ranked deep replay adds derived continental history; old factories stay frozen.
+    pub fn new_ranked(world: &WorldGenesis, seed: u64, base_year: u32) -> Self {
+        let mut cache = Self::new_dated(world, seed, base_year);
+        cache.ranking = Some(Default::default());
+        cache
+    }
+    pub fn league_scores(&self, world: &WorldGenesis) -> Vec<crate::deep::LeagueScore> {
+        self.ranking.as_ref().map_or_else(
+            || crate::deep::initial_scores(world),
+            |history| history.scores(world),
+        )
+    }
+    pub fn ranking_history(&self) -> Option<&crate::ranking::RankingHistory> {
+        self.ranking.as_ref()
     }
     pub fn record_match_load(&mut self, load: goat_core::history::NpcMatchLoad) -> bool {
         self.pop.record_match_load(load)
@@ -586,6 +603,10 @@ impl ReplayCache {
                 elapsed_weeks,
             )
         };
+        if let Some(history) = &mut self.ranking {
+            let year = crate::ranking::simulate_annual(world, &tables, self.world_seed, season);
+            assert!(history.record(year));
+        }
         self.managers.record_match_points(&match_points);
 
         // 3. Summer window: same three passes again, off the post-season-matches budget
@@ -1100,5 +1121,94 @@ mod tests {
         // Empty membership is a no-op (pre-first-promotion / pre-v18 saves).
         overlay_nation_membership(&mut world, nation, &[]);
         assert_eq!(world.leagues[top].clubs[0], promoted_club);
+    }
+}
+
+crate::checkpoint::fields!(ReplayCache {
+    world_seed,
+    resolved_through,
+    ranking,
+    membership,
+    pop,
+    club_budgets,
+    academy_boosts,
+    managers,
+    last_transfers
+});
+
+impl ReplayCache {
+    pub(crate) fn checkpoint_valid(
+        &self,
+        world: &WorldGenesis,
+        seed: u64,
+        season: u32,
+        calendar: goat_core::chronology::Chronology,
+    ) -> bool {
+        let clubs = world.clubs.len();
+        let managers = &self.managers;
+        if self.world_seed != seed
+            || self.resolved_through.checked_add(1) != Some(season)
+            || self.membership.len() != world.leagues.len()
+            || self.club_budgets.len() != clubs
+            || self.academy_boosts.len() != clubs
+            || self
+                .academy_boosts
+                .iter()
+                .any(|&v| v > crate::world::ACADEMY_BOOST_MAX)
+            || managers.club_manager.len() != clubs
+            || managers.managers.len() != clubs + crate::manager::MANAGER_POOL_SIZE
+            || !self.pop.checkpoint_valid(clubs, seed, calendar)
+        {
+            return false;
+        }
+        let mut seen = vec![false; clubs];
+        for (league, members) in self.membership.iter().enumerate() {
+            if members.len() != world.leagues[league].max_clubs as usize {
+                return false;
+            }
+            for &club in members {
+                if club >= clubs
+                    || seen[club]
+                    || world.clubs[club].nation != world.leagues[league].nation
+                {
+                    return false;
+                }
+                seen[club] = true;
+            }
+        }
+        let mut hired = vec![false; managers.managers.len()];
+        for &id in managers.club_manager.iter().chain(&managers.free_agents) {
+            let i = id as usize;
+            if i >= hired.len() || hired[i] {
+                return false;
+            }
+            hired[i] = true;
+        }
+        if !hired.into_iter().all(|v| v) {
+            return false;
+        }
+        if managers.managers.iter().enumerate().any(|(i, m)| {
+            m.id as usize != i
+                || m.recent_idx as usize >= crate::manager::MANAGER_FORM_WINDOW
+                || m.recent_points.iter().any(|&p| p > 3)
+        }) {
+            return false;
+        }
+        if let Some(history) = &self.ranking {
+            let years = history.years();
+            let count = (season.saturating_sub(1) as usize).min(crate::ranking::WINDOW);
+            if years.len() != count
+                || years.iter().enumerate().any(|(i, y)| {
+                    y.season != season - count as u32 + i as u32
+                        || y.points.len() != world.nations.len()
+                        || y.entrants.len() != world.nations.len()
+                })
+            {
+                return false;
+            }
+        } else {
+            return false;
+        }
+        true
     }
 }

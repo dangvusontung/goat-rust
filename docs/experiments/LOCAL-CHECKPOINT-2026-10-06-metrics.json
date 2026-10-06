@@ -1,0 +1,122 @@
+{
+  "architecture": "x86_64",
+  "seed": 42,
+  "base_year": 2023,
+  "save_layout": 28,
+  "simulation_model": 13,
+  "checkpoint_format": 1,
+  "scope": "PC league 59 plus top five ranked leagues; actual 20-season rounds",
+  "file_cache": "not flushed",
+  "full_gate": {
+    "passed": 625,
+    "failed": 0,
+    "ignored": 1
+  },
+  "seasons": [
+    {
+      "season": 3,
+      "plain_save_bytes": 2750980,
+      "checkpoint_bytes": 19622490,
+      "full_save_bytes": 22373478,
+      "export_us": 153277,
+      "atomic_encode_write_us": 28650,
+      "disk_decode_restore_first_query_us": 170315,
+      "snapshot_exact": true,
+      "rebuilds": 0,
+      "seed_replay_us": 1529963,
+      "next_season_fixture_us": 1878048,
+      "next_equal": true,
+      "active_youth_medical_equal": true,
+      "final_binary_fresh_process_samples": [
+        {
+          "load_us": 169597,
+          "resident_kib": 39384,
+          "peak_kib": 67816
+        },
+        {
+          "load_us": 164202,
+          "resident_kib": 39384,
+          "peak_kib": 67816
+        },
+        {
+          "load_us": 167644,
+          "resident_kib": 39488,
+          "peak_kib": 67792
+        }
+      ],
+      "median_load_us": 167644,
+      "max_load_peak_kib": 67816,
+      "median_loaded_resident_kib": 39384
+    },
+    {
+      "season": 10,
+      "plain_save_bytes": 10609912,
+      "checkpoint_bytes": 51418735,
+      "full_save_bytes": 62028655,
+      "export_us": 476655,
+      "atomic_encode_write_us": 112627,
+      "disk_decode_restore_first_query_us": 610413,
+      "snapshot_exact": true,
+      "rebuilds": 0,
+      "seed_replay_us": 43517324,
+      "next_season_fixture_us": 21763662,
+      "next_equal": true,
+      "active_youth_medical_equal": true,
+      "final_binary_fresh_process_samples": [
+        {
+          "load_us": 573988,
+          "resident_kib": 97436,
+          "peak_kib": 194196
+        },
+        {
+          "load_us": 582547,
+          "resident_kib": 97468,
+          "peak_kib": 194224
+        },
+        {
+          "load_us": 573256,
+          "resident_kib": 97392,
+          "peak_kib": 194212
+        }
+      ],
+      "median_load_us": 573988,
+      "max_load_peak_kib": 194224,
+      "median_loaded_resident_kib": 97436
+    },
+    {
+      "season": 20,
+      "plain_save_bytes": 23900138,
+      "checkpoint_bytes": 107572765,
+      "full_save_bytes": 131472911,
+      "export_us": 1055494,
+      "atomic_encode_write_us": 307937,
+      "disk_decode_restore_first_query_us": 1490425,
+      "snapshot_exact": true,
+      "rebuilds": 0,
+      "seed_replay_us": 177270943,
+      "next_season_fixture_us": 33961183,
+      "next_equal": true,
+      "active_youth_medical_equal": true,
+      "final_binary_fresh_process_samples": [
+        {
+          "load_us": 1316055,
+          "resident_kib": 204736,
+          "peak_kib": 417988
+        },
+        {
+          "load_us": 1353719,
+          "resident_kib": 204640,
+          "peak_kib": 417956
+        },
+        {
+          "load_us": 1347132,
+          "resident_kib": 204692,
+          "peak_kib": 417944
+        }
+      ],
+      "median_load_us": 1347132,
+      "max_load_peak_kib": 417988,
+      "median_loaded_resident_kib": 204692
+    }
+  ]
+}

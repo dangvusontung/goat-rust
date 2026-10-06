@@ -721,3 +721,18 @@ mod tests {
         assert_eq!(favor_drift(50, 50), 0);
     }
 }
+
+crate::checkpoint::fields!(ManagerPool {
+    managers,
+    club_manager,
+    free_agents
+});
+crate::checkpoint::fields!(Manager {
+    id,
+    name,
+    identity_bias,
+    recent_points,
+    recent_idx,
+    tenure_start_season,
+    matches_played
+});

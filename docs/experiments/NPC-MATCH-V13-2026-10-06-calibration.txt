@@ -1,0 +1,6 @@
+equal matches=20000 goals_home=28923 goals_away=28010 home_draw_away=[7716, 5057, 7227] yellows=54466 dismissals=3896 direct_reds=745 substitutions=160001 goalless=929
+weak_away matches=20000 goals_home=46932 goals_away=14670 home_draw_away=[14852, 3318, 1830] yellows=0 dismissals=0 direct_reds=0 substitutions=160000 goalless=745
+fatigued_away matches=20000 goals_home=34475 goals_away=22400 home_draw_away=[10360, 4807, 4833] yellows=0 dismissals=0 direct_reds=0 substitutions=160000 goalless=945
+poor_keeper_away matches=20000 goals_home=32114 goals_away=28120 home_draw_away=[8488, 4860, 6652] yellows=0 dismissals=0 direct_reds=0 substitutions=160000 goalless=781
+control_no_cards matches=20000 goals_home=28939 goals_away=28140 home_draw_away=[7687, 5108, 7205] yellows=0 dismissals=0 direct_reds=0 substitutions=160000 goalless=943
+total_us=1098383

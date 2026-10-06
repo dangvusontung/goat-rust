@@ -1,0 +1,12 @@
+{"run": 1, "native": "x86_64 Linux", "maxrss_KiB": 33320}
+cold_us=4017
+leagues=6 fixtures=2280 dose_rows=113088 round_median_us=28153 round_max_us=53990 season_us=1076421
+boundary_us=774997 players=29235 rebuilds=1
+{"run": 2, "native": "x86_64 Linux", "maxrss_KiB": 33320}
+cold_us=5006
+leagues=6 fixtures=2280 dose_rows=113088 round_median_us=27894 round_max_us=53513 season_us=1078145
+boundary_us=768418 players=29235 rebuilds=1
+{"run": 3, "native": "x86_64 Linux", "maxrss_KiB": 33320}
+cold_us=4343
+leagues=6 fixtures=2280 dose_rows=113088 round_median_us=28118 round_max_us=53645 season_us=1072620
+boundary_us=778839 players=29235 rebuilds=1

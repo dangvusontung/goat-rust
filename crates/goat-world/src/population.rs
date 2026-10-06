@@ -56,6 +56,7 @@ pub struct Population {
     scheduled_load: bool,
     chronology: Option<goat_core::chronology::Chronology>,
     dated_fixtures: RefCell<Vec<Vec<crate::workload::MatchDose>>>,
+    fixture_days: RefCell<std::collections::BTreeMap<u64, u32>>,
     fixture_seasons: std::cell::Cell<u32>,
     calendar_through_day: std::cell::Cell<u32>,
     week_cycles: RefCell<Vec<u32>>,
@@ -80,6 +81,8 @@ pub struct Population {
     pub nation: Vec<u8>,
     /// Primary position: 0 = Defender, 1 = Midfielder, 2 = Forward.
     pub position: Vec<u8>,
+    /// NPC-only keeping specialization; legacy outfield paths ignore this derived flag.
+    pub goalkeeper: Vec<bool>,
     /// Age in weeks at genesis (birth data is the stored residue; age advances by date).
     pub birth_age_weeks: Vec<u32>,
     /// Headline potential OVR (1–99). Cached identity column; the per-attribute potential
@@ -198,6 +201,7 @@ pub fn genesis(world_seed: u64, world: &WorldGenesis) -> Population {
             pop.club.push(club_id as u16);
             pop.nation.push(club.nation as u8);
             pop.position.push(position);
+            pop.goalkeeper.push(slot + 2 >= club.squad_size as usize);
             pop.birth_age_weeks.push(birth_age_weeks);
             pop.potential_ovr.push(potential_ovr);
             pop.intake_week.push(0);
@@ -245,7 +249,7 @@ pub fn genesis_scheduled(world_seed: u64, world: &WorldGenesis) -> Population {
     let mut pop = genesis_lived(world_seed, world);
     pop.scheduled_load = true;
     pop.load_world_seed = world_seed;
-    pop.observed_loads.heads = vec![None; pop.len()];
+    pop.observed_loads.heads = vec![Vec::new(); pop.len()];
     pop
 }
 
@@ -562,6 +566,16 @@ impl Population {
                     let day = crate::calendar::dated_fixture_day(c, season, round);
                     let w = crate::calendar::round_to_week(round);
                     let slot = round - crate::calendar::week_to_rounds(w).start;
+                    let fixture_id = crate::workload::league_fixture_id(
+                        self.load_world_seed,
+                        season,
+                        round,
+                        slot,
+                    );
+                    self.fixture_days
+                        .borrow_mut()
+                        .entry(fixture_id)
+                        .or_insert(day);
                     grid[(day / 7) as usize].push(crate::workload::MatchDose {
                         competition_id: goat_core::calendar_loop::LEAGUE_COMPETITION_ID,
                         fixture_id: crate::workload::league_fixture_id(
@@ -638,24 +652,16 @@ impl Population {
         {
             return false;
         }
-        if let Some(old) = self
-            .observed_match_loads(idx)
-            .iter()
-            .find(|old| old.fixture_id == load.fixture_id)
-        {
-            return *old == load;
+        if let Some(old) = self.observed_loads.find(idx, load.fixture_id) {
+            return old == load;
         }
-        // Retain state before the earliest affected period. A reschedule suppresses
-        // the original planned date, so using only the new date would reuse stale health.
+        // Look up the original date without rescanning every historical fixture.
         let affected_week = self.chronology.map(|_| {
             self.ensure_calendar_week(load.epoch_day / 7);
-            self.dated_fixtures
+            self.fixture_days
                 .borrow()
-                .iter()
-                .flatten()
-                .filter(|dose| dose.fixture_id == load.fixture_id)
-                .map(|dose| dose.epoch_day)
-                .min()
+                .get(&load.fixture_id)
+                .copied()
                 .unwrap_or(load.epoch_day)
                 .min(load.epoch_day)
                 / 7
@@ -702,6 +708,7 @@ impl Population {
         let mut health = NpcHealthState {
             energy: self.exposure_at(idx, start).energy,
             injury_weeks: 0,
+            last_return_week: None,
             available_mask: 0,
             elapsed_weeks: 0,
             last_match_day: None,
@@ -828,6 +835,7 @@ impl Population {
         let mut health = crate::npc_life::NpcHealthState {
             energy: self.exposure_at(idx, start).energy,
             injury_weeks: 0,
+            last_return_week: None,
             available_mask: 0,
             elapsed_weeks: 0,
             last_match_day: None,
@@ -872,21 +880,79 @@ impl Population {
         idx: usize,
         through: u32,
     ) -> Vec<crate::npc_life::NpcInjuryEpisode> {
-        self.training_history(
+        let records = self.training_history(
             idx,
             self.intake_week.get(idx).copied().unwrap_or(0),
             through,
-        )
-        .into_iter()
-        .filter(|w| w.new_injury)
-        .map(|w| crate::npc_life::NpcInjuryEpisode {
-            onset_week: w.week + u32::from(self.chronology.is_some()),
-            expected_recovery_week: w.week + 1 + w.injury_after,
-            recovered_week: (w.week + 1 + w.injury_after <= through.min(self.retirement_week(idx)))
-                .then_some(w.week + 1 + w.injury_after),
-            duration_weeks: w.injury_after,
-        })
-        .collect()
+        );
+        let mut episodes: Vec<crate::npc_life::NpcInjuryEpisode> = Vec::new();
+        for record in records {
+            if record.injury_before > 0 && record.injury_after == 0 {
+                if let Some(episode) = episodes.last_mut() {
+                    episode.recovered_week = Some(record.week + 1);
+                }
+            }
+            if record.new_injury {
+                episodes.push(crate::npc_life::NpcInjuryEpisode {
+                    onset_week: record.week + u32::from(self.chronology.is_some()),
+                    expected_recovery_week: record.week + 1 + record.injury_after,
+                    recovered_week: None,
+                    duration_weeks: record.injury_after,
+                });
+            }
+        }
+        episodes
+    }
+
+    /// History-derived readout for a player of interest, not a squad-selection hot path.
+    pub fn medical_status(
+        &self,
+        idx: usize,
+        week: u32,
+    ) -> Option<goat_core::medical::MedicalStatus> {
+        if idx >= self.len() || !self.sampled_health {
+            return None;
+        }
+        if week < self.intake_week[idx] || week > self.retirement_week(idx) {
+            return None;
+        }
+        let view = self.shared_view(idx, week);
+        let returned =
+            self.life_cache.borrow()[idx].and_then(|(_, health)| health.last_return_week);
+        Some(goat_core::medical::MedicalStatus::at_week(
+            week,
+            view.energy,
+            view.injury_weeks,
+            returned,
+        ))
+    }
+
+    pub fn match_energy(&self, idx: usize, day: u32) -> u8 {
+        let mut energy = self.energy_at(idx, day / 7).to_int();
+        let doses = self.fixture_minutes_for_week(idx, day / 7);
+        for date in day / 7 * 7..day {
+            let minutes: u32 = doses
+                .iter()
+                .filter(|d| d.epoch_day == date)
+                .map(|d| d.minutes as u32)
+                .sum();
+            energy = if minutes > 0 {
+                (energy - (minutes * 20 / 90) as i32).max(0)
+            } else {
+                (energy + 6).min(100)
+            };
+        }
+        energy.clamp(0, 100) as u8
+    }
+
+    pub fn goalkeeper_skill(&self, idx: usize, week: u32) -> u8 {
+        use goat_core::attrs::AttrId::*;
+        let view = self.shared_view(idx, week);
+        let weighted = view.current[Reactions as usize] * Fixed::raw(500)
+            + view.current[Agility as usize] * Fixed::raw(200)
+            + view.current[Jumping as usize] * Fixed::raw(150)
+            + view.current[Composure as usize] * Fixed::raw(150);
+        weighted.to_int().clamp(1, 99) as u8
     }
 
     pub(crate) fn appearance_quota(&self, idx: usize, week: u32, quota: u32) -> u32 {
@@ -947,7 +1013,7 @@ impl Population {
         self.shared_view(idx, week).injury_weeks == 0
     }
 
-    fn shared_view(&self, idx: usize, elapsed_weeks: u32) -> PlayerView {
+    pub(crate) fn shared_view(&self, idx: usize, elapsed_weeks: u32) -> PlayerView {
         use goat_core::attrs::ATTR_ARCHETYPES;
         use goat_core::development::{project_attribute, DevelopmentPlan};
         use goat_core::tuning::INTENSITY_CEILING_MED;
@@ -1519,12 +1585,19 @@ pub fn apply_youth_intake(
     let elapsed_weeks = pop.season_end_week(season);
     let mut total_added = 0u32;
 
+    let mut active_counts = vec![0u32; world.clubs.len()];
+    let mut keepers = vec![0u32; world.clubs.len()];
+    for idx in 0..pop.len() {
+        if !pop.is_retired(idx, elapsed_weeks) {
+            let club = pop.club[idx] as usize;
+            active_counts[club] += 1;
+            keepers[club] += u32::from(pop.goalkeeper.get(idx).copied().unwrap_or(false));
+        }
+    }
     for club in &world.clubs {
         let target = club.squad_size as u32;
-        let ceiling = target + target / 5; // +20%
-        let active = (0..pop.len())
-            .filter(|&i| pop.club[i] as usize == club.id && !pop.is_retired(i, elapsed_weeks))
-            .count() as u32;
+        let ceiling = target + target / 5;
+        let active = active_counts[club.id];
         if active >= ceiling {
             continue;
         }
@@ -1547,6 +1620,9 @@ pub fn apply_youth_intake(
             pop.club.push(club.id as u16);
             pop.nation.push(club.nation as u8);
             pop.position.push(position);
+            let keeper = keepers[club.id] < 2;
+            keepers[club.id] += u32::from(keeper);
+            pop.goalkeeper.push(keeper);
             pop.birth_age_weeks.push(INTAKE_AGE_YEARS * 52);
             pop.potential_ovr.push(potential_ovr);
             pop.intake_week.push(elapsed_weeks);
@@ -1572,7 +1648,7 @@ pub fn apply_youth_intake(
                         pop.life_cache.get_mut().push(None);
                         pop.availability_cache.get_mut().push(None);
                         if pop.scheduled_load {
-                            pop.observed_loads.heads.push(None);
+                            pop.observed_loads.heads.push(Vec::new());
                         }
                     }
                 }
@@ -2501,6 +2577,53 @@ mod tests {
 mod calendar_tests {
     use super::*;
     #[test]
+    fn observed_recovery_crosses_seasons_without_forecasting_retired_players() {
+        let world = WorldGenesis::generate(42);
+        let mut pop = genesis_dated(42, &world, 2023);
+        let boundary = pop
+            .chronology()
+            .unwrap()
+            .frame(1)
+            .next_preparation_start
+            .div_ceil(7);
+        let (idx, episode) = (0..128)
+            .find_map(|idx| {
+                pop.injury_history(idx, boundary + 12)
+                    .into_iter()
+                    .find(|e| e.onset_week <= boundary && e.expected_recovery_week > boundary)
+                    .map(|e| (idx, e))
+            })
+            .expect("fixture seed has an injury spanning the annual boundary");
+        let active = pop.injury_history(idx, boundary);
+        let active = active
+            .iter()
+            .find(|e| e.onset_week == episode.onset_week)
+            .unwrap();
+        assert_eq!(active.recovered_week, None);
+        assert!(matches!(
+            pop.medical_status(idx, boundary).unwrap().phase,
+            goat_core::medical::RecoveryPhase::Injured { .. }
+        ));
+        let returned = episode.recovered_week.unwrap();
+        assert_eq!(returned, episode.expected_recovery_week);
+        assert!(matches!(
+            pop.medical_status(idx, returned).unwrap().phase,
+            goat_core::medical::RecoveryPhase::Returning {
+                weeks_since_return: 0
+            }
+        ));
+        let rows = pop.training_history(idx, returned - 1, returned);
+        assert!(rows[0].injury_before > 0 && rows[0].injury_after == 0);
+        // Stop medical simulation at retirement, before expected recovery.
+        pop.retirement_days[idx] = boundary * 7;
+        pop.shared_cache.get_mut().fill(None);
+        pop.life_cache.get_mut().fill(None);
+        let stopped = pop.injury_history(idx, boundary + 30);
+        assert_eq!(stopped.last().unwrap().recovered_week, None);
+        assert!(pop.medical_status(pop.len(), boundary).is_none());
+    }
+
+    #[test]
     fn summer_has_no_league_plan_but_observed_national_load_and_june_tail_count() {
         let world = WorldGenesis::generate(42);
         let mut pop = genesis_dated(42, &world, 2023);
@@ -2563,5 +2686,115 @@ mod calendar_tests {
                 );
             }
         }
+    }
+}
+
+crate::checkpoint::fields!(Population {
+    dated_exposure,
+    sampled_health,
+    scheduled_load,
+    chronology,
+    dated_fixtures,
+    fixture_days,
+    fixture_seasons,
+    calendar_through_day,
+    week_cycles,
+    entry_days,
+    entry_cycles,
+    retirement_days,
+    load_world_seed,
+    observed_loads,
+    availability_cache,
+    life_cache,
+    exposures,
+    shared_facilities,
+    shared_cache,
+    seed,
+    club,
+    nation,
+    position,
+    goalkeeper,
+    birth_age_weeks,
+    potential_ovr,
+    intake_week,
+    career_goals,
+    career_apps,
+    career_titles,
+    form
+});
+
+impl Population {
+    pub(crate) fn checkpoint_valid(
+        &self,
+        clubs: usize,
+        seed: u64,
+        calendar: goat_core::chronology::Chronology,
+    ) -> bool {
+        let n = self.len();
+        if n == 0
+            || !self.dated_exposure
+            || !self.sampled_health
+            || !self.scheduled_load
+            || self.load_world_seed != seed
+            || self.chronology != Some(calendar)
+            || [
+                self.club.len(),
+                self.nation.len(),
+                self.position.len(),
+                self.goalkeeper.len(),
+                self.birth_age_weeks.len(),
+                self.potential_ovr.len(),
+                self.intake_week.len(),
+                self.career_goals.len(),
+                self.career_apps.len(),
+                self.career_titles.len(),
+                self.form.len(),
+                self.shared_facilities.len(),
+                self.entry_days.len(),
+                self.entry_cycles.len(),
+                self.retirement_days.len(),
+                self.availability_cache.borrow().len(),
+                self.life_cache.borrow().len(),
+                self.shared_cache.borrow().len(),
+            ]
+            .iter()
+            .any(|&len| len != n)
+            || self.club.iter().any(|&c| c as usize >= clubs)
+            || self.position.iter().any(|&p| p > 2)
+            || self.potential_ovr.iter().any(|&p| !(1..=99).contains(&p))
+            || self
+                .nation
+                .iter()
+                .any(|&v| v as usize >= crate::world::NUM_NATIONS)
+            || self.week_cycles.borrow().len() != self.dated_fixtures.borrow().len()
+            || !self.observed_loads.checkpoint_valid(n)
+            || !self.exposures.checkpoint_valid(n)
+        {
+            return false;
+        }
+        let cached = self.shared_cache.borrow();
+        let life = self.life_cache.borrow();
+        for idx in 0..n {
+            if let Some((week, attrs, ovr)) = cached[idx] {
+                if week < self.intake_week[idx]
+                    || ovr > 99
+                    || attrs
+                        .iter()
+                        .any(|&a| a < Fixed::MIN_ATTR || a > Fixed::MAX_ATTR)
+                {
+                    return false;
+                }
+                if life[idx].is_none_or(|(date, health)| {
+                    date != week
+                        || health.energy < Fixed::ZERO
+                        || health.energy > Fixed::from_int(100)
+                }) {
+                    return false;
+                }
+            } else if life[idx].is_some() {
+                return false;
+            }
+        }
+        true
     }
 }

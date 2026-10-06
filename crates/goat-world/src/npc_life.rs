@@ -13,6 +13,7 @@ use goat_rng::{GoatRng, RngSource};
 pub struct NpcHealthState {
     pub energy: Fixed,
     pub injury_weeks: u32,
+    pub(crate) last_return_week: Option<u32>,
     pub(crate) available_mask: u64,
     pub(crate) elapsed_weeks: u32,
     pub(crate) last_match_day: Option<u32>,
@@ -341,6 +342,9 @@ fn tick_internal(
         & ((1u64 << 52) - 1);
     health.elapsed_weeks += 1;
     record.energy_after = health.energy;
+    if before.injury_weeks > 0 && health.injury_weeks == 0 {
+        health.last_return_week = Some(week + 1);
+    }
     record.injury_after = health.injury_weeks;
     record
 }
@@ -366,6 +370,7 @@ mod tests {
         let mut state = NpcHealthState {
             energy: Fixed::from_int(20),
             injury_weeks: 2,
+            last_return_week: None,
             available_mask: 0,
             elapsed_weeks: 0,
             last_match_day: None,
@@ -412,6 +417,7 @@ mod tests {
                 let mut h = NpcHealthState {
                     energy: Fixed::from_int(75),
                     injury_weeks: 0,
+                    last_return_week: None,
                     available_mask: 0,
                     elapsed_weeks: 0,
                     last_match_day: None,
@@ -433,6 +439,7 @@ mod tests {
         let mut state = NpcHealthState {
             energy: Fixed::from_int(75),
             injury_weeks: 0,
+            last_return_week: None,
             available_mask: 0,
             elapsed_weeks: 0,
             last_match_day: None,
@@ -483,6 +490,7 @@ mod workload_tests {
         NpcHealthState {
             energy: Fixed::from_int(75),
             injury_weeks: 0,
+            last_return_week: None,
             available_mask: 0,
             elapsed_weeks: 0,
             last_match_day: None,
@@ -553,3 +561,13 @@ mod workload_tests {
         assert_eq!(r.minutes_played, 20);
     }
 }
+
+crate::checkpoint::fields!(NpcHealthState {
+    energy,
+    injury_weeks,
+    last_return_week,
+    available_mask,
+    elapsed_weeks,
+    last_match_day,
+    season_apps
+});

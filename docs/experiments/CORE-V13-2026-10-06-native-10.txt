@@ -1,0 +1,29 @@
+season_1_before_codec VmHWM:	   33328 kB
+season_1_before_codec VmRSS:	   27008 kB
+season_2_before_codec VmHWM:	   43964 kB
+season_2_before_codec VmRSS:	   42776 kB
+season_3_before_codec VmHWM:	   60920 kB
+season_3_before_codec VmRSS:	   60920 kB
+season_4_before_codec VmHWM:	   80624 kB
+season_4_before_codec VmRSS:	   69304 kB
+season_5_before_codec VmHWM:	   93016 kB
+season_5_before_codec VmRSS:	   83324 kB
+season_6_before_codec VmHWM:	  115712 kB
+season_6_before_codec VmRSS:	  103924 kB
+season_7_before_codec VmHWM:	  122116 kB
+season_7_before_codec VmRSS:	  108180 kB
+season_8_before_codec VmHWM:	  139024 kB
+season_8_before_codec VmRSS:	  139024 kB
+season_9_before_codec VmHWM:	  166360 kB
+season_9_before_codec VmRSS:	  147860 kB
+season_10_before_codec VmHWM:	  188472 kB
+season_10_before_codec VmRSS:	  188472 kB
+season=10 loads=1352496 credits=729472 old_journal_bytes=37595856 compact_journal_bytes=8153650 whole_save_bytes=10609912 encode_us=57835 decode_us=34720
+simulation_and_codec_us=180201243
+single_session_after_codec VmHWM:	  258204 kB
+single_session_after_codec VmRSS:	  194988 kB
+single_session_rows=1352496 cards=66355 scope_count=10
+cold_resume_us=43253669 loads_in_memory=1352496 replay_equal=true
+two_sessions_cold_replay VmHWM:	  258204 kB
+two_sessions_cold_replay VmRSS:	  243760 kB
+process_wall_seconds=225.203677 user_seconds=224.393277 system_seconds=0.778881 peak_rss_kib=258204 exit=0

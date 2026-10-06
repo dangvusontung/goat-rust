@@ -163,3 +163,58 @@ mod tests {
         }
     }
 }
+
+crate::checkpoint::fields!(ExposureColumns {
+    heads,
+    starts,
+    workload,
+    facilities,
+    energy,
+    intensity,
+    focus,
+    lifestyle,
+    duration,
+    previous
+});
+
+impl ExposureColumns {
+    pub(crate) fn checkpoint_valid(&self, players: usize) -> bool {
+        let n = self.starts.len();
+        if self.heads.len() != players
+            || [
+                self.workload.len(),
+                self.facilities.len(),
+                self.energy.len(),
+                self.intensity.len(),
+                self.focus.len(),
+                self.lifestyle.len(),
+                self.duration.len(),
+                self.previous.len(),
+            ]
+            .iter()
+            .any(|&len| len != n)
+        {
+            return false;
+        }
+        for i in 0..n {
+            if self.previous[i].is_some_and(|p| p >= i || self.starts[p] > self.starts[i]) {
+                return false;
+            }
+            if !(NpcExposure {
+                start_week: self.starts[i],
+                workload_apps: self.workload[i],
+                facilities: self.facilities[i],
+                energy: self.energy[i],
+                intensity: self.intensity[i],
+                focus_share: self.focus[i],
+                lifestyle: self.lifestyle[i],
+                injury_duration_pct: self.duration[i],
+            })
+            .valid()
+            {
+                return false;
+            }
+        }
+        self.heads.iter().all(|h| h.is_none_or(|i| i < n))
+    }
+}

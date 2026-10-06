@@ -1,0 +1,5 @@
+season=1 loads=113088 credits=59139 old_journal_bytes=3131057 compact_journal_bytes=583442 whole_save_bytes=657429 encode_us=3437 decode_us=1846
+season=2 loads=234536 credits=118308 old_journal_bytes=6462956 compact_journal_bytes=1198883 whole_save_bytes=1345874 encode_us=8228 decode_us=5101
+season=3 loads=364306 credits=177422 old_journal_bytes=9994198 compact_journal_bytes=1845282 whole_save_bytes=2065277 encode_us=12306 decode_us=7480
+cold_resume_us=1738334 loads_in_memory=364306 replay_equal=true
+{"native": "x86_64 Linux", "maxrss_KiB": 83776, "exit_code": 0}

@@ -1,0 +1,49 @@
+season_1_before_codec VmHWM:	   33392 kB
+season_1_before_codec VmRSS:	   26944 kB
+season_2_before_codec VmHWM:	   44536 kB
+season_2_before_codec VmRSS:	   43384 kB
+season_3_before_codec VmHWM:	   59628 kB
+season_3_before_codec VmRSS:	   59628 kB
+season_4_before_codec VmHWM:	   82280 kB
+season_4_before_codec VmRSS:	   70960 kB
+season_5_before_codec VmHWM:	   92856 kB
+season_5_before_codec VmRSS:	   83284 kB
+season_6_before_codec VmHWM:	  114864 kB
+season_6_before_codec VmRSS:	  114864 kB
+season_7_before_codec VmHWM:	  124240 kB
+season_7_before_codec VmRSS:	  110476 kB
+season_8_before_codec VmHWM:	  142084 kB
+season_8_before_codec VmRSS:	  142084 kB
+season_9_before_codec VmHWM:	  163900 kB
+season_9_before_codec VmRSS:	  157304 kB
+season_10_before_codec VmHWM:	  179732 kB
+season_10_before_codec VmRSS:	  171244 kB
+season_11_before_codec VmHWM:	  205476 kB
+season_11_before_codec VmRSS:	  205476 kB
+season_12_before_codec VmHWM:	  219292 kB
+season_12_before_codec VmRSS:	  207576 kB
+season_13_before_codec VmHWM:	  230148 kB
+season_13_before_codec VmRSS:	  189688 kB
+season_14_before_codec VmHWM:	  246640 kB
+season_14_before_codec VmRSS:	  241696 kB
+season_15_before_codec VmHWM:	  290228 kB
+season_15_before_codec VmRSS:	  256216 kB
+season_16_before_codec VmHWM:	  306664 kB
+season_16_before_codec VmRSS:	  269596 kB
+season_17_before_codec VmHWM:	  318312 kB
+season_17_before_codec VmRSS:	  278236 kB
+season_18_before_codec VmHWM:	  338372 kB
+season_18_before_codec VmRSS:	  295144 kB
+season_19_before_codec VmHWM:	  356396 kB
+season_19_before_codec VmRSS:	  310024 kB
+season_20_before_codec VmHWM:	  396400 kB
+season_20_before_codec VmRSS:	  346684 kB
+season=20 loads=3211988 credits=1458988 old_journal_bytes=87359916 compact_journal_bytes=19002386 whole_save_bytes=23900138 encode_us=158476 decode_us=83419
+simulation_and_codec_us=759571417
+single_session_after_codec VmHWM:	  595700 kB
+single_session_after_codec VmRSS:	  370076 kB
+single_session_rows=3211988 cards=132180 scope_count=20
+cold_resume_us=175884096 loads_in_memory=3211988 replay_equal=true
+two_sessions_cold_replay VmHWM:	  595700 kB
+two_sessions_cold_replay VmRSS:	  504692 kB
+process_wall_seconds=939.496854 user_seconds=934.824909 system_seconds=4.500898 peak_rss_kib=595700 exit=0

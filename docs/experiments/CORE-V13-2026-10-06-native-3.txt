@@ -1,0 +1,15 @@
+season_1_before_codec VmHWM:	   33328 kB
+season_1_before_codec VmRSS:	   26880 kB
+season_2_before_codec VmHWM:	   44808 kB
+season_2_before_codec VmRSS:	   43616 kB
+season_3_before_codec VmHWM:	   60548 kB
+season_3_before_codec VmRSS:	   55480 kB
+season=3 loads=364762 credits=218813 old_journal_bytes=10294879 compact_journal_bytes=2014304 whole_save_bytes=2750980 encode_us=13175 decode_us=9299
+simulation_and_codec_us=14012797
+single_session_after_codec VmHWM:	   75912 kB
+single_session_after_codec VmRSS:	   59016 kB
+single_session_rows=364762 cards=19872 scope_count=3
+cold_resume_us=1560586 loads_in_memory=364762 replay_equal=true
+two_sessions_cold_replay VmHWM:	   86968 kB
+two_sessions_cold_replay VmRSS:	   86968 kB
+process_wall_seconds=16.004218 user_seconds=15.864646 system_seconds=0.135709 peak_rss_kib=86800 exit=0

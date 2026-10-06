@@ -125,37 +125,106 @@ impl Schedule {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct LoadColumns {
-    pub heads: Vec<Option<usize>>,
-    ids: Vec<u64>,
-    days: Vec<u32>,
+    pub heads: Vec<Vec<u32>>,
+    fixtures: Vec<(u64, u32, u32)>,
+    fixture_index: std::collections::BTreeMap<(u64, u32, u32), u32>,
+    rows: Vec<u32>,
     minutes: Vec<u16>,
-    competitions: Vec<u32>,
-    previous: Vec<Option<usize>>,
 }
 impl LoadColumns {
-    pub fn history(&self, idx: usize) -> Vec<NpcMatchLoad> {
-        let mut out = Vec::new();
-        let mut head = self.heads[idx];
-        while let Some(i) = head {
-            out.push(NpcMatchLoad {
-                competition_id: self.competitions[i],
-                pop_idx: idx as u32,
-                fixture_id: self.ids[i],
-                epoch_day: self.days[i],
-                minutes: self.minutes[i],
-            });
-            head = self.previous[i];
+    fn row(&self, idx: usize, row: u32) -> NpcMatchLoad {
+        let i = row as usize;
+        let (fixture_id, competition_id, epoch_day) = self.fixtures[self.rows[i] as usize];
+        NpcMatchLoad {
+            pop_idx: idx as u32,
+            fixture_id,
+            competition_id,
+            epoch_day,
+            minutes: self.minutes[i],
         }
+    }
+    pub fn find(&self, idx: usize, fixture_id: u64) -> Option<NpcMatchLoad> {
+        self.heads[idx]
+            .binary_search_by_key(&fixture_id, |&row| {
+                self.fixtures[self.rows[row as usize] as usize].0
+            })
+            .ok()
+            .map(|slot| self.row(idx, self.heads[idx][slot]))
+    }
+    pub fn history(&self, idx: usize) -> Vec<NpcMatchLoad> {
+        let mut out: Vec<_> = self.heads[idx]
+            .iter()
+            .map(|&row| self.row(idx, row))
+            .collect();
         out.sort_by_key(|l| (l.epoch_day, l.fixture_id));
         out
     }
-    pub fn push(&mut self, l: NpcMatchLoad) {
-        let idx = l.pop_idx as usize;
-        self.previous.push(self.heads[idx]);
-        self.heads[idx] = Some(self.ids.len());
-        self.ids.push(l.fixture_id);
-        self.competitions.push(l.competition_id);
-        self.days.push(l.epoch_day);
-        self.minutes.push(l.minutes);
+    pub fn push(&mut self, load: NpcMatchLoad) {
+        let key = (load.fixture_id, load.competition_id, load.epoch_day);
+        let fixture = *self.fixture_index.entry(key).or_insert_with(|| {
+            let index = u32::try_from(self.fixtures.len()).expect("fixture dictionary exceeds u32");
+            self.fixtures.push(key);
+            index
+        });
+        let idx = load.pop_idx as usize;
+        let row = u32::try_from(self.rows.len()).expect("workload exceeds u32");
+        let slot = self.heads[idx]
+            .binary_search_by_key(&load.fixture_id, |&r| {
+                self.fixtures[self.rows[r as usize] as usize].0
+            })
+            .unwrap_or_else(|i| i);
+        self.heads[idx].insert(slot, row);
+        self.rows.push(fixture);
+        self.minutes.push(load.minutes);
+    }
+}
+
+crate::checkpoint::fields!(LoadColumns {
+    heads,
+    fixtures,
+    fixture_index,
+    rows,
+    minutes
+});
+crate::checkpoint::fields!(MatchDose {
+    competition_id,
+    fixture_id,
+    epoch_day,
+    minutes,
+    observed
+});
+
+impl LoadColumns {
+    pub(crate) fn checkpoint_valid(&self, players: usize) -> bool {
+        if self.heads.len() != players
+            || self.rows.len() != self.minutes.len()
+            || self.fixture_index.len() != self.fixtures.len()
+            || self.minutes.iter().any(|&m| m > 120)
+            || self.rows.iter().any(|&r| r as usize >= self.fixtures.len())
+        {
+            return false;
+        }
+        for (i, &key) in self.fixtures.iter().enumerate() {
+            if key.1 == 0 || self.fixture_index.get(&key) != Some(&(i as u32)) {
+                return false;
+            }
+        }
+        let mut seen = vec![false; self.rows.len()];
+        for head in &self.heads {
+            let mut last = None;
+            for &row in head {
+                let idx = row as usize;
+                if idx >= seen.len() || seen[idx] {
+                    return false;
+                }
+                seen[idx] = true;
+                let id = self.fixtures[self.rows[idx] as usize].0;
+                if last.is_some_and(|old| id <= old) {
+                    return false;
+                }
+                last = Some(id);
+            }
+        }
+        seen.into_iter().all(|v| v)
     }
 }

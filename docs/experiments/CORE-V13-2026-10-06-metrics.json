@@ -1,0 +1,43 @@
+{
+  "architecture": "x86_64 Linux",
+  "seed": 42,
+  "base_year": 2023,
+  "deep_leagues": 6,
+  "pc_absent": true,
+  "single_samples": true,
+  "measurements": [
+    {
+      "seasons": 3,
+      "single_session_rss_kib": 55480,
+      "single_session_peak_kib": 60548,
+      "codec_peak_kib": 75912,
+      "two_session_peak_kib": 86968,
+      "encode_us": 13175,
+      "decode_us": 9299,
+      "cold_resume_us": 1560586,
+      "simulation_and_codec_us": 14012797
+    },
+    {
+      "seasons": 10,
+      "single_session_rss_kib": 188472,
+      "single_session_peak_kib": 188472,
+      "codec_peak_kib": 258204,
+      "two_session_peak_kib": 258204,
+      "encode_us": 57835,
+      "decode_us": 34720,
+      "cold_resume_us": 43253669,
+      "simulation_and_codec_us": 180201243
+    },
+    {
+      "seasons": 20,
+      "single_session_rss_kib": 346684,
+      "single_session_peak_kib": 396400,
+      "codec_peak_kib": 595700,
+      "two_session_peak_kib": 595700,
+      "encode_us": 158476,
+      "decode_us": 83419,
+      "cold_resume_us": 175884096,
+      "simulation_and_codec_us": 759571417
+    }
+  ]
+}

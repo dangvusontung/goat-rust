@@ -1,0 +1,4 @@
+season=10 disk_decode_restore_first_query_us=573988 rebuilds=0 rows=1352496
+loaded_game_only VmHWM:	  194196 kB
+loaded_game_only VmRSS:	   97436 kB
+process_wall_seconds=0.586428 user_seconds=0.461375 system_seconds=0.124572 peak_rss_kib=194196 exit=0

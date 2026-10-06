@@ -5,6 +5,9 @@
 //! Version: u32 (4 bytes) — the LAYOUT version.
 //! Then all fields as little-endian primitives.
 
+#[path = "workload_codec.rs"]
+mod workload_codec;
+
 use goat_core::{attrs::NUM_ATTRS, player::PlayerView, roles::NUM_ROLES, state::WorldState};
 use std::io;
 use std::path::Path;
@@ -82,7 +85,9 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// v23 adds observed per-fixture NPC workload (dated minutes).
 /// v24 adds Gregorian chronology selection and sparse fixture date overrides.
 // v25 adds dated deep-scope decisions and authoritative NPC fixture scorelines.
-pub const VERSION: u32 = 25;
+/// v26 encodes workload rows with a lossless fixture dictionary.
+/// v27 adds the NPC match-model choice and discipline journal.
+pub const VERSION: u32 = 28;
 
 /// The SIMULATION-BEHAVIOUR version — independent of the layout VERSION above.
 /// Bump this whenever a change alters sim outcomes without changing the binary layout
@@ -100,11 +105,17 @@ pub const VERSION: u32 = 25;
 /// 7: individual NPC training, accumulated energy and sampled injuries.
 /// 8: dated fixture minutes, recovery gaps and congestion risk.
 /// 9: explicit Gregorian club season August 15–June 30 and continuous summer.
-pub const SIM_VERSION: u32 = 10;
+/// 10: authoritative NPC deep league fixtures and standings.
+/// 11: rolling continental coefficients and disjoint ranked cup entrants.
+/// 12: dated rest recovery uses its actual elapsed-week endpoint.
+/// 13: reactive NPC matches, named keeping and dated competition discipline.
+pub const SIM_VERSION: u32 = 13;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
 pub struct SaveData {
+    /// Optional disposable derived-state cache; canonical journals remain authoritative.
+    pub resume_checkpoint: Vec<u8>,
     pub pc_development_history: goat_core::history::DevelopmentHistory,
     pub dated_calendar: bool,
     pub deep_scopes: Vec<goat_core::deep::DeepScope>,
@@ -112,6 +123,8 @@ pub struct SaveData {
     pub pc_played_fixture_ids: Vec<u64>,
     pub fixture_reschedules: Vec<(u64, u32)>,
     pub npc_match_loads: Vec<goat_core::history::NpcMatchLoad>,
+    pub npc_cards: Vec<goat_core::discipline::NpcCardEvent>,
+    pub realistic_npc: bool,
     // ── World seed ────────────────────────────────────────────────────────────
     pub world_seed: u64,
     // ── PC creation ───────────────────────────────────────────────────────────
@@ -304,6 +317,7 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
     let routine_intensity: u8 = state.pc_routine.intensity as u8;
 
     SaveData {
+        resume_checkpoint: Vec::new(),
         world_seed: state.world_seed,
         pc_name: view.name.clone(),
         pc_position: state.pc_position,
@@ -401,6 +415,8 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_injury_return_week: state.pc_injury_return_week,
         pc_development_history: state.pc_development_history.clone(),
         npc_match_loads: state.npc_match_loads.clone(),
+        npc_cards: state.npc_cards.clone(),
+        realistic_npc: state.realistic_npc,
         dated_calendar: state.dated_calendar,
         deep_scopes: state.deep_scopes.clone(),
         deep_results: state.deep_results.clone(),
@@ -651,10 +667,42 @@ fn decode_peers(blob: &[u8]) -> Vec<goat_core::state::PeerState> {
     peers
 }
 
+/// Write a complete local save, then atomically replace the previous file.
+/// Encoding or write failures leave the previous save intact.
 pub fn save_to_file(data: &SaveData, path: impl AsRef<Path>) -> Result<(), SaveError> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+    let path = path.as_ref();
     let bytes = to_bytes(data);
-    std::fs::write(path, bytes)?;
-    Ok(())
+    let name = path
+        .file_name()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "save path needs a filename"))?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let temp = parent.join(format!(
+        ".{}.{}.{}.tmp",
+        name.to_string_lossy(),
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    let result = (|| -> io::Result<()> {
+        file.write_all(&bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp, path)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&temp);
+    }
+    result.map_err(SaveError::from)
 }
 
 pub fn load_from_file(path: impl AsRef<Path>) -> Result<SaveData, SaveError> {
@@ -875,6 +923,8 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.pc_injury_return_week = data.pc_injury_return_week;
     state.pc_development_history = data.pc_development_history.clone();
     state.npc_match_loads = data.npc_match_loads.clone();
+    state.npc_cards = data.npc_cards.clone();
+    state.realistic_npc = data.realistic_npc;
     state.dated_calendar = data.dated_calendar;
     state.deep_scopes = data.deep_scopes.clone();
     state.deep_results = data.deep_results.clone();
@@ -1082,13 +1132,7 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
         push_u32(&mut v, rec.season);
         push_u32(&mut v, rec.round);
         v.push(rec.div);
-        push_u32(&mut v, rec.credits.len() as u32);
-        for c in &rec.credits {
-            push_u32(&mut v, c.pop_idx);
-            v.push(c.goals);
-            v.push(c.assists);
-            v.push(c.result as u8);
-        }
+        workload_codec::write_credits(&mut v, &rec.credits);
     }
     // v21+ (merge): PA2 M4 substitutions (0 = None)
     push_u32(&mut v, d.pc_injury_return_week.unwrap_or(0));
@@ -1104,14 +1148,7 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
     // constant on write; the guard lives in `from_bytes`.
     if !d.npc_match_loads.is_empty() {
         push_u32(&mut v, 0x4E4C_4F44); // NLOD extension
-        push_u32(&mut v, d.npc_match_loads.len() as u32);
-        for l in &d.npc_match_loads {
-            push_u32(&mut v, l.competition_id);
-            push_u32(&mut v, l.pop_idx);
-            push_u64(&mut v, l.fixture_id);
-            push_u32(&mut v, l.epoch_day);
-            push_u32(&mut v, l.minutes as u32);
-        }
+        workload_codec::write(&mut v, &d.npc_match_loads);
     }
     if d.dated_calendar {
         push_u32(&mut v, 0x4341_4C39);
@@ -1154,6 +1191,25 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
                 push_u32(&mut v, value);
             }
         }
+    }
+    if d.realistic_npc || !d.npc_cards.is_empty() {
+        push_u32(&mut v, 0x4E50_4344);
+        v.push(u8::from(d.realistic_npc));
+        push_u32(&mut v, d.npc_cards.len() as u32);
+        for card in &d.npc_cards {
+            push_u32(&mut v, card.season);
+            push_u32(&mut v, card.competition_id);
+            push_u32(&mut v, card.pop_idx);
+            push_u64(&mut v, card.fixture_id);
+            push_u32(&mut v, card.epoch_day);
+            v.push(card.minute);
+            v.push(card.kind);
+        }
+    }
+    if !d.resume_checkpoint.is_empty() {
+        push_u32(&mut v, 0x4350_4B54);
+        push_u32(&mut v, d.resume_checkpoint.len() as u32);
+        v.extend_from_slice(&d.resume_checkpoint);
     }
     push_u32(&mut v, SIM_VERSION);
     v
@@ -1425,25 +1481,33 @@ fn parse(b: &[u8], strict_history: bool) -> Result<(SaveData, u32), SaveError> {
                     read_u8(b, &mut cur),
                     read_u32(b, &mut cur),
                 ) else {
+                    if ver >= 26 {
+                        return Err(SaveError::Corrupt("truncated NPC credit record"));
+                    }
                     break;
                 };
-                let mut credits = Vec::with_capacity(n_credits as usize);
-                for _ in 0..n_credits {
-                    let (Ok(pop_idx), Ok(goals), Ok(assists), Ok(result)) = (
-                        read_u32(b, &mut cur),
-                        read_u8(b, &mut cur),
-                        read_u8(b, &mut cur),
-                        read_u8(b, &mut cur),
-                    ) else {
-                        break;
-                    };
-                    credits.push(goat_core::state::NpcMatchCredit {
-                        pop_idx,
-                        goals,
-                        assists,
-                        result: result as i8,
-                    });
-                }
+                let credits = if ver >= 26 {
+                    workload_codec::read_credits(b, &mut cur, n_credits)?
+                } else {
+                    let mut credits = Vec::with_capacity(n_credits as usize);
+                    for _ in 0..n_credits {
+                        let (Ok(pop_idx), Ok(goals), Ok(assists), Ok(result)) = (
+                            read_u32(b, &mut cur),
+                            read_u8(b, &mut cur),
+                            read_u8(b, &mut cur),
+                            read_u8(b, &mut cur),
+                        ) else {
+                            break;
+                        };
+                        credits.push(goat_core::state::NpcMatchCredit {
+                            pop_idx,
+                            goals,
+                            assists,
+                            result: result as i8,
+                        });
+                    }
+                    credits
+                };
                 orbit_records.push(goat_core::state::OrbitMatchRecord {
                     season,
                     round,
@@ -1491,26 +1555,30 @@ fn parse(b: &[u8], strict_history: bool) -> Result<(SaveData, u32), SaveError> {
             .is_some_and(|tag| tag == 0x4E4C_4F44u32.to_le_bytes())
     {
         cur += 4;
-        let n = read_u32(b, &mut cur)? as usize;
-        if n > b.len().saturating_sub(cur) / 24 {
-            return Err(SaveError::Corrupt("truncated NPC workload"));
-        }
-        for _ in 0..n {
-            let competition_id = read_u32(b, &mut cur)?;
-            let pop_idx = read_u32(b, &mut cur)?;
-            let fixture_id = read_u64(b, &mut cur)?;
-            let epoch_day = read_u32(b, &mut cur)?;
-            let minutes = read_u32(b, &mut cur)?;
-            if minutes > 120 || competition_id == 0 {
-                return Err(SaveError::Corrupt("invalid NPC minutes"));
+        if ver >= 26 {
+            npc_match_loads = workload_codec::read(b, &mut cur)?;
+        } else {
+            let n = read_u32(b, &mut cur)? as usize;
+            if n > b.len().saturating_sub(cur) / 24 {
+                return Err(SaveError::Corrupt("truncated NPC workload"));
             }
-            npc_match_loads.push(goat_core::history::NpcMatchLoad {
-                competition_id,
-                pop_idx,
-                fixture_id,
-                epoch_day,
-                minutes: minutes as u16,
-            });
+            for _ in 0..n {
+                let competition_id = read_u32(b, &mut cur)?;
+                let pop_idx = read_u32(b, &mut cur)?;
+                let fixture_id = read_u64(b, &mut cur)?;
+                let epoch_day = read_u32(b, &mut cur)?;
+                let minutes = read_u32(b, &mut cur)?;
+                if minutes > 120 || competition_id == 0 {
+                    return Err(SaveError::Corrupt("invalid NPC minutes"));
+                }
+                npc_match_loads.push(goat_core::history::NpcMatchLoad {
+                    competition_id,
+                    pop_idx,
+                    fixture_id,
+                    epoch_day,
+                    minutes: minutes as u16,
+                });
+            }
         }
     }
 
@@ -1628,6 +1696,72 @@ fn parse(b: &[u8], strict_history: bool) -> Result<(SaveData, u32), SaveError> {
             deep_results.push(r);
         }
     }
+    let mut npc_cards = Vec::new();
+    let mut realistic_npc = false;
+    if ver >= 27
+        && b.get(cur..cur + 4)
+            .is_some_and(|t| t == 0x4E50_4344u32.to_le_bytes())
+    {
+        cur += 4;
+        let mode = read_u8(b, &mut cur)?;
+        if mode > 1 {
+            return Err(SaveError::Corrupt("invalid NPC model"));
+        }
+        realistic_npc = mode == 1;
+        let count = read_u32(b, &mut cur)? as usize;
+        if count > b.len().saturating_sub(cur) / 26 {
+            return Err(SaveError::Corrupt("truncated NPC cards"));
+        }
+        let mut seen_cards = std::collections::BTreeSet::new();
+        let mut last_key = None;
+        for _ in 0..count {
+            let card = goat_core::discipline::NpcCardEvent {
+                season: read_u32(b, &mut cur)?,
+                competition_id: read_u32(b, &mut cur)?,
+                pop_idx: read_u32(b, &mut cur)?,
+                fixture_id: read_u64(b, &mut cur)?,
+                epoch_day: read_u32(b, &mut cur)?,
+                minute: read_u8(b, &mut cur)?,
+                kind: read_u8(b, &mut cur)?,
+            };
+            if card.season == 0
+                || card.competition_id == 0
+                || !(1..=90).contains(&card.minute)
+                || card.kind > 2
+            {
+                return Err(SaveError::Corrupt("invalid NPC card"));
+            }
+            let key = (
+                card.epoch_day,
+                card.fixture_id,
+                card.minute,
+                card.pop_idx,
+                card.kind,
+            );
+            if last_key.is_some_and(|previous| key < previous)
+                || !seen_cards.insert((card.pop_idx, card.fixture_id, card.minute, card.kind))
+            {
+                return Err(SaveError::Corrupt("unordered or duplicate NPC cards"));
+            }
+            last_key = Some(key);
+            npc_cards.push(card);
+        }
+    }
+    let mut resume_checkpoint = Vec::new();
+    if ver >= 28
+        && b.get(cur..cur + 4)
+            .is_some_and(|tag| tag == 0x4350_4B54u32.to_le_bytes())
+    {
+        cur += 4;
+        let count = read_u32(b, &mut cur)? as usize;
+        if count > goat_world::checkpoint::MAX_BYTES
+            || count > b.len().saturating_sub(cur).saturating_sub(4)
+        {
+            return Err(SaveError::Corrupt("invalid resume checkpoint size"));
+        }
+        resume_checkpoint.extend_from_slice(&b[cur..cur + count]);
+        cur += count;
+    }
     // Sim-behaviour version (v20+). The field only EXISTS in v20+ layouts: for older
     // layout tags the cursor isn't at the trailer, so we must not read there at all —
     // a pre-20 save's sim_version is definitionally 0 (unknown/legacy semantics).
@@ -1640,8 +1774,11 @@ fn parse(b: &[u8], strict_history: bool) -> Result<(SaveData, u32), SaveError> {
 
     Ok((
         SaveData {
+            resume_checkpoint,
             pc_development_history,
             npc_match_loads,
+            npc_cards,
+            realistic_npc,
             dated_calendar,
             deep_scopes,
             deep_results,
@@ -1800,4 +1937,27 @@ fn read_str(b: &[u8], cur: &mut usize) -> Result<String, SaveError> {
         .to_string();
     *cur += len;
     Ok(s)
+}
+
+/// Save the synchronized headless session as an optional local checkpoint.
+/// Seed/journals remain present, so old saves and invalid caches can use full replay.
+pub fn from_world_state_with_session(
+    state: &WorldState,
+    view: &PlayerView,
+    session: &mut goat_world::session::SimulationSession,
+) -> SaveData {
+    let checkpoint = session.resume_checkpoint(state).unwrap_or_default();
+    let mut data = from_world_state(state, view);
+    data.resume_checkpoint = checkpoint;
+    data
+}
+
+/// Restore a disposable cache when available; invalid/missing caches use normal replay.
+pub fn session_from_save(
+    data: &SaveData,
+    state: &WorldState,
+) -> goat_world::session::SimulationSession {
+    let mut session = goat_world::session::SimulationSession::new();
+    session.restore_checkpoint(state, &data.resume_checkpoint);
+    session
 }
