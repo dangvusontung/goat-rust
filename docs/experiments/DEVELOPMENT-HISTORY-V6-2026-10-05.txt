@@ -1,0 +1,33 @@
+dated=false week=52 pass=0 players=26835 segments=0 ms=118.296 sum=1055888
+dated=false week=52 pass=1 players=26835 segments=0 ms=0.110 sum=1055888
+dated=false week=53 pass=0 players=26835 segments=0 ms=129.309 sum=1056154
+dated=false week=53 pass=1 players=26835 segments=0 ms=0.093 sum=1056154
+dated=false week=1040 pass=0 players=26835 segments=0 ms=333.386 sum=906235
+dated=false week=1040 pass=1 players=26835 segments=0 ms=0.249 sum=906235
+dated=true week=52 pass=0 players=26835 segments=2684 ms=158.326 sum=1057536
+dated=true week=52 pass=1 players=26835 segments=2684 ms=0.155 sum=1057536
+dated=true week=53 pass=0 players=26835 segments=2684 ms=27.236 sum=1057810
+dated=true week=53 pass=1 players=26835 segments=2684 ms=0.086 sum=1057810
+dated=true week=1040 pass=0 players=26835 segments=2684 ms=304.027 sum=942161
+dated=true week=1040 pass=1 players=26835 segments=2684 ms=0.131 sum=942161
+replay season=1 players=29235 segments=26883 ms=222.930
+replay season=2 players=31633 segments=30911 ms=250.838
+replay season=3 players=32109 segments=35086 ms=122.546
+replay season=4 players=32127 segments=37011 ms=132.170
+replay season=5 players=32135 segments=38264 ms=131.702
+replay season=6 players=34165 segments=42092 ms=131.434
+replay season=7 players=35011 segments=45355 ms=159.948
+replay season=8 players=36997 segments=50011 ms=129.277
+replay season=9 players=37861 segments=53213 ms=169.395
+replay season=10 players=39859 segments=58119 ms=137.414
+replay season=11 players=40833 segments=61303 ms=180.104
+replay season=12 players=42881 segments=66520 ms=144.552
+replay season=13 players=43915 segments=69709 ms=191.126
+replay season=14 players=45989 segments=74830 ms=153.538
+replay season=15 players=46929 segments=78212 ms=196.857
+replay season=16 players=48953 segments=83232 ms=161.843
+replay season=17 players=49937 segments=86377 ms=205.381
+replay season=18 players=51977 segments=91314 ms=170.487
+replay season=19 players=52939 segments=94531 ms=211.350
+replay season=20 players=54955 segments=99579 ms=175.986
+replay total20 ms=3379.332

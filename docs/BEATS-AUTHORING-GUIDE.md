@@ -211,3 +211,15 @@ match cross/cutback choices tagged with `wide` or `delivery`.)
   ]
 }
 ```
+
+## Version-5 opportunity narration
+
+Scoring actions now require a team opening and use shared conversion. Execution
+quality may be good without a goal. Default non-goal templates live in
+`crates/goat-match/data/opportunity-text.json`; the optional root
+`opportunity_text` object can override `finish_unconverted`,
+`delivery_unconverted` and `defence_unconverted`. These templates must describe
+no goal. Existing success/failure goal text is used only when the matching
+goal event occurs. Avoid giving both branches unconditional scoring events: the
+unified selector rejects those choices and cross-side scoring branches for an
+opening owned by the other team. See [v5 semantics](PC-NPC-OPPORTUNITIES.md).

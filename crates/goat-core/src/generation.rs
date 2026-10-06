@@ -209,7 +209,7 @@ const TACTICAL_BIAS_MAX_PTS: i32 = 5;
 /// Doc C §5.3).
 fn attribute_bias_ratio(identity: &TacticalIdentity) -> [Fixed; NUM_ATTRS] {
     let mut out = [Fixed::ONE; NUM_ATTRS];
-    for i in 0..NUM_ATTRS {
+    for (i, bias) in out.iter_mut().enumerate() {
         let mut weighted = Fixed::ZERO;
         let mut neutral = Fixed::ZERO;
         for (r, role_weight) in identity.role_weight.iter().enumerate() {
@@ -218,7 +218,7 @@ fn attribute_bias_ratio(identity: &TacticalIdentity) -> [Fixed; NUM_ATTRS] {
             neutral = neutral + w;
         }
         if neutral != Fixed::ZERO {
-            out[i] = weighted / neutral;
+            *bias = weighted / neutral;
         }
     }
     out

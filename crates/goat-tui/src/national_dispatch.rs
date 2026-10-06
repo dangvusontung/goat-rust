@@ -174,7 +174,7 @@ impl QualifyingCampaign {
                 nation_b,
                 elapsed_weeks,
             );
-            let (ga, gb) = goat_world::sim_team_match(str_a, str_b, &mut rng);
+            let (ga, gb) = goat_world::sim_team_match_shared(str_a, str_b, &mut rng);
             record_national_result(&mut self.standings[a], ga, gb);
             record_national_result(&mut self.standings[b], gb, ga);
         }
@@ -340,7 +340,7 @@ impl TournamentRun {
             nation_b,
             elapsed_weeks,
         );
-        let (ga, gb) = goat_world::sim_team_match(str_a, str_b, &mut rng);
+        let (ga, gb) = goat_world::sim_team_match_shared(str_a, str_b, &mut rng);
         record_national_result(&mut self.standings[a + 1], ga, gb);
         record_national_result(&mut self.standings[b + 1], gb, ga);
     }
@@ -451,7 +451,7 @@ mod tests {
     #[test]
     fn qualifying_round_robin_completes_after_five_rounds() {
         let world = WorldGenesis::generate(42);
-        let pop = goat_world::population::genesis(42, &world);
+        let pop = goat_world::population::genesis_shared(42, &world);
         let mut campaign = QualifyingCampaign::start(42, 5, 3);
         for _ in 0..5 {
             assert!(!campaign.is_complete());

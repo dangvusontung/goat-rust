@@ -10,12 +10,11 @@ use crate::attrs::{AgeCurveArchetype, AttrId, ATTR_ARCHETYPES};
 use crate::player::{PlayerId, PlayerStore};
 use crate::roles::{FamiliarityTier, RoleId, ROLE_WEIGHT_TABLE};
 use crate::tuning::{
-    BASE_DECAY_PER_WEEK, BASE_GROWTH_PER_WEEK, BASE_INJURY_PER_1000, BREAKTHROUGH_BONUS,
-    BREAKTHROUGH_PER_1000, DECLINE_LIFESTYLE_BALANCED, DECLINE_LIFESTYLE_FLASHY,
-    DECLINE_LIFESTYLE_PRO, DURABILITY_X10_NEUTRAL, ENERGY_AUTO_DOWNGRADE, ENERGY_COST_HIGH,
-    ENERGY_COST_LOW, ENERGY_COST_MED, ENERGY_MAX, ENERGY_PASSIVE_RECOVERY, ENERGY_RECOVERY_INJURED,
-    FAM_XP_AWKWARD, FAM_XP_COMPETENT, FAM_XP_IMP_PER_WEEK, FAM_XP_KEY_PER_WEEK,
-    FAM_XP_UNCONVINCING, GROWTH_MULT_HIGH, GROWTH_MULT_LOW, GROWTH_MULT_MED,
+    BASE_INJURY_PER_1000, BREAKTHROUGH_BONUS, BREAKTHROUGH_PER_1000, DECLINE_LIFESTYLE_BALANCED,
+    DECLINE_LIFESTYLE_FLASHY, DECLINE_LIFESTYLE_PRO, DURABILITY_X10_NEUTRAL, ENERGY_AUTO_DOWNGRADE,
+    ENERGY_COST_HIGH, ENERGY_COST_LOW, ENERGY_COST_MED, ENERGY_MAX, ENERGY_PASSIVE_RECOVERY,
+    ENERGY_RECOVERY_INJURED, FAM_XP_AWKWARD, FAM_XP_COMPETENT, FAM_XP_IMP_PER_WEEK,
+    FAM_XP_KEY_PER_WEEK, FAM_XP_UNCONVINCING, GROWTH_MULT_HIGH, GROWTH_MULT_LOW, GROWTH_MULT_MED,
     GROWTH_SINGLE_WEEK_CAP, GROWTH_VARIANCE_RAW, INJURY_LIFESTYLE_X10_BALANCED,
     INJURY_LIFESTYLE_X10_FLASHY, INJURY_LIFESTYLE_X10_PRO, INJURY_WEEKS_MAX, INJURY_WEEKS_MIN,
     INTENSITY_CEILING_HIGH, INTENSITY_CEILING_LOW, INTENSITY_CEILING_MED,
@@ -223,8 +222,13 @@ pub fn advance_week(
             continue; // too old to improve this archetype
         }
 
-        let base =
-            BASE_GROWTH_PER_WEEK * growth_rate * intensity_mult * energy_factor * facilities_mult;
+        let base = crate::development::weekly_growth(
+            ATTR_ARCHETYPES[a],
+            age_years,
+            intensity_mult,
+            energy_factor,
+            facilities_mult,
+        );
 
         // Random variance ±GROWTH_VARIANCE_RAW thousandths
         let variance_raw =
@@ -315,7 +319,7 @@ pub fn advance_rest_week(
 /// Growth rate for an archetype at a given age (scales BASE_GROWTH_PER_WEEK).
 ///
 /// Returns Fixed::ZERO when the player is too old to improve that archetype.
-fn attr_growth_rate(archetype: AgeCurveArchetype, age_years: u32) -> Fixed {
+pub fn attr_growth_rate(archetype: AgeCurveArchetype, age_years: u32) -> Fixed {
     match archetype {
         AgeCurveArchetype::Physical => match age_years {
             ..=17 => Fixed::raw(1_000),
@@ -343,7 +347,7 @@ fn attr_growth_rate(archetype: AgeCurveArchetype, age_years: u32) -> Fixed {
 /// Decay rate for an archetype at a given age when not actively trained.
 ///
 /// Returns Fixed::ZERO when no decay applies.
-fn attr_decay_rate(archetype: AgeCurveArchetype, age_years: u32) -> Fixed {
+pub(crate) fn attr_decay_rate(archetype: AgeCurveArchetype, age_years: u32) -> Fixed {
     match archetype {
         AgeCurveArchetype::Physical => match age_years {
             ..=27 => Fixed::ZERO,
@@ -383,7 +387,7 @@ fn apply_passive_decay(
         // are independent — focusing a Physical attr in the 30s does nothing but
         // does not slow its natural decline either.
         // Lifestyle bends the decline: pro burns out later/gentler, flashy earlier/steeper.
-        let loss = BASE_DECAY_PER_WEEK * decay * decline_mult;
+        let loss = crate::development::weekly_decay(archetype, age_years, decline_mult);
         let cur = players.get_current(pc_id, i);
         // Decay can never reduce below MIN_ATTR.
         players.current[i][pc_id] = (cur - loss).clamp(Fixed::MIN_ATTR, cur);
@@ -391,7 +395,7 @@ fn apply_passive_decay(
 }
 
 /// Injury probability per 1 000 rolls.
-fn injury_prob(
+pub fn injury_prob(
     energy: Fixed,
     intensity: Intensity,
     age_years: u32,
@@ -481,7 +485,7 @@ fn lifestyle_decline(lifestyle: u8) -> Fixed {
 }
 
 /// Energy factor on growth: 1.0 at full, 0.6 at empty.
-fn energy_growth_factor(energy: Fixed) -> Fixed {
+pub fn energy_growth_factor(energy: Fixed) -> Fixed {
     let pct = energy / Fixed::from_int(100); // 0.0–1.0
     Fixed::raw(600) + Fixed::raw(400) * pct
 }

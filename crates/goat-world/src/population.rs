@@ -15,6 +15,7 @@ use goat_core::player::PlayerView;
 use goat_core::positions::PrimaryPosition;
 use goat_fixed::Fixed;
 use goat_rng::{GoatRng, RngSource};
+use std::cell::RefCell;
 
 /// Age (years) at which a background player retires; past it, lazy-promote refuses so a
 /// retired identity can never re-enter the live world as an active player.
@@ -44,10 +45,22 @@ fn roll_potential_ovr(rng: &mut GoatRng, club_strength: u8) -> u8 {
     (base + variance).clamp(POTENTIAL_MIN as i32, POTENTIAL_MAX as i32) as u8
 }
 
+type DevelopmentCache = Option<(u32, [Fixed; goat_core::attrs::NUM_ATTRS], u8)>;
+
 /// Background population as parallel columns. Index `i` identifies one player across all
 /// columns — there is no per-player struct.
 #[derive(Debug, Clone, Default)]
 pub struct Population {
+    dated_exposure: bool,
+    sampled_health: bool,
+    availability_cache: RefCell<Vec<Option<(u32, u32, u32)>>>,
+    life_cache: RefCell<Vec<Option<(u32, crate::npc_life::NpcHealthState)>>>,
+    exposures: crate::exposure::ExposureColumns,
+
+    /// Empty for the frozen legacy model. New populations use shared development.
+    shared_facilities: Vec<Fixed>,
+    /// Derived cache only: discarded/rebuilt freely, never part of saved identity.
+    shared_cache: RefCell<Vec<DevelopmentCache>>,
     /// Per-player deterministic seed; everything derivable is recomputed from this.
     pub seed: Vec<u64>,
     /// Club index into `CLUBS`.
@@ -187,6 +200,35 @@ pub fn genesis(world_seed: u64, world: &WorldGenesis) -> Population {
     pop
 }
 
+/// New-version population: preserve identity draws, share PC development laws.
+pub fn genesis_shared(world_seed: u64, world: &WorldGenesis) -> Population {
+    let mut pop = genesis(world_seed, world);
+    pop.shared_facilities = pop
+        .club
+        .iter()
+        .map(|&club| world.clubs[club as usize].facilities_mult())
+        .collect();
+    pop.shared_cache = RefCell::new(vec![None; pop.len()]);
+    pop
+}
+
+/// Version 6: dated exposure and shared expected health. Version 3–5 factory remains frozen.
+pub fn genesis_developed(world_seed: u64, world: &WorldGenesis) -> Population {
+    let mut pop = genesis_shared(world_seed, world);
+    pop.dated_exposure = true;
+    pop.exposures.heads = vec![None; pop.len()];
+    pop
+}
+
+/// Version 7: individual weekly training, energy and dated injuries after intake.
+pub fn genesis_lived(world_seed: u64, world: &WorldGenesis) -> Population {
+    let mut pop = genesis_developed(world_seed, world);
+    pop.sampled_health = true;
+    pop.life_cache = RefCell::new(vec![None; pop.len()]);
+    pop.availability_cache = RefCell::new(vec![None; pop.len()]);
+    pop
+}
+
 // ── Formula-driven background growth + lazy-promote (bible §245–246) ───────────
 
 /// Closed-form development curve: the fraction of potential a player has realised at a
@@ -216,6 +258,487 @@ fn position_from_u8(p: u8) -> PrimaryPosition {
 }
 
 impl Population {
+    /// Whether new opportunity/development rules should resolve this population.
+    pub fn uses_shared_model(&self) -> bool {
+        !self.shared_facilities.is_empty()
+    }
+
+    pub fn uses_dated_exposure(&self) -> bool {
+        self.dated_exposure
+    }
+
+    /// Only changes at/after entry and in chronological order are accepted.
+    /// All caches for this player are invalidated on revision, including same-date reads.
+    pub fn record_exposure(&mut self, idx: usize, exposure: crate::exposure::NpcExposure) -> bool {
+        if !self.dated_exposure
+            || idx >= self.len()
+            || !exposure.valid()
+            || exposure.start_week < self.intake_week[idx]
+        {
+            return false;
+        }
+        let history = self.exposures.history(idx);
+        if history
+            .last()
+            .is_some_and(|e| e.start_week > exposure.start_week)
+        {
+            return false;
+        }
+        let mut previous = history.last().copied().unwrap_or_else(|| {
+            crate::exposure::NpcExposure::balanced(
+                self.intake_week[idx],
+                self.shared_facilities[idx],
+            )
+        });
+        previous.start_week = exposure.start_week;
+        if previous == exposure {
+            return true;
+        }
+        self.exposures.push(idx, exposure);
+        // A dated intervention cannot change any completed week before its start.
+        let keep_prefix = exposure.start_week > self.intake_week[idx]
+            && self.shared_cache.get_mut()[idx]
+                .is_some_and(|(date, _, _)| date <= exposure.start_week);
+        if !keep_prefix {
+            self.shared_cache.get_mut()[idx] = None;
+            if self.sampled_health {
+                self.life_cache.get_mut()[idx] = None;
+            }
+        }
+        if self.sampled_health {
+            let keep_availability = self.availability_cache.get_mut()[idx]
+                .is_some_and(|(date, _, _)| date <= exposure.start_week);
+            if !keep_availability {
+                self.availability_cache.get_mut()[idx] = None;
+            }
+        }
+        true
+    }
+
+    pub fn exposure_at(&self, idx: usize, week: u32) -> crate::exposure::NpcExposure {
+        self.exposures
+            .history(idx)
+            .into_iter()
+            .rev()
+            .find(|e| e.start_week <= week)
+            .unwrap_or_else(|| {
+                crate::exposure::NpcExposure::balanced(
+                    self.intake_week[idx],
+                    self.shared_facilities[idx],
+                )
+            })
+    }
+
+    pub fn expected_health_at(
+        &self,
+        idx: usize,
+        week: u32,
+    ) -> Option<crate::exposure::ExpectedHealth> {
+        if !self.dated_exposure || idx >= self.len() || week < self.intake_week[idx] {
+            return None;
+        }
+        let view = self.shared_view(idx, week);
+        let mut e = self.exposure_at(idx, week);
+        if self.sampled_health {
+            e.energy = view.energy;
+        }
+        Some(crate::exposure::expected_health(
+            e,
+            view.age_weeks / 52,
+            view.durability_x10,
+        ))
+    }
+
+    /// Called by deterministic replay after a season. Appearance totals are only a
+    /// workload proxy: no fabricated per-match energy or injury history.
+    pub(crate) fn record_season_workload(
+        &mut self,
+        idx: usize,
+        week: u32,
+        apps: u32,
+        facilities: Fixed,
+    ) {
+        if !self.dated_exposure {
+            return;
+        }
+        let mut e = self.exposure_at(idx, week);
+        e.start_week = week;
+        e.workload_apps = apps.min(u16::MAX as u32) as u16;
+        // First calibration assumption: a regular starter has 75 energy, fringe ~86.
+        e.energy = Fixed::from_int((90 - apps.min(60) as i32 / 2).max(55));
+        e.facilities = facilities;
+        self.record_exposure(idx, e);
+    }
+
+    /// Sparse intervention history. Before the first entry, balanced intake conditions apply.
+    pub fn exposure_history(&self, idx: usize) -> Vec<crate::exposure::NpcExposure> {
+        if !self.dated_exposure || idx >= self.len() {
+            return Vec::new();
+        }
+        self.exposures.history(idx)
+    }
+
+    pub fn exposure_segment_count(&self) -> usize {
+        self.exposures.len()
+    }
+
+    /// Shared injury risk and expected recovery duration, recalculated at each age band.
+    /// No seeded individual injury episodes are claimed for background NPCs.
+    fn exposure_plan(
+        e: crate::exposure::NpcExposure,
+        age: u32,
+        durability: u8,
+    ) -> goat_core::development::DevelopmentPlan {
+        use goat_core::{tuning::*, week::Intensity};
+        let intensity = match e.intensity {
+            0 => Intensity::Low,
+            2 => Intensity::High,
+            _ => Intensity::Medium,
+        };
+        let intensity = if e.energy < ENERGY_AUTO_DOWNGRADE {
+            Intensity::Low
+        } else {
+            intensity
+        };
+        let healthy = crate::exposure::expected_health(e, age, durability).healthy_share;
+        goat_core::development::DevelopmentPlan {
+            intensity: match intensity {
+                Intensity::Low => GROWTH_MULT_LOW,
+                Intensity::High => GROWTH_MULT_HIGH,
+                _ => GROWTH_MULT_MED,
+            },
+            energy: goat_core::week::energy_growth_factor(e.energy),
+            facilities: e.facilities,
+            focus_share: e.focus_share,
+            healthy_share: healthy,
+            ceiling: match e.intensity {
+                0 => INTENSITY_CEILING_LOW,
+                2 => INTENSITY_CEILING_HIGH,
+                _ => INTENSITY_CEILING_MED,
+            } * match e.lifestyle {
+                0 => LIFESTYLE_CEILING_PRO,
+                2 => LIFESTYLE_CEILING_FLASHY,
+                _ => LIFESTYLE_CEILING_BALANCED,
+            },
+            // PC skips all development while injured, including age decline.
+            decline: healthy
+                * match e.lifestyle {
+                    0 => DECLINE_LIFESTYLE_PRO,
+                    2 => DECLINE_LIFESTYLE_FLASHY,
+                    _ => DECLINE_LIFESTYLE_BALANCED,
+                },
+        }
+    }
+
+    pub fn uses_individual_health(&self) -> bool {
+        self.sampled_health
+    }
+
+    fn lived_view(&self, idx: usize, week: u32, mut view: PlayerView) -> PlayerView {
+        use crate::npc_life::{tick, NpcHealthState};
+        use goat_core::attrs::ATTR_ARCHETYPES;
+        let mut start = self.intake_week[idx];
+        let mut health = NpcHealthState {
+            energy: self.exposure_at(idx, start).energy,
+            injury_weeks: 0,
+            available_mask: 0,
+            elapsed_weeks: 0,
+        };
+        let cached = self.shared_cache.borrow()[idx];
+        let cached_health = self.life_cache.borrow()[idx];
+        if let (Some((date, attrs, _)), Some((health_date, state))) = (cached, cached_health) {
+            if date <= week && date == health_date {
+                view.current = attrs;
+                start = date;
+                health = state;
+            }
+        }
+        if start == self.intake_week[idx]
+            && !cached.is_some_and(|(date, _, _)| {
+                date == start && date <= week && cached_health.is_some_and(|(h, _)| h == date)
+            })
+        {
+            // No fabricated pre-genesis medical history; pre-entry attributes keep the
+            // earlier expected projection. Individual simulation starts at world entry.
+            let e = crate::exposure::NpcExposure::balanced(
+                self.intake_week[idx],
+                self.shared_facilities[idx],
+            );
+            let mut age = 16 * 52;
+            while age < self.birth_age_weeks[idx] {
+                let end = self.birth_age_weeks[idx].min((age / 52 + 1) * 52);
+                let plan = Self::exposure_plan(e, age / 52, view.durability_x10);
+                for (a, kind) in ATTR_ARCHETYPES.iter().enumerate() {
+                    view.current[a] = goat_core::development::project_attribute_interval(
+                        view.current[a],
+                        view.potential[a],
+                        *kind,
+                        age,
+                        end,
+                        plan,
+                    );
+                }
+                age = end;
+            }
+        }
+        let changes = self.exposure_history(idx);
+        let mut e = self.exposure_at(idx, start);
+        let mut next = changes.partition_point(|e| e.start_week <= start);
+        let end = week.min(
+            self.intake_week[idx]
+                + (RETIRE_AGE_YEARS * 52).saturating_sub(self.birth_age_weeks[idx]),
+        );
+        for date in start..end {
+            while next < changes.len() && changes[next].start_week <= date {
+                e = changes[next];
+                next += 1;
+            }
+            tick(
+                self.seed[idx],
+                date,
+                (self.birth_age_weeks[idx] + date - self.intake_week[idx]) / 52,
+                self.position[idx],
+                view.durability_x10,
+                e,
+                &mut health,
+                Some((&mut view.current, &view.potential)),
+            );
+        }
+        view.age_weeks = self.birth_age_weeks[idx] + week.saturating_sub(self.intake_week[idx]);
+        view.energy = health.energy;
+        view.injury_weeks = health.injury_weeks;
+        self.shared_cache.borrow_mut()[idx] = Some((
+            week,
+            view.current,
+            goat_core::derive::ovr(&view.current, view.primary_position)
+                .to_int()
+                .clamp(1, 99) as u8,
+        ));
+        self.life_cache.borrow_mut()[idx] = Some((week, health));
+        view
+    }
+
+    /// Factual simulation records, replayed on contact rather than stored per NPC.
+    pub fn training_history(
+        &self,
+        idx: usize,
+        from: u32,
+        to: u32,
+    ) -> Vec<crate::npc_life::NpcTrainingWeek> {
+        if !self.sampled_health || idx >= self.len() || from >= to {
+            return Vec::new();
+        }
+        let choices = CreationChoices {
+            name: String::new(),
+            primary_position: position_from_u8(self.position[idx]),
+            nationality: String::new(),
+            club: String::new(),
+        };
+        let view = generate_player_biased_with_ceiling(
+            self.seed[idx],
+            &choices,
+            None,
+            Some(self.potential_ovr[idx]),
+        );
+        let start = self.intake_week[idx];
+        let mut health = crate::npc_life::NpcHealthState {
+            energy: self.exposure_at(idx, start).energy,
+            injury_weeks: 0,
+            available_mask: 0,
+            elapsed_weeks: 0,
+        };
+        let changes = self.exposure_history(idx);
+        let mut e = self.exposure_at(idx, start);
+        let mut next = changes.partition_point(|e| e.start_week <= start);
+        let end = to.min(start + (RETIRE_AGE_YEARS * 52).saturating_sub(self.birth_age_weeks[idx]));
+        let mut out = Vec::new();
+        for date in start..end {
+            while next < changes.len() && changes[next].start_week <= date {
+                e = changes[next];
+                next += 1;
+            }
+            let record = crate::npc_life::tick(
+                self.seed[idx],
+                date,
+                (self.birth_age_weeks[idx] + date - start) / 52,
+                self.position[idx],
+                view.durability_x10,
+                e,
+                &mut health,
+                None,
+            );
+            if date >= from {
+                out.push(record);
+            }
+        }
+        out
+    }
+
+    pub fn injury_history(
+        &self,
+        idx: usize,
+        through: u32,
+    ) -> Vec<crate::npc_life::NpcInjuryEpisode> {
+        self.training_history(
+            idx,
+            self.intake_week.get(idx).copied().unwrap_or(0),
+            through,
+        )
+        .into_iter()
+        .filter(|w| w.new_injury)
+        .map(|w| crate::npc_life::NpcInjuryEpisode {
+            onset_week: w.week,
+            expected_recovery_week: w.week + 1 + w.injury_after,
+            recovered_week: (w.week + 1 + w.injury_after
+                <= through.min(
+                    self.intake_week[idx]
+                        + (RETIRE_AGE_YEARS * 52).saturating_sub(self.birth_age_weeks[idx]),
+                ))
+            .then_some(w.week + 1 + w.injury_after),
+            duration_weeks: w.injury_after,
+        })
+        .collect()
+    }
+
+    pub(crate) fn appearance_quota(&self, idx: usize, week: u32, quota: u32) -> u32 {
+        if !self.sampled_health {
+            return quota;
+        }
+        if let Some((date, healthy, total)) = self.availability_cache.borrow()[idx] {
+            if date == week {
+                return quota * healthy / total.max(1);
+            }
+        }
+        let same_date = self.life_cache.borrow()[idx].is_some_and(|(date, _)| date == week);
+        if !same_date {
+            self.shared_view(idx, week);
+        }
+        let (_, health) = self.life_cache.borrow()[idx].unwrap();
+        let total = health.elapsed_weeks.min(52);
+        let healthy = health.available_mask.count_ones();
+        self.availability_cache.borrow_mut()[idx] = Some((week, healthy, total));
+        quota * healthy / total.max(1)
+    }
+
+    pub fn is_available(&self, idx: usize, week: u32) -> bool {
+        if self.is_retired(idx, week) || week < self.intake_week[idx] {
+            return false;
+        }
+        if !self.sampled_health {
+            return true;
+        }
+        if let Some((date, health)) = self.life_cache.borrow()[idx] {
+            if date == week {
+                return health.injury_weeks == 0;
+            }
+        }
+        self.shared_view(idx, week).injury_weeks == 0
+    }
+
+    fn shared_view(&self, idx: usize, elapsed_weeks: u32) -> PlayerView {
+        use goat_core::attrs::ATTR_ARCHETYPES;
+        use goat_core::development::{project_attribute, DevelopmentPlan};
+        use goat_core::tuning::INTENSITY_CEILING_MED;
+        let choices = CreationChoices {
+            name: String::new(),
+            primary_position: position_from_u8(self.position[idx]),
+            nationality: String::new(),
+            club: String::new(),
+        };
+        // Innate attributes derive from identity, never today's club philosophy.
+        let mut view = generate_player_biased_with_ceiling(
+            self.seed[idx],
+            &choices,
+            None,
+            Some(self.potential_ovr[idx]),
+        );
+        let age = self.birth_age_weeks[idx] + elapsed_weeks.saturating_sub(self.intake_week[idx]);
+        if self.sampled_health {
+            return self.lived_view(idx, elapsed_weeks, view);
+        }
+        if self.dated_exposure {
+            view.energy = self.exposure_at(idx, elapsed_weeks).energy;
+        }
+        let mut projected_from_age = 16 * 52;
+        if let Some((week, attrs, _)) = &self.shared_cache.borrow()[idx] {
+            if self.dated_exposure && *week < elapsed_weeks {
+                view.current = *attrs;
+                projected_from_age =
+                    self.birth_age_weeks[idx] + week.saturating_sub(self.intake_week[idx]);
+            }
+            if *week == elapsed_weeks {
+                view.current = *attrs;
+                view.age_weeks = age;
+                return view;
+            }
+        }
+        let plan = DevelopmentPlan {
+            intensity: Fixed::ONE,
+            energy: Fixed::raw(900),
+            facilities: self.shared_facilities[idx],
+            focus_share: Fixed::raw(700),
+            healthy_share: Fixed::raw(900),
+            ceiling: INTENSITY_CEILING_MED,
+            decline: Fixed::ONE,
+        };
+        if self.dated_exposure {
+            use crate::exposure::NpcExposure;
+            use goat_core::development::project_attribute_interval;
+            let mut inputs = vec![(
+                16 * 52,
+                NpcExposure::balanced(self.intake_week[idx], self.shared_facilities[idx]),
+            )];
+            inputs.extend(
+                self.exposures
+                    .history(idx)
+                    .into_iter()
+                    .filter(|e| e.start_week <= elapsed_weeks)
+                    .map(|e| {
+                        (
+                            self.birth_age_weeks[idx] + e.start_week - self.intake_week[idx],
+                            e,
+                        )
+                    }),
+            );
+            for segment in 0..inputs.len() {
+                let (mut start, exposure) = inputs[segment];
+                let end = inputs
+                    .get(segment + 1)
+                    .map_or(age, |(start, _)| *start)
+                    .min(age);
+                start = start.max(projected_from_age);
+                while start < end {
+                    let band_end = end.min((start / 52 + 1) * 52);
+                    let plan = Self::exposure_plan(exposure, start / 52, view.durability_x10);
+                    for (a, archetype) in ATTR_ARCHETYPES.iter().enumerate() {
+                        view.current[a] = project_attribute_interval(
+                            view.current[a],
+                            view.potential[a],
+                            *archetype,
+                            start,
+                            band_end,
+                            plan,
+                        );
+                    }
+                    start = band_end;
+                }
+            }
+        } else {
+            for (a, archetype) in ATTR_ARCHETYPES.iter().enumerate() {
+                view.current[a] =
+                    project_attribute(view.current[a], view.potential[a], *archetype, age, plan);
+            }
+        }
+        view.age_weeks = age;
+        self.shared_cache.borrow_mut()[idx] = Some((
+            elapsed_weeks,
+            view.current,
+            goat_core::derive::ovr(&view.current, view.primary_position)
+                .to_int()
+                .clamp(1, 99) as u8,
+        ));
+        view
+    }
     /// Age in years of background player `idx` at `elapsed_weeks` after genesis.
     ///
     /// `pub(crate)`, not private: Round 5 Slice 3-4's `scouting` module (a sibling in this
@@ -229,6 +752,17 @@ impl Population {
     /// derived on demand from `(potential, age)`. Never exceeds the stored potential
     /// (§2.4). Used for outer-world ranking without realising the full player.
     pub fn current_ovr(&self, idx: usize, elapsed_weeks: u32) -> u8 {
+        if self.uses_shared_model() {
+            if let Some((week, _, ovr)) = &self.shared_cache.borrow()[idx] {
+                if *week == elapsed_weeks {
+                    return *ovr;
+                }
+            }
+            let view = self.shared_view(idx, elapsed_weeks);
+            return goat_core::derive::ovr(&view.current, view.primary_position)
+                .to_int()
+                .clamp(1, 99) as u8;
+        }
         let frac = development_fraction(self.age_years_at(idx, elapsed_weeks));
         let cur = (Fixed::from_int(self.potential_ovr[idx] as i32) * frac).to_int();
         cur.clamp(0, self.potential_ovr[idx] as i32) as u8
@@ -288,6 +822,11 @@ impl Population {
         if self.is_retired(idx, elapsed_weeks) {
             return None;
         }
+        if self.uses_shared_model() {
+            let mut view = self.shared_view(idx, elapsed_weeks);
+            view.name = name.into();
+            return Some(view);
+        }
         let club = &world.clubs[self.club[idx] as usize];
         let choices = CreationChoices {
             name: name.into(),
@@ -324,7 +863,7 @@ impl Population {
     /// Deterministic — ties broken by population index (insertion order).
     pub fn lineup_indices(&self, club_id: usize, elapsed_weeks: u32, count: usize) -> Vec<usize> {
         let mut squad: Vec<usize> = (0..self.len())
-            .filter(|&i| self.club[i] as usize == club_id && !self.is_retired(i, elapsed_weeks))
+            .filter(|&i| self.club[i] as usize == club_id && self.is_available(i, elapsed_weeks))
             .collect();
         squad.sort_by_key(|&i| std::cmp::Reverse(self.current_ovr(i, elapsed_weeks)));
         squad.truncate(count);
@@ -405,7 +944,7 @@ impl Population {
                 .filter(|&i| {
                     self.club[i] as usize == club_id
                         && self.position[i] == pos as u8
-                        && !self.is_retired(i, elapsed_weeks)
+                        && self.is_available(i, elapsed_weeks)
                 })
                 .collect();
             group.sort_by_key(|&i| std::cmp::Reverse(self.npc_selection_score(i, elapsed_weeks)));
@@ -498,12 +1037,12 @@ impl Population {
         for i in 0..self.len() {
             if self.club[i] as usize != club_id
                 || self.position[i] != pc.position
-                || self.is_retired(i, elapsed_weeks)
+                || !self.is_available(i, elapsed_weeks)
             {
                 continue;
             }
             let mut rng = GoatRng::new(self.seed[i] ^ week_seed);
-            if rng.next_range_u32(0, NPC_UNAVAILABLE_DIV) == 0 {
+            if !self.sampled_health && rng.next_range_u32(0, NPC_UNAVAILABLE_DIV) == 0 {
                 continue; // knocked/suspended this week — ephemeral abstraction
             }
             let noise = rng.next_range_u32(0, 2 * NPC_FORM_NOISE) as i32 - NPC_FORM_NOISE as i32;
@@ -698,6 +1237,17 @@ pub fn apply_youth_intake(
             pop.career_titles.push(0);
             pop.form.push(50);
             total_added += 1;
+            if pop.uses_shared_model() {
+                pop.shared_facilities.push(club.facilities_mult());
+                pop.shared_cache.get_mut().push(None);
+                if pop.dated_exposure {
+                    pop.exposures.heads.push(None);
+                    if pop.sampled_health {
+                        pop.life_cache.get_mut().push(None);
+                        pop.availability_cache.get_mut().push(None);
+                    }
+                }
+            }
         }
     }
 
@@ -706,8 +1256,228 @@ pub fn apply_youth_intake(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn individual_history_replay_cache_and_availability_agree() {
+        let world = WorldGenesis::generate(42);
+        let mut pop = genesis_lived(42, &world);
+        let idx = (0..pop.len())
+            .find(|&i| pop.birth_age_weeks[i] == 16 * 52)
+            .unwrap();
+        let original = pop.shared_view(idx, 104);
+        let episodes = pop.injury_history(idx, 104);
+        assert!(!episodes.is_empty());
+        assert_eq!(pop.injury_history(idx, 104), episodes);
+        let records = pop.training_history(idx, 0, 104);
+        assert_eq!(records.len(), 104);
+        assert_eq!(records.last().unwrap().energy_after, original.energy);
+        assert_eq!(records.last().unwrap().injury_after, original.injury_weeks);
+        for episode in &episodes {
+            let w = &records[episode.onset_week as usize];
+            assert!(w.new_injury);
+            assert_eq!(w.focus_mask, 0);
+            assert!(!pop.is_available(idx, episode.onset_week + 1));
+            if let Some(day) = episode.recovered_week {
+                assert!(pop.is_available(idx, day));
+            }
+        }
+        for date in [0, 52, 53, 104, 156, 500] {
+            let hot = pop.shared_view(idx, date);
+            let mut cold = pop.clone();
+            cold.shared_cache.get_mut().fill(None);
+            cold.life_cache.get_mut().fill(None);
+            let reference = cold.shared_view(idx, date);
+            assert_eq!(hot.current, reference.current);
+            assert_eq!(hot.energy, reference.energy);
+            assert_eq!(hot.injury_weeks, reference.injury_weeks);
+            let weeks = pop.training_history(idx, date.saturating_sub(52), date);
+            let healthy = weeks
+                .iter()
+                .filter(|w| w.injury_before == 0 && w.injury_after == 0)
+                .count() as u32;
+            assert_eq!(
+                pop.appearance_quota(idx, date, 30),
+                30 * healthy / (weeks.len() as u32).max(1)
+            );
+        }
+        let old_past = pop.training_history(idx, 0, 104);
+        pop.record_exposure(
+            idx,
+            crate::exposure::NpcExposure {
+                workload_apps: 30,
+                ..crate::exposure::NpcExposure::balanced(104, Fixed::raw(1600))
+            },
+        );
+        assert_eq!(old_past, pop.training_history(idx, 0, 104));
+        assert_eq!(pop.shared_view(idx, 104).current, original.current);
+        assert_eq!(pop.shared_view(idx, 156).potential, original.potential);
+        let future = pop.training_history(idx, 104, 156);
+        assert!(future.iter().any(|w| w.effective_intensity == 0));
+    }
+
+    #[test]
+    fn injured_npcs_are_not_selected_or_credited_full_season_quota() {
+        let world = WorldGenesis::generate(42);
+        let pop = genesis_lived(42, &world);
+        let idx = (0..pop.len())
+            .find(|&i| !pop.injury_history(i, 52).is_empty())
+            .unwrap();
+        let episode = pop.injury_history(idx, 52)[0].clone();
+        let week = episode.onset_week + 1;
+        assert!(!pop
+            .lineup_indices(pop.club[idx] as usize, week, 50)
+            .contains(&idx));
+        assert!(!pop
+            .lineup_indices_formation(pop.club[idx] as usize, week, (25, 25, 25))
+            .contains(&idx));
+        assert!(pop.appearance_quota(idx, 52, 30) < 30);
+    }
+
+    #[test]
+    fn dated_interventions_preserve_past_and_invalidate_same_date_cache() {
+        use crate::exposure::NpcExposure;
+        let world = WorldGenesis::generate(42);
+        let mut pop = genesis_developed(42, &world);
+        let idx = (0..pop.len())
+            .find(|&i| pop.birth_age_weeks[i] == 16 * 52)
+            .unwrap();
+        let before = pop.shared_view(idx, 104);
+        let old_future = pop.shared_view(idx, 208);
+        let innate = old_future.potential;
+        let mut e = NpcExposure::balanced(104, Fixed::from_int(2));
+        assert!(pop.record_exposure(idx, e));
+        assert_eq!(pop.shared_view(idx, 104).current, before.current);
+        let future = pop.shared_view(idx, 208);
+        assert_ne!(future.current, old_future.current);
+        assert_eq!(future.potential, innate);
+        assert_eq!(
+            pop.current_ovr(idx, 208),
+            goat_core::derive::ovr(&future.current, future.primary_position).to_int() as u8
+        );
+        e.start_week = 103;
+        assert!(!pop.record_exposure(idx, e));
+        e.start_week = 104;
+        e.focus_share = Fixed::ZERO;
+        assert!(pop.record_exposure(idx, e));
+        assert_ne!(pop.shared_view(idx, 208).current, future.current);
+        assert_eq!(
+            pop.shared_view(idx, 52).current,
+            genesis_developed(42, &world).shared_view(idx, 52).current
+        );
+        for week in [105, 156, 400, 1000] {
+            let hot = pop.shared_view(idx, week).current;
+            let mut cold = pop.clone();
+            cold.shared_cache.get_mut().fill(None);
+            assert_eq!(hot, cold.shared_view(idx, week).current);
+        }
+        e.energy = Fixed::from_int(101);
+        assert!(!pop.record_exposure(idx, e));
+    }
+
+    #[test]
+    fn dated_projection_matches_weekly_reference_over_long_career() {
+        use crate::exposure::NpcExposure;
+        use goat_core::{
+            attrs::ATTR_ARCHETYPES,
+            development::{weekly_decay, weekly_growth},
+        };
+        let world = WorldGenesis::generate(42);
+        let mut pop = genesis_developed(42, &world);
+        let idx = (0..pop.len())
+            .find(|&i| pop.birth_age_weeks[i] == 16 * 52)
+            .unwrap();
+        let initial = pop.shared_view(idx, 0);
+        let changes = [
+            (0, Fixed::raw(600)),
+            (104, Fixed::raw(1800)),
+            (300, Fixed::ONE),
+        ];
+        for (start, facility) in changes {
+            assert!(pop.record_exposure(idx, NpcExposure::balanced(start, facility)));
+        }
+        let mut current = initial.current;
+        for week in 0..24 * 52 {
+            let plan = Population::exposure_plan(
+                pop.exposure_at(idx, week),
+                16 + week / 52,
+                initial.durability_x10,
+            );
+            for a in 0..NUM_ATTRS {
+                let growth = (weekly_growth(
+                    ATTR_ARCHETYPES[a],
+                    16 + week / 52,
+                    plan.intensity,
+                    plan.energy,
+                    plan.facilities,
+                ) * plan.focus_share
+                    * plan.healthy_share)
+                    .clamp(Fixed::ZERO, goat_core::tuning::GROWTH_SINGLE_WEEK_CAP);
+                let decay = weekly_decay(ATTR_ARCHETYPES[a], 16 + week / 52, plan.decline);
+                let ceiling = (initial.potential[a] * plan.ceiling).max(Fixed::MIN_ATTR);
+                current[a] = ((current[a] + growth).min(ceiling) - decay).max(Fixed::MIN_ATTR);
+            }
+            if week % 52 == 51 || week == 104 || week == 300 {
+                assert_eq!(
+                    pop.shared_view(idx, week + 1).current,
+                    current,
+                    "week {}",
+                    week + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn youth_exposure_uses_intake_epoch_and_expected_health_uses_shared_risk() {
+        use crate::exposure::NpcExposure;
+        let world = WorldGenesis::generate(42);
+        let mut pop = genesis_developed(42, &world);
+        let first = pop.len();
+        apply_youth_intake(&mut pop, &world, 42, 2);
+        assert!(pop.len() > first);
+        assert!(pop.exposure_history(first).is_empty());
+        assert!(!pop.record_exposure(first, NpcExposure::balanced(103, Fixed::ONE)));
+        assert!(pop.record_exposure(first, NpcExposure::balanced(104, Fixed::ONE)));
+        assert_eq!(pop.shared_view(first, 104).age_weeks, 16 * 52);
+        assert_eq!(pop.shared_view(first, 156).age_weeks, 17 * 52);
+        let mut e = NpcExposure::balanced(0, Fixed::ONE);
+        let fit = Population::exposure_plan(e, 25, 12);
+        e.energy = Fixed::from_int(30);
+        let tired = Population::exposure_plan(e, 25, 8);
+        assert!(fit.healthy_share > tired.healthy_share);
+        e.injury_duration_pct = 1500;
+        assert!(Population::exposure_plan(e, 25, 8).healthy_share < tired.healthy_share);
+    }
+
     use super::*;
     use crate::world::WorldGenesis;
+
+    #[test]
+    fn shared_ranking_promotion_and_cache_agree_without_rerolling_talent() {
+        let world = WorldGenesis::generate(42);
+        let mut pop = genesis_shared(42, &world);
+        for i in 0..64 {
+            let rating = pop.current_ovr(i, 52);
+            assert_eq!(rating, pop.current_ovr(i, 52));
+            let before = pop.promote(i, 52, "NPC", &world).unwrap();
+            assert_eq!(
+                rating,
+                goat_core::derive::ovr(&before.current, before.primary_position)
+                    .to_int()
+                    .clamp(1, 99) as u8
+            );
+            assert!(before
+                .current
+                .iter()
+                .zip(before.potential)
+                .all(|(c, p)| *c <= p));
+            pop.club[i] = (pop.club[i] + 1) % world.clubs.len() as u16;
+            let after = pop.promote(i, 52, "NPC", &world).unwrap();
+            assert_eq!(before.potential, after.potential);
+            assert_eq!(before.current, after.current);
+        }
+        let rebuilt = genesis_shared(42, &world);
+        assert_eq!(pop.current_ovr(0, 520), rebuilt.current_ovr(0, 520));
+    }
 
     #[test]
     fn genesis_is_full_and_columnar() {

@@ -14,7 +14,10 @@
 pub mod attrs;
 pub mod calendar_loop;
 pub mod derive;
+pub mod development;
 pub mod generation;
+pub mod history;
+pub mod match_model;
 pub mod player;
 pub mod positions;
 pub mod roles;

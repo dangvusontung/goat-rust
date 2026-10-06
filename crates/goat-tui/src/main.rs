@@ -29,8 +29,8 @@ use goat_match::{
     beats::ScoreEvent,
     discipline::RefPersonality,
     sim::{
-        advance_beat, auto_play_match, is_clutch, is_decisive, start_match, ActiveMatchState,
-        BeatLibrary, MatchResult, MatchSetup,
+        advance_beat, auto_play_match_unified, is_clutch, is_decisive, start_match_unified,
+        ActiveMatchState, BeatLibrary, MatchResult, MatchSetup,
     },
 };
 use goat_meta::{
@@ -54,7 +54,7 @@ use goat_world::{
         apply_season_end_for_nation, overlay_nation_membership, sim_league_season,
         PromoRelegationEvent, TransitionType,
     },
-    round_fixtures, round_to_week, sim_team_match,
+    round_fixtures, round_to_week, sim_team_match_shared,
     world::{NationId, WorldGenesis},
     Table, CLUBS_PER_DIV, NUM_NATIONS, PRE_SEASON_WEEKS, ROUNDS_PER_SEASON, TIERS_PER_NATION,
 };
@@ -566,7 +566,7 @@ fn run_friendly(
     };
 
     let result = if play_interactive {
-        let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
+        let mut ms = start_match_unified(beat_lib, make_setup(&view), &mut match_rng);
         while !ms.is_complete {
             render_beat(out, &ms);
             if ms.final_result.is_some() {
@@ -580,10 +580,10 @@ fn run_friendly(
             ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
         }
         ms.final_result.unwrap_or_else(|| {
-            auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
+            auto_play_match_unified(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
         })
     } else {
-        auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
+        auto_play_match_unified(beat_lib, make_setup(&view), &mut match_rng)
     };
 
     render_match_result(out, &result, &opp.name);
@@ -1303,7 +1303,7 @@ fn run_next_round(
         let mut sim_rng = GoatRng::new(sim_seed);
         let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
         for f in &all_fixtures {
-            let (gf, ga) = sim_team_match(
+            let (gf, ga) = sim_team_match_shared(
                 world.clubs[f.home].strength,
                 world.clubs[f.away].strength,
                 &mut sim_rng,
@@ -1398,8 +1398,11 @@ fn run_next_round(
                 // seasons) WITH the orbit residue replayed (PA2 M3: real NPC career
                 // stats + form).
                 let elapsed_weeks = state.pc_epoch_day / 7;
-                let pop =
-                    goat_world::orbit::rebuild_population(world_seed, season, &state.orbit_records);
+                let pop = goat_world::orbit::rebuild_population_lived(
+                    world_seed,
+                    season,
+                    &state.orbit_records,
+                );
 
                 // PA2 M1.5: the club's manager (seed-derived) picks a formation by
                 // club style and a lineup by the multi-factor selection score — the
@@ -1614,7 +1617,7 @@ fn run_next_round(
                 };
 
                 let result = if play_interactive {
-                    let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
+                    let mut ms = start_match_unified(beat_lib, make_setup(&view), &mut match_rng);
                     let mut shown_moments = 0usize;
                     while !ms.is_complete {
                         // Commentary feed: auto-flow moments since the last decision.
@@ -1646,10 +1649,14 @@ fn run_next_round(
                         }
                     }
                     ms.final_result.unwrap_or_else(|| {
-                        auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
+                        auto_play_match_unified(
+                            beat_lib,
+                            make_setup(&view),
+                            &mut GoatRng::new(match_seed),
+                        )
                     })
                 } else {
-                    auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
+                    auto_play_match_unified(beat_lib, make_setup(&view), &mut match_rng)
                 };
 
                 render_match_result(out, &result, &opp.name);
@@ -1876,7 +1883,7 @@ fn run_next_round(
                 (0, 0)
             }
         } else {
-            sim_team_match(
+            sim_team_match_shared(
                 world.clubs[f.home].strength,
                 world.clubs[f.away].strength,
                 &mut sim_rng,
@@ -2051,7 +2058,7 @@ fn maybe_play_cup_fixture(
         )
         .unwrap();
         let mut sim_rng = GoatRng::new(cup_seed);
-        let (gf, ga) = sim_team_match(own_str, opp.strength, &mut sim_rng);
+        let (gf, ga) = sim_team_match_shared(own_str, opp.strength, &mut sim_rng);
         let winner = if gf == ga {
             let mut tiebreak_rng = GoatRng::new(cup_seed ^ 0xBEEF);
             break_tie(pc_club_id, fixture.opponent, gf, ga, &mut tiebreak_rng)
@@ -2109,7 +2116,7 @@ fn maybe_play_cup_fixture(
             ),
             sub_context: None,
         };
-        let result = auto_play_match(beat_lib, setup, &mut match_rng);
+        let result = auto_play_match_unified(beat_lib, setup, &mut match_rng);
         render_match_result(out, &result, &opp.name);
         let goals = result
             .moments
@@ -2217,7 +2224,7 @@ fn play_orbit_match(
         )
         .unwrap();
         let mut sim_rng = GoatRng::new(seed);
-        let (g_for, g_against) = sim_team_match(own_str, opp_strength, &mut sim_rng);
+        let (g_for, g_against) = sim_team_match_shared(own_str, opp_strength, &mut sim_rng);
         writeln!(
             out,
             "  {} {}–{} {}",
@@ -2263,7 +2270,7 @@ fn play_orbit_match(
             ),
             sub_context: None,
         };
-        let result = auto_play_match(beat_lib, setup, &mut match_rng);
+        let result = auto_play_match_unified(beat_lib, setup, &mut match_rng);
         render_match_result(out, &result, opp_name);
         gf = result.goals_for;
         ga = result.goals_against;
@@ -2583,7 +2590,7 @@ fn play_national_fixture(
         )
         .unwrap();
         let mut rng = GoatRng::new(seed);
-        let (gf, ga) = sim_team_match(own_str, opp_str, &mut rng);
+        let (gf, ga) = sim_team_match_shared(own_str, opp_str, &mut rng);
         writeln!(
             out,
             "  {} {}–{} {}",
@@ -2708,7 +2715,7 @@ fn maybe_run_qualifying_campaign(
     };
 
     writeln!(out, "\n*** {} QUALIFYING CAMPAIGN ***", kind.label()).unwrap();
-    let pop = goat_world::population::genesis(state.world_seed, world);
+    let pop = goat_world::population::genesis_lived(state.world_seed, world);
     let competition_id = if kind.is_world_cup() {
         WORLD_CUP_COMPETITION_ID
     } else {
@@ -2800,7 +2807,7 @@ fn maybe_play_tournament(
     } else {
         CONTINENTAL_CHAMPIONSHIP_COMPETITION_ID
     };
-    let pop = goat_world::population::genesis(state.world_seed, world);
+    let pop = goat_world::population::genesis_lived(state.world_seed, world);
     let elapsed_weeks = national_dispatch::elapsed_weeks_for(season);
     writeln!(out, "\n*** THE {} BEGINS ***", kind.label()).unwrap();
 
@@ -3298,7 +3305,7 @@ fn run_academy_round(
     };
 
     let result = if play_interactive {
-        let mut ms = start_match(beat_lib, make_setup(&view), &mut match_rng);
+        let mut ms = start_match_unified(beat_lib, make_setup(&view), &mut match_rng);
         let mut shown_moments = 0usize;
         while !ms.is_complete {
             for m in ms
@@ -3322,10 +3329,10 @@ fn run_academy_round(
             ms = advance_beat(ms, choice_idx, beat_lib, &mut match_rng);
         }
         ms.final_result.unwrap_or_else(|| {
-            auto_play_match(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
+            auto_play_match_unified(beat_lib, make_setup(&view), &mut GoatRng::new(match_seed))
         })
     } else {
-        auto_play_match(beat_lib, make_setup(&view), &mut match_rng)
+        auto_play_match_unified(beat_lib, make_setup(&view), &mut match_rng)
     };
 
     render_match_result(out, &result, &opp_name);
@@ -3374,7 +3381,7 @@ fn run_academy_round(
     let mut sim_rng = GoatRng::new(sim_seed);
     let mut round_results: Vec<(u8, u8, u32, u32)> = Vec::new();
     for f in &all_fixtures {
-        let (gf, ga) = sim_team_match(
+        let (gf, ga) = sim_team_match_shared(
             world.clubs[f.home].strength,
             world.clubs[f.away].strength,
             &mut sim_rng,
@@ -4655,7 +4662,7 @@ fn render_world_screen(out: &mut impl Write, state: &WorldState, world: &WorldGe
     // Your generation: batch-tick the cohort up to now (orbit residue replayed,
     // PA2 M3 — the rival race sees real deep-sim stats), then crystallise.
     let seasons = state.season_number.max(1);
-    let pop = goat_world::orbit::rebuild_population(seed, seasons + 1, &state.orbit_records);
+    let pop = goat_world::orbit::rebuild_population_lived(seed, seasons + 1, &state.orbit_records);
     writeln!(out, "\n  YOUR GENERATION").unwrap();
     match crystallise_rival(&pop, 16 * 52, state.pc_career_goals, state.pc_league_titles) {
         RivalVerdict::Rival {

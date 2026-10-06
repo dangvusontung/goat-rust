@@ -115,10 +115,26 @@ fn default_polarity() -> String {
     "any".to_string()
 }
 
+/// Baked non-goal narration when execution quality and conversion differ.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpportunityText {
+    pub finish_unconverted: String,
+    pub delivery_unconverted: String,
+    pub defence_unconverted: String,
+}
+impl Default for OpportunityText {
+    fn default() -> Self {
+        serde_json::from_str(include_str!("../data/opportunity-text.json"))
+            .expect("baked opportunity text is valid")
+    }
+}
+
 // ── Root library ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct RawBeatLibrary {
+    #[serde(default)]
+    pub opportunity_text: OpportunityText,
     pub situations: Vec<RawSituation>,
     pub actions: Vec<RawAction>,
     pub outcomes: Vec<RawOutcome>,

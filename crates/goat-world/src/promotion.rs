@@ -346,6 +346,26 @@ impl ReplayCache {
         }
     }
 
+    /// Frozen constant-exposure model (simulation versions 3–5).
+    pub fn new_shared(world: &WorldGenesis, world_seed: u64) -> Self {
+        let mut cache = Self::new(world, world_seed);
+        cache.pop = crate::population::genesis_shared(world_seed, world);
+        cache
+    }
+
+    /// Current model cache; derived population is regenerated, never added to saves.
+    pub fn new_developed(world: &WorldGenesis, world_seed: u64) -> Self {
+        let mut cache = Self::new(world, world_seed);
+        cache.pop = crate::population::genesis_developed(world_seed, world);
+        cache
+    }
+
+    pub fn new_lived(world: &WorldGenesis, world_seed: u64) -> Self {
+        let mut cache = Self::new(world, world_seed);
+        cache.pop = crate::population::genesis_lived(world_seed, world);
+        cache
+    }
+
     /// Overlay path-dependent state loaded from an existing save
     /// (`WorldState::club_budgets`/`academy_boosts`/manager-pool fields) onto a
     /// freshly-`new()`-constructed cache, for resuming a career rather than starting one.
@@ -392,6 +412,10 @@ impl ReplayCache {
         &self.pop
     }
 
+    pub(crate) fn into_population(self) -> Population {
+        self.pop
+    }
+
     /// Every transfer the most recent `advance_one_season` call executed.
     pub fn last_transfers(&self) -> &[TransferLogEntry] {
         &self.last_transfers
@@ -431,8 +455,22 @@ impl ReplayCache {
     /// tactical_identity all mutate now (module doc's "wider-than-usual ripple", propagated
     /// to every caller by this slice).
     pub fn advance_one_season(&mut self, world: &mut WorldGenesis) -> Vec<PromoRelegationEvent> {
+        self.advance_one_season_with_orbit(world, &[])
+    }
+
+    /// Shared reconstruction of market, development and real orbit workload.
+    pub fn advance_one_season_with_orbit(
+        &mut self,
+        world: &mut WorldGenesis,
+        records: &[goat_core::state::OrbitMatchRecord],
+    ) -> Vec<PromoRelegationEvent> {
         let season = self.resolved_through + 1;
         let elapsed_weeks = season * 52;
+        let apps_before = self.pop.career_apps.clone();
+        for record in records.iter().filter(|r| r.season == season) {
+            crate::orbit::apply_orbit_record(&mut self.pop, record);
+        }
+        let overlay = crate::orbit::season_overlay(records, season);
 
         // Overlay this cache's own path-dependent budget/academy state onto `world.clubs`
         // for the duration of this call (module doc: every existing Club-mutating function
@@ -468,14 +506,26 @@ impl ReplayCache {
         run_academy_investment_pass(world); // Slice 6 §6.4's always-invest-the-cap policy
 
         // 2. The season's matches — captures per-match points for manager form (Slice 8.1).
-        let (_results, tables, match_points) = batch_tick_season_with_match_points(
-            &mut self.pop,
-            world,
-            &self.membership,
-            self.world_seed,
-            season,
-            elapsed_weeks,
-        );
+        let (_results, tables, match_points) = if overlay.is_some() {
+            crate::batch_tick::batch_tick_season_orbit_with_match_points(
+                &mut self.pop,
+                world,
+                &self.membership,
+                self.world_seed,
+                season,
+                elapsed_weeks,
+                overlay.as_ref(),
+            )
+        } else {
+            batch_tick_season_with_match_points(
+                &mut self.pop,
+                world,
+                &self.membership,
+                self.world_seed,
+                season,
+                elapsed_weeks,
+            )
+        };
         self.managers.record_match_points(&match_points);
 
         // 3. Summer window: same three passes again, off the post-season-matches budget
@@ -523,6 +573,13 @@ impl ReplayCache {
                     season,
                 );
             }
+        }
+
+        for (idx, before) in apps_before.into_iter().enumerate() {
+            let apps = self.pop.career_apps[idx].saturating_sub(before);
+            let facilities = world.clubs[self.pop.club[idx] as usize].facilities_mult();
+            self.pop
+                .record_season_workload(idx, elapsed_weeks, apps, facilities);
         }
 
         // 5. Existing round-3/round-2 machinery, untouched.

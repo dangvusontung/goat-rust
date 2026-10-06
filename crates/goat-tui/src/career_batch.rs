@@ -19,7 +19,7 @@ use goat_core::{
 };
 use goat_rng::{GoatRng, RngSource};
 use goat_world::{
-    fixture_for_round, round_fixtures, sim_team_match, world::WorldGenesis, Table,
+    fixture_for_round, round_fixtures, sim_team_match_shared, world::WorldGenesis, Table,
     ROUNDS_PER_SEASON,
 };
 
@@ -190,7 +190,7 @@ fn run_one(
             let mut pc_ga = 0u32;
 
             for f in &all_fixtures {
-                let (gf, ga) = sim_team_match(
+                let (gf, ga) = sim_team_match_shared(
                     world.clubs[f.home].strength,
                     world.clubs[f.away].strength,
                     &mut sim_rng,

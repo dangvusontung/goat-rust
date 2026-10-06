@@ -9,8 +9,8 @@
 use crate::fixtures::{round_fixtures, ROUNDS_PER_SEASON};
 use crate::population::Population;
 use crate::season::Table;
-use crate::sim_team_match;
 use crate::world::{ClubId, WorldGenesis};
+use crate::{sim_team_match, sim_team_match_shared};
 use goat_rng::GoatRng;
 use std::collections::HashMap;
 
@@ -28,6 +28,15 @@ fn goal_weight_x10(position: u8) -> u32 {
         2 => 30, // Forward
         1 => 10, // Midfielder
         _ => 2,  // Defender
+    }
+}
+
+fn effective_goal_weight(pop: &Population, idx: usize, week: u32) -> u32 {
+    let base = goal_weight_x10(pop.position[idx]) * pop.current_ovr(idx, week) as u32;
+    if pop.uses_individual_health() {
+        base * pop.appearance_quota(idx, week, 1000) / 1000
+    } else {
+        base
     }
 }
 
@@ -115,7 +124,11 @@ pub fn batch_tick_season_with_match_points(
         let mut rng = GoatRng::new(world_seed ^ ((season as u64) << 20) ^ (div as u64));
         for round in 0..ROUNDS_PER_SEASON {
             for f in round_fixtures(world_seed, season, div, div_clubs, round) {
-                let (gf, ga) = sim_team_match(strengths[f.home], strengths[f.away], &mut rng);
+                let (gf, ga) = (if pop.uses_shared_model() {
+                    sim_team_match_shared
+                } else {
+                    sim_team_match
+                })(strengths[f.home], strengths[f.away], &mut rng);
                 table.apply_result(f.home, f.away, gf, ga);
                 let (home_pts, away_pts) = points_from_result(gf, ga);
                 match_points.push((f.home, home_pts));
@@ -144,11 +157,12 @@ pub fn batch_tick_season_with_match_points(
                 if pop.is_retired(idx, elapsed_weeks) {
                     continue;
                 }
-                pop.career_apps[idx] += if rank < STARTERS_PER_CLUB {
+                let quota = if rank < STARTERS_PER_CLUB {
                     SEASON_APPS_STARTER
                 } else {
                     SEASON_APPS_FRINGE
                 };
+                pop.career_apps[idx] += pop.appearance_quota(idx, elapsed_weeks, quota);
                 if club == champion_club {
                     pop.career_titles[idx] += 1;
                 }
@@ -158,9 +172,7 @@ pub fn batch_tick_season_with_match_points(
             let total_w: u32 = squad
                 .iter()
                 .filter(|&&i| !pop.is_retired(i, elapsed_weeks))
-                .map(|&i| {
-                    goal_weight_x10(pop.position[i]) * pop.current_ovr(i, elapsed_weeks) as u32
-                })
+                .map(|&i| effective_goal_weight(pop, i, elapsed_weeks))
                 .sum();
             if total_w == 0 {
                 continue;
@@ -169,8 +181,7 @@ pub fn batch_tick_season_with_match_points(
                 if pop.is_retired(idx, elapsed_weeks) {
                     continue;
                 }
-                let w =
-                    goal_weight_x10(pop.position[idx]) * pop.current_ovr(idx, elapsed_weeks) as u32;
+                let w = effective_goal_weight(pop, idx, elapsed_weeks);
                 let goals = entry.gf * w / total_w;
                 pop.career_goals[idx] += goals;
                 if goals > div_top_goals {
@@ -236,12 +247,36 @@ pub fn batch_tick_season_orbit(
     elapsed_weeks: u32,
     orbit: Option<&OrbitSeasonOverlay>,
 ) -> Vec<SeasonResult> {
+    batch_tick_season_orbit_with_match_points(
+        pop,
+        world,
+        league_clubs,
+        world_seed,
+        season,
+        elapsed_weeks,
+        orbit,
+    )
+    .0
+}
+
+/// Orbit-aware season results, tables and manager points on the same RNG stream.
+pub fn batch_tick_season_orbit_with_match_points(
+    pop: &mut Population,
+    world: &WorldGenesis,
+    league_clubs: &[Vec<ClubId>],
+    world_seed: u64,
+    season: u32,
+    elapsed_weeks: u32,
+    orbit: Option<&OrbitSeasonOverlay>,
+) -> (Vec<SeasonResult>, Vec<Table>, Vec<(ClubId, u8)>) {
     let squads = squads_by_club(pop, world.clubs.len());
     let strengths: Vec<u8> = (0..world.clubs.len())
         .map(|c| pop.live_strength_from_squad(&squads[c], elapsed_weeks))
         .collect();
 
     let mut results = Vec::with_capacity(world.leagues.len());
+    let mut tables = Vec::with_capacity(world.leagues.len());
+    let mut match_points = Vec::new();
 
     for (div, div_clubs) in league_clubs.iter().enumerate() {
         let orbit_div = orbit.is_some_and(|o| o.covers(div));
@@ -250,8 +285,15 @@ pub fn batch_tick_season_orbit(
         let mut rng = GoatRng::new(world_seed ^ ((season as u64) << 20) ^ (div as u64));
         for round in 0..ROUNDS_PER_SEASON {
             for f in round_fixtures(world_seed, season, div, div_clubs, round) {
-                let (gf, ga) = sim_team_match(strengths[f.home], strengths[f.away], &mut rng);
+                let (gf, ga) = (if pop.uses_shared_model() {
+                    sim_team_match_shared
+                } else {
+                    sim_team_match
+                })(strengths[f.home], strengths[f.away], &mut rng);
                 table.apply_result(f.home, f.away, gf, ga);
+                let (home_pts, away_pts) = points_from_result(gf, ga);
+                match_points.push((f.home, home_pts));
+                match_points.push((f.away, away_pts));
             }
         }
 
@@ -277,11 +319,12 @@ pub fn batch_tick_season_orbit(
                 if pop.is_retired(idx, elapsed_weeks) {
                     continue;
                 }
-                let season_apps = if rank < STARTERS_PER_CLUB {
+                let raw_quota = if rank < STARTERS_PER_CLUB {
                     SEASON_APPS_STARTER
                 } else {
                     SEASON_APPS_FRINGE
                 };
+                let season_apps = pop.appearance_quota(idx, elapsed_weeks, raw_quota);
                 let remainder = if orbit_div {
                     season_apps.saturating_sub(orbit.map_or(0, |o| o.apps_of(idx)))
                 } else {
@@ -300,9 +343,7 @@ pub fn batch_tick_season_orbit(
             let total_w: u32 = squad
                 .iter()
                 .filter(|&&i| !pop.is_retired(i, elapsed_weeks))
-                .map(|&i| {
-                    goal_weight_x10(pop.position[i]) * pop.current_ovr(i, elapsed_weeks) as u32
-                })
+                .map(|&i| effective_goal_weight(pop, i, elapsed_weeks))
                 .sum();
             if total_w == 0 {
                 continue;
@@ -313,13 +354,13 @@ pub fn batch_tick_season_orbit(
                     continue;
                 }
                 let rank = by_ovr.iter().position(|&i| i == idx).unwrap_or(usize::MAX);
-                let season_apps = if rank < STARTERS_PER_CLUB {
+                let raw_quota = if rank < STARTERS_PER_CLUB {
                     SEASON_APPS_STARTER
                 } else {
                     SEASON_APPS_FRINGE
                 };
-                let w =
-                    goal_weight_x10(pop.position[idx]) * pop.current_ovr(idx, elapsed_weeks) as u32;
+                let season_apps = pop.appearance_quota(idx, elapsed_weeks, raw_quota);
+                let w = effective_goal_weight(pop, idx, elapsed_weeks);
                 let share = entry.gf * w / total_w;
                 let (remainder_apps, orbit_goals) = if orbit_div {
                     (
@@ -340,6 +381,7 @@ pub fn batch_tick_season_orbit(
             }
         }
 
+        tables.push(table);
         results.push(SeasonResult {
             division: div,
             champion_club,
@@ -348,7 +390,7 @@ pub fn batch_tick_season_orbit(
         });
     }
 
-    results
+    (results, tables, match_points)
 }
 
 #[cfg(test)]

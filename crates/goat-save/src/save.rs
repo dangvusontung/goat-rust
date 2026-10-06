@@ -78,7 +78,8 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// PA2 M4). Both parent lines tail-appended different fields under the same
 /// version numbers (local v8–v13 vs remote v8–v20), so neither parent's old
 /// saves are readable — pre-21 saves also fail the SIM_VERSION gate anyway.
-pub const VERSION: u32 = 21;
+/// v22 adds factual PC development/health history before the simulation trailer.
+pub const VERSION: u32 = 22;
 
 /// The SIMULATION-BEHAVIOUR version — independent of the layout VERSION above.
 /// Bump this whenever a change alters sim outcomes without changing the binary layout
@@ -89,11 +90,15 @@ pub const VERSION: u32 = 21;
 /// save-versioning decision (decision list §3) exists to prevent.
 /// 1: ceiling-lottery restore (origin/main). 2: the PA2/origin-main merge —
 /// the merged tree's sim behaviour differs from both parents.
-pub const SIM_VERSION: u32 = 2;
+/// 3: shared opportunity/conversion and per-attribute NPC development.
+/// 4: PC dismissal continues NPC play to full time with manpower effects.
+/// 5: PC/NPC team opportunity ledger and shared finishing conversion.
+pub const SIM_VERSION: u32 = 7;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
 pub struct SaveData {
+    pub pc_development_history: goat_core::history::DevelopmentHistory,
     // ── World seed ────────────────────────────────────────────────────────────
     pub world_seed: u64,
     // ── PC creation ───────────────────────────────────────────────────────────
@@ -377,7 +382,95 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
         pc_manager_favor: state.pc_manager_favor,
         orbit_records: state.orbit_records.clone(),
         pc_injury_return_week: state.pc_injury_return_week,
+        pc_development_history: state.pc_development_history.clone(),
     }
+}
+
+// Fixed-width rows: 38 bytes/week and 9 bytes/health event. Strict reads prevent
+// truncated counts from allocating huge buffers or silently losing dated history.
+fn write_history(v: &mut Vec<u8>, h: &goat_core::history::DevelopmentHistory) {
+    push_u32(v, h.weeks.len() as u32);
+    for w in &h.weeks {
+        for n in [w.epoch_day, w.age_weeks, w.focus_mask] {
+            push_u32(v, n);
+        }
+        v.push(w.requested_intensity);
+        v.push(w.effective_intensity);
+        for n in [w.facilities, w.energy_before, w.energy_after] {
+            push_i32(v, n.to_raw());
+        }
+        push_u32(v, w.injury_before);
+        push_u32(v, w.injury_after);
+        push_i32(v, w.total_attribute_delta.to_raw());
+    }
+    push_u32(v, h.health.len() as u32);
+    for e in &h.health {
+        push_u32(v, e.epoch_day);
+        v.push(e.kind);
+        push_u32(v, e.remaining_weeks);
+    }
+    push_u32(v, h.matches.len() as u32);
+    for m in &h.matches {
+        push_u32(v, m.epoch_day);
+        for n in [m.energy_before, m.energy_after, m.energy_cost] {
+            push_i32(v, n.to_raw());
+        }
+        push_u32(v, m.injury_before);
+        push_u32(v, m.injury_after);
+    }
+}
+fn read_history(
+    b: &[u8],
+    cur: &mut usize,
+) -> Result<goat_core::history::DevelopmentHistory, SaveError> {
+    use goat_core::history::{DevelopmentHistory, HealthEvent, TrainingWeek};
+    use goat_fixed::Fixed;
+    let n = read_u32(b, cur)? as usize;
+    if n > b.len().saturating_sub(*cur) / 38 {
+        return Err(SaveError::Corrupt("truncated development history"));
+    }
+    let mut h = DevelopmentHistory::default();
+    for _ in 0..n {
+        h.weeks.push(TrainingWeek {
+            epoch_day: read_u32(b, cur)?,
+            age_weeks: read_u32(b, cur)?,
+            focus_mask: read_u32(b, cur)?,
+            requested_intensity: read_u8(b, cur)?,
+            effective_intensity: read_u8(b, cur)?,
+            facilities: Fixed::raw(read_i32(b, cur)?),
+            energy_before: Fixed::raw(read_i32(b, cur)?),
+            energy_after: Fixed::raw(read_i32(b, cur)?),
+            injury_before: read_u32(b, cur)?,
+            injury_after: read_u32(b, cur)?,
+            total_attribute_delta: Fixed::raw(read_i32(b, cur)?),
+        });
+    }
+    let n = read_u32(b, cur)? as usize;
+    if n > b.len().saturating_sub(*cur) / 9 {
+        return Err(SaveError::Corrupt("truncated development history"));
+    }
+    for _ in 0..n {
+        h.health.push(HealthEvent {
+            epoch_day: read_u32(b, cur)?,
+            kind: read_u8(b, cur)?,
+            remaining_weeks: read_u32(b, cur)?,
+        });
+    }
+    let n = read_u32(b, cur)? as usize;
+    if n > b.len().saturating_sub(*cur) / 24 {
+        return Err(SaveError::Corrupt("truncated match history"));
+    }
+    for _ in 0..n {
+        h.matches.push(goat_core::history::MatchWorkload {
+            epoch_day: read_u32(b, cur)?,
+            energy_before: Fixed::raw(read_i32(b, cur)?),
+            energy_after: Fixed::raw(read_i32(b, cur)?),
+            energy_cost: Fixed::raw(read_i32(b, cur)?),
+            injury_before: read_u32(b, cur)?,
+            injury_after: read_u32(b, cur)?,
+        });
+    }
+    Ok(h)
 }
 
 fn encode_managers(managers: &[goat_core::state::ManagerState]) -> Vec<u8> {
@@ -752,6 +845,7 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.pc_manager_favor = data.pc_manager_favor;
     state.orbit_records = data.orbit_records.clone();
     state.pc_injury_return_week = data.pc_injury_return_week;
+    state.pc_development_history = data.pc_development_history.clone();
     for (i, &(q, w)) in data.pc_personal_staff.iter().enumerate() {
         state.pc_personal_staff[i] = goat_core::staff::PersonalStaff {
             quality: q,
@@ -933,6 +1027,14 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
     }
     // v21+ (merge): PA2 M4 substitutions (0 = None)
     push_u32(&mut v, d.pc_injury_return_week.unwrap_or(0));
+    // Empty history costs zero bytes and preserves the frozen empty-save fixtures.
+    if !d.pc_development_history.weeks.is_empty()
+        || !d.pc_development_history.health.is_empty()
+        || !d.pc_development_history.matches.is_empty()
+    {
+        push_u32(&mut v, 0x4853_5459); // HSTY tagged extension
+        write_history(&mut v, &d.pc_development_history);
+    }
     // v20+ — simulation-behaviour version (one trailing u32). Always the CURRENT
     // constant on write; the guard lives in `from_bytes`.
     push_u32(&mut v, SIM_VERSION);
@@ -945,7 +1047,7 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
 /// This is the GUARDED entry point: it enforces the `SIM_VERSION` check. Use
 /// `from_bytes_layout_only` only for layout-migration tests / future migration tooling.
 pub fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
-    let (data, sim_version) = parse(b)?;
+    let (data, sim_version) = parse(b, true)?;
     if sim_version != SIM_VERSION {
         return Err(SaveError::SimVersionMismatch {
             found: sim_version,
@@ -960,11 +1062,11 @@ pub fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
 /// v8–v19 tail-append migration logic stays exercised by its round-trip tests.
 /// Never wire this into a load path players can reach.
 pub fn from_bytes_layout_only(b: &[u8]) -> Result<SaveData, SaveError> {
-    Ok(parse(b)?.0)
+    Ok(parse(b, false)?.0)
 }
 
 /// Inner parser: returns the data plus the save's sim_version (0 for pre-v20 layouts).
-fn parse(b: &[u8]) -> Result<(SaveData, u32), SaveError> {
+fn parse(b: &[u8], strict_history: bool) -> Result<(SaveData, u32), SaveError> {
     if b.len() < 8 {
         return Err(SaveError::Corrupt("too short"));
     }
@@ -1251,6 +1353,20 @@ fn parse(b: &[u8]) -> Result<(SaveData, u32), SaveError> {
         (false, 0, 0, Default::default(), 50, 50, Vec::new(), None)
     };
 
+    let has_history = ver >= 22
+        && b.get(cur..cur + 4)
+            .is_some_and(|tag| tag == 0x4853_5459u32.to_le_bytes());
+    let pc_development_history = if has_history {
+        cur += 4;
+        match read_history(b, &mut cur) {
+            Ok(history) => history,
+            Err(err) if strict_history => return Err(err),
+            Err(_) => Default::default(),
+        }
+    } else {
+        Default::default()
+    };
+
     // Sim-behaviour version (v20+). The field only EXISTS in v20+ layouts: for older
     // layout tags the cursor isn't at the trailer, so we must not read there at all —
     // a pre-20 save's sim_version is definitionally 0 (unknown/legacy semantics).
@@ -1263,6 +1379,7 @@ fn parse(b: &[u8]) -> Result<(SaveData, u32), SaveError> {
 
     Ok((
         SaveData {
+            pc_development_history,
             world_seed,
             pc_name,
             pc_position,

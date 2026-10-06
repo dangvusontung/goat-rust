@@ -25,7 +25,7 @@ use goat_core::{
 use goat_fixed::Fixed;
 use goat_match::{
     discipline::RefPersonality,
-    sim::{auto_play_match, BeatLibrary, MatchSetup},
+    sim::{auto_play_match_unified, BeatLibrary, MatchSetup},
 };
 use goat_rng::{GoatRng, RngSource};
 use goat_traits::PlayerTraits;
@@ -178,7 +178,7 @@ fn main() {
             opp_squad: goat_match::squad::SquadSheet::stub(opp_str, seed ^ 0x5A04_0002, (4, 3, 3)),
             sub_context: None,
         };
-        let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
+        let r = auto_play_match_unified(&lib, setup, &mut GoatRng::new(match_seed));
 
         // PC goals = goals CREDITED to the PC (PA2 M3) — team goals finished by
         // a teammate (incl. off the PC's delivery = his assists) don't count.

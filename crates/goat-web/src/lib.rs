@@ -25,7 +25,10 @@ use goat_fixed::Fixed;
 use goat_match::{
     beats::ScoreEvent,
     discipline::RefPersonality,
-    sim::{advance_beat, auto_play_match, start_match, ActiveMatchState, BeatLibrary, MatchSetup},
+    sim::{
+        advance_beat, auto_play_match_unified, start_match_unified, ActiveMatchState, BeatLibrary,
+        MatchSetup,
+    },
 };
 use goat_rng::{GoatRng, RngSource};
 use goat_traits::PlayerTraits;
@@ -533,7 +536,7 @@ fn apply_round(
                 (0, 0)
             }
         } else {
-            goat_world::sim_team_match(
+            goat_world::sim_team_match_shared(
                 world.clubs[f.home].strength,
                 world.clubs[f.away].strength,
                 &mut sim_rng,
@@ -943,7 +946,7 @@ pub fn play_friendly_start() -> String {
         let mut rng = GoatRng::new(match_seed);
         let own_str = world.clubs[pc_club_id].strength;
         let setup = build_match_setup(s, own_str, opp.strength, &opp.name, match_seed);
-        let ms = with_beat_lib(|lib| start_match(lib, setup, &mut rng));
+        let ms = with_beat_lib(|lib| start_match_unified(lib, setup, &mut rng));
         Ok(ActiveMatchSession {
             state: ms,
             rng,
@@ -1043,7 +1046,7 @@ pub fn skip_match() -> String {
     ) = if is_suspended {
         // A suspended player's club still plays the fixture, but the PC
         // doesn't personally take part (bible AC-06).
-        let (gf, ga) = goat_world::sim_team_match(own_str, opp.strength, &mut match_rng);
+        let (gf, ga) = goat_world::sim_team_match_shared(own_str, opp.strength, &mut match_rng);
         (
             0,
             0,
@@ -1058,7 +1061,7 @@ pub fn skip_match() -> String {
         )
     } else {
         let setup = build_match_setup(&state, own_str, opp.strength, &opp.name, match_seed);
-        let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
+        let result = with_beat_lib(|lib| auto_play_match_unified(lib, setup, &mut match_rng));
         let pc_goals = result
             .moments
             .iter()
@@ -1175,7 +1178,7 @@ pub fn play_match_start() -> String {
         let match_seed = world_seed ^ ((season as u64) << 32) ^ (round as u64) ^ 0xc0ffee;
         let mut rng = GoatRng::new(match_seed);
         let setup = build_match_setup(s, own_str, opp.strength, &opp.name, match_seed);
-        let ms = with_beat_lib(|lib| start_match(lib, setup, &mut rng));
+        let ms = with_beat_lib(|lib| start_match_unified(lib, setup, &mut rng));
         Ok(ActiveMatchSession {
             state: ms,
             rng,

@@ -216,7 +216,7 @@ impl ContinentalRun {
         let mut rng = GoatRng::new(seed);
         let club_a = self.standings[a + 1].club;
         let club_b = self.standings[b + 1].club;
-        let (ga, gb) = goat_world::sim_team_match(
+        let (ga, gb) = goat_world::sim_team_match_shared(
             world.clubs[club_a].strength,
             world.clubs[club_b].strength,
             &mut rng,

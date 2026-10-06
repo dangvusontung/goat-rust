@@ -21,7 +21,7 @@
 
 use crate::domestic_cup::{break_tie, draw_bracket_round};
 use crate::population::Population;
-use crate::season::sim_team_match;
+use crate::season::{sim_team_match, sim_team_match_shared};
 use crate::world::{seed_mix, NationId, WorldGenesis, NUM_NATIONS};
 use goat_rng::{GoatRng, RngSource};
 
@@ -280,7 +280,11 @@ fn simulate_round_robin_group(
                 away_nation,
                 ctx.elapsed_weeks,
             );
-            let (hg, ag) = sim_team_match(home_str, away_str, &mut rng);
+            let (hg, ag) = (if ctx.pop.uses_shared_model() {
+                sim_team_match_shared
+            } else {
+                sim_team_match
+            })(home_str, away_str, &mut rng);
             standings[home_idx].gf += hg;
             standings[home_idx].ga += ag;
             standings[away_idx].gf += ag;
@@ -513,7 +517,11 @@ pub fn simulate_national_knockout(
             .map(|&(a, b)| {
                 let a_str = national_team_strength(pop, world.nations[a].stature, a, elapsed_weeks);
                 let b_str = national_team_strength(pop, world.nations[b].stature, b, elapsed_weeks);
-                let (ga, gb) = sim_team_match(a_str, b_str, &mut match_rng);
+                let (ga, gb) = (if pop.uses_shared_model() {
+                    sim_team_match_shared
+                } else {
+                    sim_team_match
+                })(a_str, b_str, &mut match_rng);
                 let winner = break_tie(a, b, ga, gb, &mut tiebreak_rng);
                 NationalKnockoutTie {
                     nation_a: a,

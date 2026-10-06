@@ -514,3 +514,419 @@ fn dump_flow_match_values() {
     // Also confirm possession enum is exercised.
     let _ = Possession::Own.flip();
 }
+
+#[test]
+fn shared_automatic_and_interactive_default_choices_replay_identically() {
+    use goat_match::sim::{advance_beat, auto_play_match_shared, start_match_shared};
+    let lib = lib();
+    let setup = balanced_setup();
+    let automatic = auto_play_match_shared(&lib, setup.clone(), &mut GoatRng::new(42));
+    let mut rng = GoatRng::new(42);
+    let mut live = start_match_shared(&lib, setup, &mut rng);
+    while !live.is_complete {
+        let choice = live
+            .current_beat()
+            .map(|beat| {
+                goat_match::contest::auto_pick_generated_choice(
+                    &beat.choices,
+                    &live.setup.player_attrs,
+                )
+            })
+            .unwrap_or(0);
+        live = advance_beat(live, choice, &lib, &mut rng);
+    }
+    let result = live.final_result.unwrap();
+    assert_eq!(
+        (
+            automatic.goals_for,
+            automatic.goals_against,
+            automatic.player_output
+        ),
+        (result.goals_for, result.goals_against, result.player_output)
+    );
+}
+
+#[test]
+fn shared_dismissal_finishes_with_npcs_and_preserves_pc_minutes() {
+    use goat_match::sim::{advance_beat, start_match_shared};
+    let lib = lib();
+    let mut dismissals = 0;
+    let mut later_goals = 0;
+    for seed in 0..256 {
+        let mut setup = balanced_setup();
+        setup.player_role = RoleId::DefensiveMid;
+        setup.player_aggression = 99;
+        setup.dirty_rep = 100;
+        setup.ref_personality = RefPersonality::Strict;
+        let mut rng = GoatRng::new(seed);
+        let mut live = start_match_shared(&lib, setup, &mut rng);
+        while !live.is_complete {
+            let choice = live
+                .current_beat()
+                .map(|beat| {
+                    beat.choices
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, choice)| (choice.foul_serious, choice.foul_chance))
+                        .map(|(i, _)| i)
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0);
+            live = advance_beat(live, choice, &lib, &mut rng);
+        }
+        let result = live.final_result.as_ref().unwrap();
+        if seed == 3 {
+            assert!(result.red_card);
+            // New behavior gets a new golden; legacy expectations stay frozen.
+            assert_eq!(
+                (
+                    result.minutes_played,
+                    result.goals_for,
+                    result.goals_against,
+                    result.player_output
+                ),
+                (27, 2, 2, 60)
+            );
+        }
+        if result.red_card && result.minutes_played < 80 {
+            dismissals += 1;
+            assert_eq!(
+                result.goal_credits.len() as u32,
+                result.goals_for + result.goals_against
+            );
+            assert_eq!(live.minute, 90, "seed {seed}");
+            assert!(!live.pc_on_pitch);
+            assert!(live.current_beat().is_none());
+            assert_eq!(live.setup.own_squad.players.len(), 10);
+            assert!(live.setup.own_squad.players.iter().all(|p| !p.is_pc));
+            let later: Vec<_> = result
+                .moments
+                .iter()
+                .filter(|m| m.minute > result.minutes_played)
+                .collect();
+            assert!(!later.is_empty());
+            assert!(later.iter().all(|m| !m.is_action));
+            later_goals += later.iter().filter(|m| m.goal_event.is_some()).count();
+            let minutes = result.minutes_played;
+            let goals = (result.goals_for, result.goals_against);
+            let again = advance_beat(live, 0, &lib, &mut rng);
+            assert_eq!(again.final_result.as_ref().unwrap().minutes_played, minutes);
+            assert_eq!((again.goals_for, again.goals_against), goals);
+        }
+    }
+    assert!(
+        dismissals >= 10,
+        "the fixture must actually exercise early dismissals: {dismissals}"
+    );
+    assert!(
+        later_goals > 0,
+        "NPC goals must remain possible after dismissal"
+    );
+}
+
+#[test]
+fn npc_observer_has_full_exposure_and_no_protagonist_events() {
+    use goat_core::match_model::{MatchContext, Venue};
+    use goat_match::sim::observe_npc_match_with_context;
+    let lib = lib();
+    for context in [
+        MatchContext {
+            venue: Venue::Neutral,
+            ..Default::default()
+        },
+        MatchContext {
+            venue: Venue::Home,
+            own_players: 10,
+            ..Default::default()
+        },
+    ] {
+        let result =
+            observe_npc_match_with_context(&lib, balanced_setup(), context, &mut GoatRng::new(42));
+        let repeated =
+            observe_npc_match_with_context(&lib, balanced_setup(), context, &mut GoatRng::new(42));
+        assert_eq!(result.npc_observations, repeated.npc_observations);
+        assert_eq!(
+            result
+                .npc_observations
+                .attacking_minutes
+                .iter()
+                .sum::<u32>(),
+            90
+        );
+        assert_eq!(
+            result.npc_observations.goals,
+            [result.goals_for, result.goals_against]
+        );
+        assert_eq!(
+            result.goal_credits.len() as u32,
+            result.goals_for + result.goals_against
+        );
+        assert!(result.moments.iter().all(|m| !m.is_action));
+        assert_eq!(result.minutes_played, 0);
+        assert!(!result.red_card);
+        assert_eq!(result.yellow_cards, 0);
+        assert!(result.familiarity_xp.iter().all(|xp| *xp == Fixed::ZERO));
+        for side in 0..2 {
+            assert!(result.npc_observations.goals[side] <= result.npc_observations.chances[side]);
+        }
+        if context.venue == Venue::Neutral {
+            assert_eq!(
+                result.npc_observations,
+                goat_core::match_model::MatchObservations {
+                    goals: [0, 5],
+                    chances: [2, 9],
+                    attacking_minutes: [26, 64]
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn unified_opportunity_ledger_reconciles_chains_roles_and_full_time() {
+    use goat_match::sim::{auto_play_match_unified_with_options, UnifiedOptions};
+    let lib = lib();
+    for role in [
+        RoleId::CompleteForward,
+        RoleId::CentreBack,
+        RoleId::CentralMid,
+    ] {
+        for seed in 0..128 {
+            let mut setup = balanced_setup();
+            setup.player_role = role;
+            let options = UnifiedOptions {
+                chains: seed % 2 == 0,
+                ..Default::default()
+            };
+            let result =
+                auto_play_match_unified_with_options(&lib, setup, options, &mut GoatRng::new(seed));
+            assert_eq!(
+                result
+                    .team_observations
+                    .attacking_minutes
+                    .iter()
+                    .sum::<u32>(),
+                90
+            );
+            assert_eq!(
+                result
+                    .opportunities
+                    .iter()
+                    .map(|o| o.opportunity.minutes)
+                    .sum::<u32>(),
+                90
+            );
+            assert!(result
+                .opportunities
+                .iter()
+                .all(|o| o.opportunity.minutes > 0));
+            assert!(result
+                .opportunities
+                .windows(2)
+                .all(|pair| pair[0].minute < pair[1].minute));
+            assert_eq!(
+                result.team_observations.goals,
+                [result.goals_for, result.goals_against]
+            );
+            assert_eq!(
+                result.goal_credits.len() as u32,
+                result.goals_for + result.goals_against
+            );
+            assert_eq!(
+                result.opportunities.iter().filter(|o| o.goal).count() as u32,
+                result.goals_for + result.goals_against
+            );
+            for side in 0..2 {
+                assert_eq!(
+                    result
+                        .opportunities
+                        .iter()
+                        .filter(|o| o.opportunity.side as usize == side && o.opportunity.created)
+                        .count() as u32,
+                    result.team_observations.chances[side]
+                );
+                assert!(
+                    result.team_observations.goals[side] <= result.team_observations.chances[side]
+                );
+                assert!(
+                    result.npc_observations.chances[side] <= result.team_observations.chances[side]
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn unified_default_decisions_replay_and_finish_after_dismissal() {
+    use goat_match::sim::{advance_beat, auto_play_match_unified, start_match_unified};
+    let lib = lib();
+    let automatic = auto_play_match_unified(&lib, balanced_setup(), &mut GoatRng::new(42));
+    let mut rng = GoatRng::new(42);
+    let mut live = start_match_unified(&lib, balanced_setup(), &mut rng);
+    while !live.is_complete {
+        let idx = live
+            .current_beat()
+            .map(|b| {
+                goat_match::contest::auto_pick_generated_choice(
+                    &b.choices,
+                    &live.setup.player_attrs,
+                )
+            })
+            .unwrap_or(0);
+        live = advance_beat(live, idx, &lib, &mut rng);
+    }
+    assert_eq!(live.minute, 90);
+    assert_eq!(
+        automatic.opportunities,
+        live.final_result.as_ref().unwrap().opportunities
+    );
+    assert_eq!(
+        (
+            automatic.goals_for,
+            automatic.goals_against,
+            automatic.player_output
+        ),
+        (
+            live.goals_for,
+            live.goals_against,
+            live.final_result.as_ref().unwrap().player_output
+        )
+    );
+    assert_eq!(
+        (
+            automatic.goals_for,
+            automatic.goals_against,
+            automatic.player_output
+        ),
+        (1, 0, 37)
+    );
+    assert_eq!(
+        automatic.team_observations,
+        goat_core::match_model::MatchObservations {
+            goals: [1, 0],
+            chances: [3, 6],
+            attacking_minutes: [42, 48]
+        }
+    );
+    assert_eq!(automatic.opportunities.len(), 16);
+    let mut early_reds = 0;
+    let mut post_red_goals = 0;
+    for seed in 0..256 {
+        let mut setup = balanced_setup();
+        setup.player_role = RoleId::DefensiveMid;
+        setup.player_aggression = 99;
+        setup.dirty_rep = 100;
+        setup.ref_personality = RefPersonality::Strict;
+        let mut rng = GoatRng::new(seed);
+        let mut live = start_match_unified(&lib, setup, &mut rng);
+        while !live.is_complete {
+            let idx = live
+                .current_beat()
+                .map(|b| {
+                    b.choices
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, c)| (c.foul_serious, c.foul_chance))
+                        .map(|(i, _)| i)
+                        .unwrap_or(0)
+                })
+                .unwrap_or(0);
+            live = advance_beat(live, idx, &lib, &mut rng);
+        }
+        let r = live.final_result.as_ref().unwrap();
+        if r.red_card && r.minutes_played < 80 {
+            early_reds += 1;
+            assert_eq!(live.minute, 90);
+            assert!(!live.pc_on_pitch);
+            assert_eq!(live.setup.own_squad.players.len(), 10);
+            for opportunity in r
+                .opportunities
+                .iter()
+                .filter(|o| o.minute > r.minutes_played)
+            {
+                assert!(matches!(
+                    opportunity.actor,
+                    goat_match::beats::GoalActor::Npc(_)
+                ));
+                if opportunity.opportunity.side == 0 {
+                    assert_eq!(opportunity.opportunity.players, 10);
+                }
+                post_red_goals += u32::from(opportunity.goal);
+            }
+            assert!(r
+                .moments
+                .iter()
+                .filter(|m| m.minute > r.minutes_played)
+                .all(|m| !m.is_action));
+            assert_eq!(
+                r.team_observations.attacking_minutes.iter().sum::<u32>(),
+                90
+            );
+        }
+    }
+    assert!(early_reds >= 5, "must exercise dismissals: {early_reds}");
+    assert!(post_red_goals > 0);
+}
+
+#[test]
+fn unified_good_execution_can_go_unconverted_with_non_goal_text() {
+    use goat_match::sim::auto_play_match_unified;
+    let lib = lib();
+    let text = goat_match::beats_data::OpportunityText::default();
+    let mut cases = 0;
+    for seed in 0..128 {
+        let result = auto_play_match_unified(&lib, balanced_setup(), &mut GoatRng::new(seed));
+        for moment in result.moments.iter().filter(|m| {
+            m.outcome_text == text.finish_unconverted || m.outcome_text == text.delivery_unconverted
+        }) {
+            cases += 1;
+            assert!(moment.is_action);
+            assert!(moment.goal_event.is_none());
+            assert!(result
+                .opportunities
+                .iter()
+                .any(|o| o.minute == moment.minute
+                    && o.execution_success == Some(true)
+                    && !o.goal));
+        }
+    }
+    assert!(cases > 0, "must exercise skill success without a goal");
+}
+
+#[test]
+fn unified_cameos_and_hooks_keep_full_team_exposure_and_eleven_players() {
+    use goat_match::sim::{auto_play_match_unified, SubContext};
+    let lib = lib();
+    let mut hooks = 0;
+    for seed in 0..64 {
+        for returning in [false, true] {
+            let mut setup = balanced_setup();
+            setup.player_attrs = [Fixed::from_int(20); NUM_ATTRS];
+            setup.sub_context = Some(SubContext {
+                seed,
+                pc_starts_on_bench: returning,
+                manager_trust: 0,
+                manager_patience: 0,
+                pc_returning_from_injury: returning,
+            });
+            let r = auto_play_match_unified(&lib, setup, &mut GoatRng::new(seed));
+            assert_eq!(
+                r.team_observations.attacking_minutes.iter().sum::<u32>(),
+                90
+            );
+            if returning {
+                assert!((1..=10).contains(&r.minutes_played));
+            }
+            if !returning && !r.red_card && r.minutes_played < 90 {
+                hooks += 1;
+                assert!(r
+                    .opportunities
+                    .iter()
+                    .filter(|o| o.minute > r.minutes_played)
+                    .all(|o| matches!(o.actor, goat_match::beats::GoalActor::Npc(_))
+                        && o.opportunity.players == 11));
+            }
+        }
+    }
+    assert!(hooks > 0, "must exercise real substitutions");
+}

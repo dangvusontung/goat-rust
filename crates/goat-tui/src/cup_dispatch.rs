@@ -7,7 +7,7 @@
 //! this is scoped to just the PC's own path through the bracket, which is all the
 //! suspension-scoping proof needs. Each round's opponent is drawn from its own salted
 //! stream rather than the shared nation-wide pool draw, so a live-diverged PC result
-//! (a match played through the full beat/attribute engine, not `sim_team_match`) never
+//! (a match played through the full beat/attribute engine, not `sim_team_match_shared`) never
 //! has to reconcile against the rest of the bracket's simulated progression. A
 //! production-grade dispatcher would want the full reusable `draw_round`/`tier_clubs`
 //! composition those primitives were built for; this is the smallest correct slice of

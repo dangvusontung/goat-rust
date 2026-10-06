@@ -19,14 +19,14 @@ use goat_core::{
 use goat_fixed::Fixed;
 use goat_match::{
     discipline::RefPersonality,
-    sim::{auto_play_match, BeatLibrary, MatchSetup},
+    sim::{auto_play_match_unified, BeatLibrary, MatchSetup},
 };
 use goat_rng::{GoatRng, RngSource};
 use goat_traits::PlayerTraits;
 
 const BEATS_JSON: &str = include_str!("../../../beats.json");
 use goat_world::{
-    fixture_for_round, rest_weeks_after_round, round_fixtures, sim_team_match,
+    fixture_for_round, rest_weeks_after_round, round_fixtures, sim_team_match_shared,
     week_ends_after_round, world::WorldGenesis, Table, BASE_CAREER_YEAR, ROUNDS_PER_SEASON,
 };
 
@@ -329,7 +329,7 @@ fn main() {
             ),
             sub_context: None,
         };
-        let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
+        let r = auto_play_match_unified(&lib, setup, &mut GoatRng::new(match_seed));
 
         println!(
             "MATCH — Striker (OVR {}) vs Rivals FC (str {opp_str})   seed {seed}\n",
@@ -508,7 +508,7 @@ fn main() {
                 ),
                 sub_context: None,
             };
-            let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
+            let r = auto_play_match_unified(&lib, setup, &mut GoatRng::new(match_seed));
 
             state = reduce(
                 state,
@@ -586,7 +586,7 @@ fn main() {
                 } else if f.away == pc_club_id {
                     (ga, gf)
                 } else {
-                    sim_team_match(
+                    sim_team_match_shared(
                         world.clubs[f.home].strength,
                         world.clubs[f.away].strength,
                         &mut sim_rng,
@@ -750,7 +750,7 @@ fn main() {
                 ),
                 sub_context: None,
             };
-            let r = auto_play_match(&lib, setup, &mut GoatRng::new(match_seed));
+            let r = auto_play_match_unified(&lib, setup, &mut GoatRng::new(match_seed));
 
             let out = r.player_output;
             sum_out += out as i64;
@@ -827,7 +827,7 @@ fn main() {
             .and_then(|s| s.parse().ok())
             .unwrap_or(42);
         let world = WorldGenesis::generate(seed);
-        let pop = goat_world::population::genesis(seed, &world);
+        let pop = goat_world::population::genesis_shared(seed, &world);
         println!(
             "GENESIS seed={seed}  players={}  fingerprint=0x{:016x}",
             pop.len(),
@@ -874,7 +874,7 @@ fn main() {
             .unwrap_or(42);
         let world = WorldGenesis::generate(seed);
         let league_clubs = world.static_league_clubs();
-        let mut pop = goat_world::population::genesis(seed, &world);
+        let mut pop = goat_world::population::genesis_shared(seed, &world);
         for s in 1..=14u32 {
             goat_world::batch_tick::batch_tick_season(
                 &mut pop,
@@ -917,7 +917,7 @@ fn main() {
 
         let world = WorldGenesis::generate(seed);
         let league_clubs = world.static_league_clubs();
-        let mut pop = goat_world::population::genesis(seed, &world);
+        let mut pop = goat_world::population::genesis_shared(seed, &world);
         for s in 1..=seasons {
             goat_world::batch_tick::batch_tick_season(
                 &mut pop,
@@ -1120,7 +1120,7 @@ fn main() {
             let mut pc_ga = 0u32;
 
             for f in &all_fixtures {
-                let (gf, ga) = sim_team_match(
+                let (gf, ga) = sim_team_match_shared(
                     world.clubs[f.home].strength,
                     world.clubs[f.away].strength,
                     &mut sim_rng,

@@ -1,5 +1,14 @@
 # World Scale-Up — Phase A: Procedural Clubs & Nations
 
+**Updated target (2026-10-05): 150 countries.** The 50-country implementation
+record below describes the September local branch. Following the September 25
+merge, the active career path uses the 20-country `WorldGenesis` model; the
+50-country generator is retained separately. This document's historical
+"implemented" status does not mean the 150-country target is implemented.
+See [DEVELOPMENT-STATUS.md](DEVELOPMENT-STATUS.md) for the current checkpoint.
+The target is saved in [TASK-CORE-150-COUNTRIES.md](../tasks/TASK-CORE-150-COUNTRIES.md).
+Prioritize core realism and shared simulation before this expansion or TUI polish.
+
 **Project:** BECOME THE GOAT
 **Scope:** `goat-world` crate — world genesis (`world.rs`, `population.rs`).
 **Status:** ✅ IMPLEMENTED (2026-09-22, commits `141429c` + `94d23cf`). The sections below are the original design doc, kept for context; see "Implementation notes" for where the code deviates from it.

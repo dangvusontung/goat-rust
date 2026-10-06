@@ -114,12 +114,31 @@ scripts/world-sim.sh          # world/season sim harness
 
 ## 7. Current status
 
-All 10 roadmap phases have landed (through Phase 10 — life & money, retirement
-verdict, full-career loop). The full game is playable in `goat-tui` start to finish:
-academy at 16 → weeks/training → beat-driven matches → seasons → transfers/contracts
-→ legacy & pantheon → retirement verdict. Phase 3.5 (calendar + training wired into
-the live loop) is also done. Remaining work is tuning, beat-library volume, and the
-Flutter client (`goat-bridge`).
+**Development priority (2026-10-05): core simulation realism first.** The TUI
+is a testing adapter, not a presentation/product priority. Complete shared
+headless behavior before enhancing interfaces. See
+[`docs/SIMULATION-AUDIT.md`](docs/SIMULATION-AUDIT.md) for mechanics, evidence,
+realism gaps and the proposed core backlog.
+
+The career spine is playable in `goat-tui`: academy/first-team start at 16 →
+training → roster-driven league matches → seasons → contracts/transfers →
+legacy/pantheon → retirement. Calendar progression and pre-season are live;
+canonical training growth remains in `goat-core/week.rs`. The separate
+`goat-training` day-based model has its own tests but is not called by the TUI.
+Do not treat those independent training tests as live-loop integration evidence.
+
+**World target: 150 countries** (confirmed by the user on 2026-10-05).
+After the September merge, the active career path uses `WorldGenesis` with
+20 countries, 3 tiers each and 20 clubs per tier. The earlier 50-country
+`layout`/`worldgen` implementation remains in the repository but does not drive
+the career loop. Neither number represents the final target; expanding to 150
+requires an implementation task covering nation data, fixtures, saves and tests.
+
+The current continuation checkpoint and validation evidence are in
+[`docs/DEVELOPMENT-STATUS.md`](docs/DEVELOPMENT-STATUS.md). Remaining priorities
+are shared core orchestration, consistent accounting, representative headless
+season measurement and realism calibration;
+the web demo and Flutter bridge do not yet imply feature parity with the TUI.
 
 **Explicitly out of scope (parked, do not build unprompted):** goalkeeper career,
 graphical renderers, final tuning numbers, beat-library volume beyond the starter
@@ -145,3 +164,22 @@ set, deeper relationship web.
 4. If a change requires deviating from the design docs, say so out loud and wait
    for the user's call.
 5. Keep changes minimal and scoped; match existing code style.
+
+Current simulation update (2026-10-05): shared opportunity/conversion and PC/NPC
+attribute development are implemented via versioned entry points (SIM_VERSION 6, including full-time red-card continuation, PC/NPC opportunity accounting and dated development history).
+See [implementation report](docs/SHARED-SIMULATION-RUN.md) for validated runs,
+performance measurements, compatibility and remaining fidelity gaps.
+
+Controlled calibration: [400,000-fixture comparison](docs/MATCH-CALIBRATION.md)
+finds NPC resolutions close in mean goals, with PC participation still governed
+by separate scoring stakes. Shared PC/NPC opportunity accounting is now implemented in simulation version 5.
+
+Completed: [v5 shared PC/NPC opportunities](docs/PC-NPC-OPPORTUNITIES.md),
+460,000-fixture comparison, semantic non-goal narration, role/chain/policy
+ablations. [PC/NPC dated development history](docs/DEVELOPMENT-HISTORY.md) is now implemented in v6 (save layout 22), including incremental NPC projection. Mobile session caching and consistent season chronology are next; 150 countries remains deferred.
+
+Current update (2026-10-06): [v7 individual NPC training/health](docs/NPC-INDIVIDUAL-LIFE.md),
+SIM_VERSION 7, layout 22. Five-drill weekly policy, energy/recovery and seeded
+injury episodes feed promotion, selection and season availability. Core gate
+564 passed; whole-world 20-season cloud replay median 9.21 s, peak native RSS
+about 41.9 MiB. Mobile cache/device task and realistic fixture workload remain next.

@@ -29,6 +29,18 @@ pub fn sim_team_match(home_str: u8, away_str: u8, rng: &mut impl RngSource) -> (
     (gf, ga)
 }
 
+/// Shared opportunity/conversion model for new simulations. The legacy entry
+/// point above remains frozen for explicit compatibility checks.
+pub fn sim_team_match_shared(home_str: u8, away_str: u8, rng: &mut impl RngSource) -> (u32, u32) {
+    use goat_core::match_model::{simulate_match, TeamLines};
+    let lines = |strength| TeamLines {
+        attack: strength,
+        midfield: strength,
+        defense: strength,
+    };
+    simulate_match(lines(home_str), lines(away_str), rng)
+}
+
 /// League table entry for a single club.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TableEntry {

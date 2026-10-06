@@ -1,5 +1,15 @@
 # ROADMAP — Become the GOAT
 
+Current checkpoint: see [DEVELOPMENT-STATUS.md](docs/DEVELOPMENT-STATUS.md).
+Current direction: **complete the core simulation first; use the TUI for testing**.
+The proposed next milestone is [shared headless simulation](tasks/TASK-CORE-SHARED-SIMULATION.md).
+The [150-country expansion](tasks/TASK-CORE-150-COUNTRIES.md) is a separate backlog
+task. See [SIMULATION-AUDIT.md](docs/SIMULATION-AUDIT.md) before tuning more systems.
+The phase descriptions below are the original plan, not an implementation ledger.
+The current world target is **150 countries** (2026-10-05); the active post-merge
+career model currently contains 20, while the retained alternative contains 50.
+Calendar progression is live; weekly training remains canonical in `goat-core`.
+
 The whole game, built in 10 phases. Each phase has a **playable gate** — something you
 can do in `goat-tui` when it lands. Claude Code works one phase per task file
 (`tasks/TASK-NN-*.md`), in order, with review pauses inside each.
@@ -73,3 +83,13 @@ rather than the inline fallback in `advance_week`.
 Goalkeeper career, graphical renderers (2D/3D/Flutter), `goat-bridge` FFI, final tuning
 numbers (placeholders throughout, centralized in `tuning` modules), beat-library volume
 beyond the starter set, deeper relationship web. All parked per bible §11.
+
+Core realism checkpoint (2026-10-05): [v5 PC/NPC opportunity ledger](docs/PC-NPC-OPPORTUNITIES.md)
+implemented and measured, including role/chain/policy ablations and full-time
+dismissal continuation. [PC/NPC development history](docs/DEVELOPMENT-HISTORY.md)
+is implemented in v6. Shared weekly orchestration, realistic NPC drill schedules
+and mobile session caching remain pending; this does not mark every core phase complete.
+
+NPC enhancement (2026-10-06): [v7 individual health and drills](docs/NPC-INDIVIDUAL-LIFE.md)
+is implemented. Next: session replay cache/mobile measurements, then fixture-based
+NPC workload and role/familiarity development. The 150-country task remains deferred.

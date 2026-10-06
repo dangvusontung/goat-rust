@@ -76,9 +76,65 @@ pub fn rebuild_population(
     season: u32,
     records: &[OrbitMatchRecord],
 ) -> Population {
+    rebuild_population_model(world_seed, season, records, false)
+}
+
+/// Frozen constant-exposure replay (versions 3–5).
+pub fn rebuild_population_shared(
+    world_seed: u64,
+    season: u32,
+    records: &[OrbitMatchRecord],
+) -> Population {
+    rebuild_population_model(world_seed, season, records, true)
+}
+
+/// Reconstruct the current shared model without changing legacy replay fixtures.
+pub fn rebuild_population_developed(
+    world_seed: u64,
+    season: u32,
+    records: &[OrbitMatchRecord],
+) -> Population {
+    let mut world = WorldGenesis::generate(world_seed);
+    let mut cache = crate::promotion::ReplayCache::new_developed(&world, world_seed);
+    for _ in 1..season {
+        cache.advance_one_season_with_orbit(&mut world, records);
+    }
+    let mut pop = cache.into_population();
+    for record in records.iter().filter(|r| r.season == season) {
+        apply_orbit_record(&mut pop, record);
+    }
+    pop
+}
+pub fn rebuild_population_lived(
+    world_seed: u64,
+    season: u32,
+    records: &[OrbitMatchRecord],
+) -> Population {
+    let mut world = WorldGenesis::generate(world_seed);
+    let mut cache = crate::promotion::ReplayCache::new_lived(&world, world_seed);
+    for _ in 1..season {
+        cache.advance_one_season_with_orbit(&mut world, records);
+    }
+    let mut pop = cache.into_population();
+    for record in records.iter().filter(|r| r.season == season) {
+        apply_orbit_record(&mut pop, record);
+    }
+    pop
+}
+
+fn rebuild_population_model(
+    world_seed: u64,
+    season: u32,
+    records: &[OrbitMatchRecord],
+    shared: bool,
+) -> Population {
     let world = WorldGenesis::generate(world_seed);
     let league_clubs = world.static_league_clubs();
-    let mut pop = genesis(world_seed, &world);
+    let mut pop = if shared {
+        crate::population::genesis_shared(world_seed, &world)
+    } else {
+        genesis(world_seed, &world)
+    };
     for s in 1..season {
         for rec in records.iter().filter(|r| r.season == s) {
             apply_orbit_record(&mut pop, rec);
@@ -218,5 +274,91 @@ mod tests {
         // Player 11 accumulated 90 real apps over 3 orbit seasons.
         assert_eq!(a.career_apps[11], 90);
         assert_eq!(a.career_goals[11], 90);
+    }
+}
+
+#[cfg(test)]
+mod developed_replay_tests {
+    use super::*;
+    #[test]
+    fn developed_rebuild_matches_market_cache_and_keeps_orbit_credits() {
+        let seed = 42;
+        let mut world = WorldGenesis::generate(seed);
+        let mut cache = crate::promotion::ReplayCache::new_developed(&world, seed);
+        cache.advance_one_season(&mut world);
+        let rebuilt = rebuild_population_developed(seed, 2, &[]);
+        assert_eq!(rebuilt.fingerprint(), cache.pop().fingerprint());
+        assert_eq!(
+            rebuilt.career_fingerprint(),
+            cache.pop().career_fingerprint()
+        );
+        assert!(rebuilt.exposure_segment_count() > 0);
+        for idx in (0..rebuilt.len()).step_by(89) {
+            assert_eq!(
+                rebuilt.exposure_history(idx),
+                cache.pop().exposure_history(idx)
+            );
+            assert_eq!(
+                rebuilt.current_ovr(idx, 104),
+                cache.pop().current_ovr(idx, 104)
+            );
+        }
+        let record = OrbitMatchRecord {
+            season: 2,
+            round: 0,
+            div: 0,
+            credits: vec![goat_core::state::NpcMatchCredit {
+                pop_idx: 0,
+                goals: 2,
+                assists: 1,
+                result: 1,
+            }],
+        };
+        let with_orbit = rebuild_population_developed(seed, 2, &[record]);
+        assert_eq!(with_orbit.career_apps[0], rebuilt.career_apps[0] + 1);
+        assert_eq!(with_orbit.career_goals[0], rebuilt.career_goals[0] + 2);
+        assert_eq!(with_orbit.exposure_history(0), rebuilt.exposure_history(0));
+    }
+}
+
+#[cfg(test)]
+mod lived_replay_tests {
+    use super::*;
+    #[test]
+    fn individual_health_reconstructs_with_market_and_orbit_state() {
+        let mut world = WorldGenesis::generate(42);
+        let mut cache = crate::promotion::ReplayCache::new_lived(&world, 42);
+        let records = [OrbitMatchRecord {
+            season: 1,
+            round: 0,
+            div: 0,
+            credits: vec![goat_core::state::NpcMatchCredit {
+                pop_idx: 0,
+                goals: 1,
+                assists: 0,
+                result: 1,
+            }],
+        }];
+        cache.advance_one_season_with_orbit(&mut world, &records);
+        let rebuilt = rebuild_population_lived(42, 2, &records);
+        assert_eq!(rebuilt.fingerprint(), cache.pop().fingerprint());
+        assert_eq!(
+            rebuilt.career_fingerprint(),
+            cache.pop().career_fingerprint()
+        );
+        for idx in (0..rebuilt.len()).step_by(997) {
+            assert_eq!(
+                rebuilt.training_history(idx, 0, 104),
+                cache.pop().training_history(idx, 0, 104)
+            );
+            assert_eq!(
+                rebuilt.injury_history(idx, 104),
+                cache.pop().injury_history(idx, 104)
+            );
+            assert_eq!(
+                rebuilt.current_ovr(idx, 104),
+                cache.pop().current_ovr(idx, 104)
+            );
+        }
     }
 }

@@ -26,6 +26,7 @@ use crate::week::{advance_week, DevelopmentEvent, Routine};
 /// The entire world state for a single save.
 #[derive(Debug, Clone)]
 pub struct WorldState {
+    pub pc_development_history: crate::history::DevelopmentHistory,
     pub players: PlayerStore,
     /// The player-controlled player's id. `None` before character creation.
     pub pc_player_id: Option<PlayerId>,
@@ -452,6 +453,7 @@ impl WorldState {
             pc_season_fixtures: Vec::new(),
             orbit_records: Vec::new(),
             pc_injury_return_week: None,
+            pc_development_history: Default::default(),
         }
     }
 
@@ -869,6 +871,7 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 }
             }
 
+            let injury_before = state.players.get_injury_weeks(pc_id);
             // Apply energy cost.
             let energy = state.players.get_energy(pc_id);
             let new_energy = (energy - energy_cost).clamp(Fixed::ZERO, Fixed::raw(100_000));
@@ -878,8 +881,29 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             if let Some(weeks) = injury_weeks {
                 let existing = state.players.get_injury_weeks(pc_id);
                 state.players.set_injury_weeks(pc_id, existing.max(weeks));
+                if weeks > 0 {
+                    state
+                        .pc_development_history
+                        .health
+                        .push(crate::history::HealthEvent {
+                            epoch_day: state.pc_epoch_day,
+                            kind: 1,
+                            remaining_weeks: existing.max(weeks),
+                        });
+                }
             }
 
+            state
+                .pc_development_history
+                .matches
+                .push(crate::history::MatchWorkload {
+                    epoch_day: state.pc_epoch_day,
+                    energy_before: energy,
+                    energy_after: new_energy,
+                    energy_cost,
+                    injury_before,
+                    injury_after: state.players.get_injury_weeks(pc_id),
+                });
             state
         }
 
@@ -1470,7 +1494,44 @@ fn tick_one_rest_week(mut state: WorldState) -> WorldState {
         return state;
     }
 
+    let energy_before = state.players.get_energy(pc_id);
+    let injury_before = state.players.get_injury_weeks(pc_id);
+    let age_weeks = state.players.get_age_weeks(pc_id);
+    let before: Fixed = (0..NUM_ATTRS)
+        .map(|a| state.players.get_current(pc_id, a))
+        .fold(Fixed::ZERO, |a, b| a + b);
     crate::week::advance_rest_week(&mut state.players, pc_id, state.pc_lifestyle);
+    let injury_after = state.players.get_injury_weeks(pc_id);
+    if injury_before > 0 && injury_after == 0 {
+        state.pc_injury_return_week = Some((state.pc_epoch_day + 7) / 7);
+        state
+            .pc_development_history
+            .health
+            .push(crate::history::HealthEvent {
+                epoch_day: state.pc_epoch_day + 7,
+                kind: 2,
+                remaining_weeks: 0,
+            });
+    }
+    state
+        .pc_development_history
+        .weeks
+        .push(crate::history::TrainingWeek {
+            epoch_day: state.pc_epoch_day,
+            age_weeks,
+            focus_mask: 0,
+            requested_intensity: state.pc_routine.intensity as u8,
+            effective_intensity: 3,
+            facilities: state.pc_facilities_mult,
+            energy_before,
+            energy_after: state.players.get_energy(pc_id),
+            injury_before,
+            injury_after,
+            total_attribute_delta: (0..NUM_ATTRS)
+                .map(|a| state.players.get_current(pc_id, a))
+                .fold(Fixed::ZERO, |a, b| a + b)
+                - before,
+        });
 
     let (new_epoch, flashpoints) = advance_calendar_week(
         state.pc_epoch_day,
@@ -1500,6 +1561,7 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
     // Snapshot current attrs to compute growth delta for TUI display.
     let before: [Fixed; NUM_ATTRS] = core::array::from_fn(|a| state.players.get_current(pc_id, a));
     let injury_before = state.players.get_injury_weeks(pc_id);
+    let energy_before = state.players.get_energy(pc_id);
 
     // Lifestyle modifier: Professional +10% growth; Flashy −10%.
     let lifestyle_mult = match state.pc_lifestyle {
@@ -1535,6 +1597,18 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
     state.last_week_growth =
         core::array::from_fn(|a| state.players.get_current(pc_id, a) - before[a]);
 
+    for event in &events {
+        if let DevelopmentEvent::Injury { weeks } = event {
+            state
+                .pc_development_history
+                .health
+                .push(crate::history::HealthEvent {
+                    epoch_day: state.pc_epoch_day,
+                    kind: 0,
+                    remaining_weeks: *weeks,
+                });
+        }
+    }
     state.last_week_events = events;
 
     // Sponsor obligations drain energy (the same resource training needs). Tier 0 costs
@@ -1547,6 +1621,48 @@ fn tick_one_week(mut state: WorldState, rng: &mut impl RngSource) -> WorldState 
             (e - sponsor_cost).clamp(Fixed::ZERO, crate::tuning::ENERGY_MAX),
         );
     }
+
+    let injury_after = state.players.get_injury_weeks(pc_id);
+    if injury_before > 0 && injury_after == 0 {
+        state
+            .pc_development_history
+            .health
+            .push(crate::history::HealthEvent {
+                epoch_day: state.pc_epoch_day + 7,
+                kind: 2,
+                remaining_weeks: 0,
+            });
+    }
+    state
+        .pc_development_history
+        .weeks
+        .push(crate::history::TrainingWeek {
+            epoch_day: state.pc_epoch_day,
+            age_weeks: state.players.get_age_weeks(pc_id) - 1,
+            focus_mask: state
+                .pc_routine
+                .focus_attrs
+                .iter()
+                .fold(0, |mask, a| mask | (1 << *a as u32)),
+            requested_intensity: state.pc_routine.intensity as u8,
+            effective_intensity: if injury_before > 0 || injury_after > 0 {
+                3
+            } else if energy_before < crate::tuning::ENERGY_AUTO_DOWNGRADE {
+                0
+            } else {
+                state.pc_routine.intensity as u8
+            },
+            facilities: effective_mult,
+            energy_before,
+            energy_after: state.players.get_energy(pc_id),
+            injury_before,
+            injury_after,
+            total_attribute_delta: state
+                .last_week_growth
+                .iter()
+                .copied()
+                .fold(Fixed::ZERO, |a, b| a + b),
+        });
 
     // ── Live calendar tick (golden-safe) ─────────────────────────────────────
     // Advance the CalendarEngine 7 days on its OWN RNG stream (seeded from
@@ -1640,6 +1756,85 @@ mod tests {
         state.pc_player_id = Some(id);
         state.pc_club = "Riverside Town".to_string();
         id
+    }
+
+    #[test]
+    fn history_records_training_match_injury_and_rest_recovery_without_rng_changes() {
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 99);
+        s.season_number = 1;
+        s.pc_routine = Routine {
+            focus_attrs: vec![AttrId::Finishing],
+            intensity: Intensity::High,
+        };
+        let mut reference = s.players.clone();
+        let mut rng = GoatRng::new(41);
+        let mut reference_rng = rng.clone();
+        crate::week::advance_week(
+            &mut reference,
+            0,
+            &s.pc_routine,
+            Fixed::ONE,
+            1,
+            1000,
+            &mut reference_rng,
+        );
+        s = tick_one_week(s, &mut rng);
+        assert_eq!(s.players.snapshot(0).current, reference.snapshot(0).current);
+        assert_eq!(rng.next_u64(), reference_rng.next_u64());
+        let w = &s.pc_development_history.weeks[0];
+        assert_eq!(w.focus_mask, 1 << AttrId::Finishing as u32);
+        assert_eq!(w.requested_intensity, 2);
+        assert_eq!(w.energy_after, s.players.get_energy(0));
+        let day = s.pc_epoch_day;
+        s = reduce(
+            s,
+            Intent::ApplyMatchResult {
+                familiarity_xp: [Fixed::ZERO; NUM_ROLES],
+                energy_cost: Fixed::from_int(20),
+                injury_weeks: Some(2),
+            },
+            &mut rng,
+        );
+        assert_eq!(s.pc_development_history.matches.len(), 1);
+        assert_eq!(
+            s.pc_development_history.health.last().unwrap().epoch_day,
+            day
+        );
+        assert_eq!(s.pc_development_history.health.last().unwrap().kind, 1);
+        s = tick_one_rest_week(s);
+        s = tick_one_rest_week(s);
+        assert_eq!(s.pc_development_history.weeks.len(), 3);
+        assert_eq!(s.pc_development_history.health.last().unwrap().kind, 2);
+        assert_eq!(
+            s.pc_development_history.health.last().unwrap().epoch_day,
+            day + 14
+        );
+        assert_eq!(s.players.get_injury_weeks(0), 0);
+        assert!(s
+            .pc_development_history
+            .weeks
+            .iter()
+            .all(|w| w.age_weeks >= 16 * 52));
+    }
+
+    #[test]
+    fn history_records_training_onset_and_calendar_guard_avoids_duplicates() {
+        struct ZeroRng;
+        impl RngSource for ZeroRng {
+            fn next_u64(&mut self) -> u64 {
+                0
+            }
+        }
+        let mut s = WorldState::new();
+        push_uniform_player(&mut s, 50, 99);
+        s.season_number = 1;
+        s = reduce(s, Intent::AdvanceWeek, &mut ZeroRng);
+        assert_eq!(s.pc_development_history.weeks.len(), 1);
+        assert_eq!(s.pc_development_history.health[0].kind, 0);
+        assert_eq!(s.pc_development_history.weeks[0].effective_intensity, 3);
+        s = reduce(s, Intent::AdvanceWeek, &mut ZeroRng);
+        assert_eq!(s.pc_development_history.weeks.len(), 1);
     }
 
     #[test]

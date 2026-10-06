@@ -582,9 +582,47 @@ pub struct MomentSummary {
     pub failure_event: Option<ScoreEvent>,
 }
 
+/// Controls diagnostic ablations without changing the team opportunity budget.
+#[derive(Clone, Copy, Debug)]
+pub struct UnifiedOptions {
+    pub context: goat_core::match_model::MatchContext,
+    pub zone_pull: bool,
+    pub chains: bool,
+    pub first_choice: bool,
+}
+impl Default for UnifiedOptions {
+    fn default() -> Self {
+        Self {
+            context: goat_core::match_model::MatchContext {
+                venue: goat_core::match_model::Venue::Neutral,
+                ..Default::default()
+            },
+            zone_pull: true,
+            chains: true,
+            first_choice: false,
+        }
+    }
+}
+
+/// A closed opportunity, including no-chance intervals and missed attempts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ResolvedOpportunity {
+    pub minute: u32,
+    pub opportunity: goat_core::match_model::TeamOpportunity,
+    /// Resolver of the interval; scorer/assist identities remain in goal_credits.
+    pub actor: GoalActor,
+    /// Some for a finishing/defensive contest; None for NPC flow or a turnover.
+    pub execution_success: Option<bool>,
+    pub goal: bool,
+}
+
 /// Final result of a completed match.
 #[derive(Debug, Clone)]
 pub struct MatchResult {
+    pub team_observations: goat_core::match_model::MatchObservations,
+    pub opportunities: Vec<ResolvedOpportunity>,
+    /// Automatic NPC opportunities only; authored PC contests are separate.
+    pub npc_observations: goat_core::match_model::MatchObservations,
     pub player_output: i32,
     pub goals_for: u32,
     pub goals_against: u32,
@@ -596,7 +634,7 @@ pub struct MatchResult {
     /// these against real population players.
     pub goal_credits: Vec<GoalCredit>,
     /// Minutes the PC was actually on the pitch (PA2 M4). 90 for every
-    /// `sub_context: None` match; 0 = never came on (M1.5 bench semantics).
+    /// `sub_context: None` match without a dismissal; 0 = never came on.
     pub minutes_played: u32,
     /// Population ids of opposition players subbed ON during the match (M4
     /// follow-up) — the live game owes them appearances/goal credits too.
@@ -670,6 +708,14 @@ pub fn is_clutch(m: &MomentSummary) -> bool {
 #[derive(Debug, Clone)]
 pub struct ActiveMatchState {
     pub setup: MatchSetup,
+    shared_model: bool,
+    unified: Option<UnifiedOptions>,
+    pending_opportunity: Option<goat_core::match_model::TeamOpportunity>,
+    opportunities: Vec<ResolvedOpportunity>,
+    team_observations: goat_core::match_model::MatchObservations,
+    shared_context: goat_core::match_model::MatchContext,
+    tick_minutes: u32,
+    npc_observations: goat_core::match_model::MatchObservations,
     pub minute: u32,
     pub possession: Possession,
     pub zone: PitchZone,
@@ -744,33 +790,93 @@ pub fn start_match(
     setup: MatchSetup,
     rng: &mut impl RngSource,
 ) -> ActiveMatchState {
+    start_match_model(lib, setup, rng, false)
+}
+
+/// Start the shared chance/conversion version; legacy goldens remain on start_match.
+pub fn start_match_shared(
+    lib: &BeatLibrary,
+    setup: MatchSetup,
+    rng: &mut impl RngSource,
+) -> ActiveMatchState {
+    start_match_model(lib, setup, rng, true)
+}
+
+fn start_match_model(
+    lib: &BeatLibrary,
+    setup: MatchSetup,
+    rng: &mut impl RngSource,
+    shared_model: bool,
+) -> ActiveMatchState {
+    initialize_match(
+        lib,
+        setup,
+        rng,
+        shared_model,
+        true,
+        goat_core::match_model::MatchContext {
+            venue: goat_core::match_model::Venue::Neutral,
+            ..Default::default()
+        },
+        None,
+    )
+}
+
+fn initialize_match(
+    lib: &BeatLibrary,
+    setup: MatchSetup,
+    rng: &mut impl RngSource,
+    shared_model: bool,
+    allow_pc: bool,
+    shared_context: goat_core::match_model::MatchContext,
+    unified: Option<UnifiedOptions>,
+) -> ActiveMatchState {
     let headspace = Headspace::from_form(setup.form);
     // Kickoff possession: the midfield battle decides.
-    let share = possession_share(setup.own_profile.midfield, setup.opp_profile.midfield, 0, 0);
+    let share = if shared_model {
+        shared_possession_share(
+            &manpower_profile(&setup.own_profile, shared_context.own_players),
+            &manpower_profile(&setup.opp_profile, shared_context.opp_players),
+            0,
+        )
+    } else {
+        possession_share(setup.own_profile.midfield, setup.opp_profile.midfield, 0, 0)
+    };
     let possession = if rng.next_range_u64(1, 100) <= share {
         Possession::Own
     } else {
         Possession::Opp
     };
     let mut ms = ActiveMatchState {
+        shared_model,
+        unified,
+        pending_opportunity: None,
+        opportunities: Vec::new(),
+        team_observations: goat_core::match_model::MatchObservations::default(),
+        shared_context,
+        tick_minutes: 0,
+        npc_observations: goat_core::match_model::MatchObservations::default(),
         headspace,
-        pc_on_pitch: setup
-            .sub_context
-            .as_ref()
-            .map(|c| !c.pc_starts_on_bench)
-            .unwrap_or(true),
-        pc_started_match: setup
-            .sub_context
-            .as_ref()
-            .map(|c| !c.pc_starts_on_bench)
-            .unwrap_or(true),
-        sub_exhausted: false,
+        pc_on_pitch: allow_pc
+            && setup
+                .sub_context
+                .as_ref()
+                .map(|c| !c.pc_starts_on_bench)
+                .unwrap_or(true),
+        pc_started_match: allow_pc
+            && setup
+                .sub_context
+                .as_ref()
+                .map(|c| !c.pc_starts_on_bench)
+                .unwrap_or(true),
+        sub_exhausted: !allow_pc,
         minutes_played: 0,
-        last_on_minute: if setup
-            .sub_context
-            .as_ref()
-            .map(|c| !c.pc_starts_on_bench)
-            .unwrap_or(true)
+        last_on_minute: if allow_pc
+            && setup
+                .sub_context
+                .as_ref()
+                .map(|c| !c.pc_starts_on_bench)
+                .unwrap_or(true)
         {
             Some(0)
         } else {
@@ -827,7 +933,7 @@ pub fn advance_beat(
     let choice_idx = choice_idx.min(beat.choices.len().saturating_sub(1));
     resolve_choice(&mut ms, &beat, choice_idx, lib, rng, 0);
     if ms.is_complete {
-        return ms; // red card during resolution
+        return ms; // explicit legacy red-card stopping behavior
     }
 
     // Red mist: extreme frustration can produce a card without any tactical choice.
@@ -854,6 +960,13 @@ pub fn advance_beat(
     ms.headspace
         .tick(ms.setup.player_attrs[AttrId::Composure as usize]);
 
+    if ms.unified.is_some() {
+        finish_pending_opportunity(&mut ms, lib, rng);
+        if ms.minute >= FULL_TIME {
+            finalize(&mut ms);
+            return ms;
+        }
+    }
     run_until_decision(&mut ms, lib, rng);
     ms
 }
@@ -864,7 +977,135 @@ pub fn auto_play_match(
     setup: MatchSetup,
     rng: &mut impl RngSource,
 ) -> MatchResult {
-    let mut ms = start_match(lib, setup, rng);
+    auto_play_model(lib, setup, rng, false)
+}
+
+/// Automatic play of the shared model, also used by noninteractive adapters.
+pub fn auto_play_match_shared(
+    lib: &BeatLibrary,
+    setup: MatchSetup,
+    rng: &mut impl RngSource,
+) -> MatchResult {
+    auto_play_model(lib, setup, rng, true)
+}
+
+/// Diagnostic observer: run the detailed flow with eleven NPCs and no protagonist
+/// decisions or substitutions. This isolates resolution effects from PC abilities.
+pub fn observe_npc_match(
+    lib: &BeatLibrary,
+    setup: MatchSetup,
+    rng: &mut impl RngSource,
+) -> MatchResult {
+    observe_npc_match_with_context(
+        lib,
+        setup,
+        goat_core::match_model::MatchContext {
+            venue: goat_core::match_model::Venue::Neutral,
+            ..Default::default()
+        },
+        rng,
+    )
+}
+
+/// Observer with explicit venue and initial manpower; active default play remains
+/// neutral with eleven players until adapters supply venue/availability inputs.
+pub fn observe_npc_match_with_context(
+    lib: &BeatLibrary,
+    mut setup: MatchSetup,
+    context: goat_core::match_model::MatchContext,
+    rng: &mut impl RngSource,
+) -> MatchResult {
+    setup.sub_context = None;
+    for player in &mut setup.own_squad.players {
+        player.is_pc = false;
+    }
+    setup
+        .own_squad
+        .players
+        .truncate(context.own_players.min(11) as usize);
+    setup
+        .opp_squad
+        .players
+        .truncate(context.opp_players.min(11) as usize);
+    let ms = initialize_match(lib, setup, rng, true, false, context, None);
+    ms.final_result
+        .expect("NPC observer always runs to full time")
+}
+
+/// Version-5 interactive flow: protagonist decisions share the team's opportunities.
+pub fn start_match_unified(
+    lib: &BeatLibrary,
+    setup: MatchSetup,
+    rng: &mut impl RngSource,
+) -> ActiveMatchState {
+    let options = UnifiedOptions::default();
+    initialize_match(lib, setup, rng, true, true, options.context, Some(options))
+}
+
+/// Version-5 default decision policy, also used by production skip-match adapters.
+pub fn auto_play_match_unified(
+    lib: &BeatLibrary,
+    setup: MatchSetup,
+    rng: &mut impl RngSource,
+) -> MatchResult {
+    auto_play_match_unified_with_options(lib, setup, UnifiedOptions::default(), rng)
+}
+
+/// Diagnostic policy/zone/chain ablations on the same version-5 engine.
+pub fn auto_play_match_unified_with_options(
+    lib: &BeatLibrary,
+    setup: MatchSetup,
+    options: UnifiedOptions,
+    rng: &mut impl RngSource,
+) -> MatchResult {
+    let mut ms = initialize_match(lib, setup, rng, true, true, options.context, Some(options));
+    while !ms.is_complete {
+        let idx = if options.first_choice {
+            0
+        } else {
+            ms.current_beat()
+                .map(|b| auto_pick_generated_choice(&b.choices, &ms.setup.player_attrs))
+                .unwrap_or(0)
+        };
+        ms = advance_beat(ms, idx, lib, rng);
+    }
+    ms.final_result.expect("unified match finishes")
+}
+
+/// Observer counterpart of the version-5 opportunity ledger.
+pub fn observe_npc_match_unified_with_context(
+    lib: &BeatLibrary,
+    mut setup: MatchSetup,
+    context: goat_core::match_model::MatchContext,
+    rng: &mut impl RngSource,
+) -> MatchResult {
+    setup.sub_context = None;
+    for player in &mut setup.own_squad.players {
+        player.is_pc = false;
+    }
+    setup
+        .own_squad
+        .players
+        .truncate(context.own_players.min(11) as usize);
+    setup
+        .opp_squad
+        .players
+        .truncate(context.opp_players.min(11) as usize);
+    let options = UnifiedOptions {
+        context,
+        ..Default::default()
+    };
+    let ms = initialize_match(lib, setup, rng, true, false, context, Some(options));
+    ms.final_result.expect("unified observer finishes")
+}
+
+fn auto_play_model(
+    lib: &BeatLibrary,
+    setup: MatchSetup,
+    rng: &mut impl RngSource,
+    shared_model: bool,
+) -> MatchResult {
+    let mut ms = start_match_model(lib, setup, rng, shared_model);
     while !ms.is_complete {
         let choice_idx = ms
             .current_beat()
@@ -888,7 +1129,9 @@ fn run_until_decision(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut im
 
 fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) {
     // 1. Clock.
+    let previous_minute = ms.minute;
     ms.minute = (ms.minute + rng.next_range_u32(TICK_MIN_MINUTES, TICK_MAX_MINUTES)).min(FULL_TIME);
+    ms.tick_minutes = ms.minute - previous_minute;
 
     // 1.5 Substitutions (PA2 M4): side-stream rolls only — never the match RNG.
     maybe_substitute(ms);
@@ -899,13 +1142,26 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
     ms.response_ticks = ms.response_ticks.saturating_sub(1);
 
     // 3. Possession battle.
-    let mut share = possession_share(
-        ms.setup.own_profile.midfield,
-        ms.setup.opp_profile.midfield,
-        ms.momentum,
-        ms.goals_for as i32 - ms.goals_against as i32,
-    ) as i32;
-    if ms.response_ticks > 0 {
+    let mut share = if ms.shared_model {
+        shared_possession_share(
+            &manpower_profile(
+                &ms.setup.own_profile,
+                ms.shared_context
+                    .own_players
+                    .saturating_sub(u8::from(ms.red_card)),
+            ),
+            &manpower_profile(&ms.setup.opp_profile, ms.shared_context.opp_players),
+            ms.momentum,
+        )
+    } else {
+        possession_share(
+            ms.setup.own_profile.midfield,
+            ms.setup.opp_profile.midfield,
+            ms.momentum,
+            ms.goals_for as i32 - ms.goals_against as i32,
+        )
+    } as i32;
+    if !ms.shared_model && ms.response_ticks > 0 {
         share += match ms.response_side {
             Possession::Own => RESPONSE_SHARE_PCT,
             Possession::Opp => -RESPONSE_SHARE_PCT,
@@ -918,19 +1174,47 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
         Possession::Opp
     };
 
+    if ms.unified.is_some() {
+        use goat_core::match_model::{allocate_opportunity, AttackContext, Venue};
+        let own = ms.possession == Possession::Own;
+        let side = usize::from(!own);
+        let opportunity = allocate_opportunity(
+            side as u8,
+            AttackContext {
+                minutes: ms.tick_minutes,
+                home: ms.shared_context.venue == if own { Venue::Home } else { Venue::Away },
+                players: if own {
+                    ms.shared_context
+                        .own_players
+                        .saturating_sub(u8::from(ms.red_card))
+                } else {
+                    ms.shared_context.opp_players
+                },
+            },
+            rng,
+        );
+        ms.team_observations.attacking_minutes[side] += opportunity.minutes;
+        ms.team_observations.chances[side] += u32::from(opportunity.created);
+        ms.pending_opportunity = Some(opportunity);
+    }
+
     // 4. Zone drift for the possessing side.
     drift_zone(ms, rng);
 
     // 5. Frustration override: a reckless beat hijacks the tick (on-pitch only).
     if ms.pc_on_pitch && ms.force_reckless {
         ms.force_reckless = false;
-        ms.possession = Possession::Opp;
+        if ms.unified.is_none() {
+            ms.possession = Possession::Opp;
+        }
         ms.zone = PitchZone::Defense;
         let lens = make_lens(ms);
         let (sf, sa) = mercy_flags(ms);
         if let Some(beat) = lib.build_beat(&lens, ms.setup.player_role, &ms.setup, sf, sa, rng) {
-            ms.current = Some(beat);
-            return;
+            if let Some(beat) = eligible_unified_beat(ms, beat) {
+                ms.current = Some(beat);
+                return;
+            }
         }
     }
 
@@ -948,23 +1232,27 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
             } else {
                 0
             };
-        if rng.next_range_u64(1, 100) <= pull as u64 {
+        if ms.unified.is_none_or(|o| o.zone_pull) && rng.next_range_u64(1, 100) <= pull as u64 {
             ms.zone = ROLE_ZONE[role as usize];
-            match ROLE_POSITION_FAMILY[role as usize] {
-                PositionFamily::Forward => ms.possession = Possession::Own,
-                PositionFamily::Defender => {
-                    if rng.next_range_u64(1, 100) <= DEF_PULL_OPP_PCT as u64 {
-                        ms.possession = Possession::Opp;
+            if ms.unified.is_none() {
+                match ROLE_POSITION_FAMILY[role as usize] {
+                    PositionFamily::Forward => ms.possession = Possession::Own,
+                    PositionFamily::Defender => {
+                        if rng.next_range_u64(1, 100) <= DEF_PULL_OPP_PCT as u64 {
+                            ms.possession = Possession::Opp;
+                        }
                     }
+                    PositionFamily::Midfielder => {}
                 }
-                PositionFamily::Midfielder => {}
             }
         }
         let lens = make_lens(ms);
         let (sf, sa) = mercy_flags(ms);
         if let Some(beat) = lib.build_beat(&lens, ms.setup.player_role, &ms.setup, sf, sa, rng) {
-            ms.current = Some(beat);
-            return;
+            if let Some(beat) = eligible_unified_beat(ms, beat) {
+                ms.current = Some(beat);
+                return;
+            }
         }
     }
 
@@ -979,6 +1267,9 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
 /// Mercy flags for beat building: suppress goal outcomes for a side already
 /// leading by MERCY_LEAD or more.
 fn mercy_flags(ms: &ActiveMatchState) -> (bool, bool) {
+    if ms.unified.is_some() {
+        return (false, false);
+    }
     (
         ms.goals_for >= ms.goals_against + MERCY_LEAD,
         ms.goals_against >= ms.goals_for + MERCY_LEAD,
@@ -1194,6 +1485,34 @@ fn apply_output_delta(output: i32, delta: i32) -> i32 {
 /// Possession share for the own team, in percent. Includes the score effect:
 /// the trailing side sees more of the ball (desperation football), capped at
 /// ±TRAIL_SHARE_GOALS goals of difference.
+// Numerical shortage lowers midfield coverage and defensive coverage. Attack
+// creation gets the same shortage separately through AttackContext::players.
+fn manpower_profile(profile: &TacticalProfile, players: u8) -> TacticalProfile {
+    let mut effective = *profile;
+    let lines = goat_core::match_model::available_lines(
+        goat_core::match_model::TeamLines {
+            attack: profile.attack,
+            midfield: profile.midfield,
+            defense: profile.defense,
+        },
+        players,
+    );
+    effective.midfield = lines.midfield;
+    effective.defense = lines.defense;
+    effective
+}
+
+fn shared_possession_share(own: &TacticalProfile, opp: &TacticalProfile, momentum: i32) -> u64 {
+    use goat_core::match_model::{possession_per_1000, TeamLines};
+    let lines = |p: &TacticalProfile| TeamLines {
+        attack: p.attack,
+        midfield: p.midfield,
+        defense: p.defense,
+    };
+    (possession_per_1000(lines(own), lines(opp)) as i32 / 10 + momentum / MOMENTUM_SHARE_DIV)
+        .clamp(SHARE_MIN, SHARE_MAX) as u64
+}
+
 fn possession_share(own_mid: u8, opp_mid: u8, momentum: i32, goal_diff: i32) -> u64 {
     let trail = (-goal_diff).clamp(-TRAIL_SHARE_GOALS, TRAIL_SHARE_GOALS) * TRAIL_SHARE_PCT;
     let share = 50
@@ -1260,8 +1579,144 @@ fn involved(ms: &ActiveMatchState, rng: &mut impl RngSource) -> bool {
     rng.next_range_u64(1, 100) <= chance as u64
 }
 
-/// Auto-resolve a tick the PC is not involved in: commentary, plus a goal roll
-/// when the possessing side is deep in attacking territory.
+/// Scoring choices require the interval's allocated opening and matching side.
+fn eligible_unified_beat(ms: &ActiveMatchState, mut beat: GeneratedBeat) -> Option<GeneratedBeat> {
+    if ms.unified.is_some() {
+        beat.choices.retain(|choice| {
+            let events = [choice.success.score_event, choice.failure.score_event];
+            if events.iter().all(Option::is_none) {
+                return true;
+            }
+            let Some(opportunity) = ms.pending_opportunity else {
+                return false;
+            };
+            opportunity.created
+                && events.iter().flatten().all(|event| {
+                    opportunity.side
+                        == match event {
+                            ScoreEvent::GoalFor | ScoreEvent::AssistFor => 0,
+                            ScoreEvent::GoalAgainst => 1,
+                        }
+                })
+                && !(events[0].is_some() && events[1].is_some())
+        });
+    }
+    (!beat.choices.is_empty()).then_some(beat)
+}
+
+fn close_opportunity(
+    ms: &mut ActiveMatchState,
+    mut opportunity: goat_core::match_model::TeamOpportunity,
+    actor: GoalActor,
+    goal: bool,
+    quality: Fixed,
+    execution_success: Option<bool>,
+) {
+    opportunity.quality = quality;
+    let side = opportunity.side as usize;
+    ms.team_observations.goals[side] += u32::from(goal);
+    if matches!(actor, GoalActor::Npc(_)) {
+        ms.npc_observations.attacking_minutes[side] += opportunity.minutes;
+        ms.npc_observations.chances[side] += u32::from(opportunity.created);
+        ms.npc_observations.goals[side] += u32::from(goal);
+    }
+    ms.opportunities.push(ResolvedOpportunity {
+        minute: ms.minute,
+        opportunity,
+        actor,
+        execution_success,
+        goal,
+    });
+}
+
+fn finish_pending_opportunity(
+    ms: &mut ActiveMatchState,
+    lib: &BeatLibrary,
+    rng: &mut impl RngSource,
+) {
+    if let Some(opportunity) = ms.pending_opportunity {
+        let side = if ms.possession == Possession::Own {
+            0
+        } else {
+            1
+        };
+        if opportunity.created && opportunity.side != side {
+            ms.pending_opportunity = None;
+            close_opportunity(ms, opportunity, GoalActor::Pc, false, Fixed::ONE, None);
+        } else {
+            auto_beat(ms, lib, rng);
+        }
+    }
+}
+
+// Semantic pressure changes the quality of the existing chance, not its count.
+const OPPORTUNITY_PRESSURE_PER_POINT: i32 = 5;
+const EXECUTION_QUALITY_SWING: Fixed = Fixed::raw(200);
+const OPPORTUNITY_QUALITY_MIN: i32 = 500;
+const OPPORTUNITY_QUALITY_MAX: i32 = 1500;
+fn unified_scoring_contest(
+    ms: &ActiveMatchState,
+    choice: &GeneratedChoice,
+    context_mod: i32,
+    execution_success: bool,
+) -> Option<(bool, Fixed)> {
+    let opportunity = ms.pending_opportunity?;
+    if !opportunity.created {
+        return None;
+    }
+    use goat_core::match_model::conversion_per_1000;
+    let attr = ms.setup.player_attrs[choice.primary as usize]
+        .to_int()
+        .clamp(1, 99) as u8;
+    let stamina_mod = if ms.stamina.to_int() < 30 {
+        (ms.stamina.to_int() - 30) / 2
+    } else {
+        0
+    };
+    let modifiers = ms.headspace.contest_mod() + stamina_mod + context_mod;
+    if choice.success.score_event.is_some() {
+        let defense =
+            manpower_profile(&ms.setup.opp_profile, ms.shared_context.opp_players).defense;
+        let quality = Fixed::raw(
+            (1000
+                + (defense as i32 - choice.difficulty as i32 + modifiers)
+                    * OPPORTUNITY_PRESSURE_PER_POINT)
+                .clamp(OPPORTUNITY_QUALITY_MIN, OPPORTUNITY_QUALITY_MAX),
+        );
+        let quality = quality
+            * (if execution_success {
+                Fixed::ONE + EXECUTION_QUALITY_SWING
+            } else {
+                Fixed::ONE - EXECUTION_QUALITY_SWING
+            });
+        Some((
+            opportunity.conversion_roll < conversion_per_1000(attr, defense, quality),
+            quality,
+        ))
+    } else if choice.failure.score_event.is_some() {
+        let attack = ms.setup.opp_profile.attack;
+        let quality = Fixed::raw(
+            (1000
+                + (choice.difficulty as i32 - attack as i32 - modifiers)
+                    * OPPORTUNITY_PRESSURE_PER_POINT)
+                .clamp(OPPORTUNITY_QUALITY_MIN, OPPORTUNITY_QUALITY_MAX),
+        );
+        let quality = quality
+            * (if execution_success {
+                Fixed::ONE - EXECUTION_QUALITY_SWING
+            } else {
+                Fixed::ONE + EXECUTION_QUALITY_SWING
+            });
+        Some((
+            opportunity.conversion_roll >= conversion_per_1000(attack, attr, quality),
+            quality,
+        ))
+    } else {
+        None
+    }
+}
+
+/// NPC commentary and finishing; unified play consumes the reserved opportunity.
 fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) {
     let (possession, zone) = (ms.possession, ms.zone);
     let (beat_id, mut text, opp_name, scorer_name, assist_name, scorer_actor) = {
@@ -1307,7 +1762,7 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
     // moments are never decisive, but keep the record accurate for the recap).
     let goals_for_before = ms.goals_for;
     let goals_against_before = ms.goals_against;
-    if attacking {
+    if attacking || ms.shared_model {
         let (att, def) = match ms.possession {
             Possession::Own => (ms.setup.own_profile.attack, ms.setup.opp_profile.defense),
             Possession::Opp => (ms.setup.opp_profile.attack, ms.setup.own_profile.defense),
@@ -1340,7 +1795,110 @@ fn auto_beat(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSou
         } else {
             p
         };
-        if rng.next_range_u64(1, 100) <= p.max(1) {
+        let scored = if ms.unified.is_some() {
+            let opportunity = ms
+                .pending_opportunity
+                .take()
+                .expect("one opportunity per tick");
+            let (attack, defense) = match opportunity.side {
+                0 => (
+                    ms.setup.own_profile.attack,
+                    manpower_profile(&ms.setup.opp_profile, ms.shared_context.opp_players).defense,
+                ),
+                _ => (
+                    ms.setup.opp_profile.attack,
+                    manpower_profile(
+                        &ms.setup.own_profile,
+                        ms.shared_context
+                            .own_players
+                            .saturating_sub(u8::from(ms.red_card)),
+                    )
+                    .defense,
+                ),
+            };
+            let goal = opportunity.created
+                && opportunity.conversion_roll
+                    < goat_core::match_model::conversion_per_1000(
+                        attack,
+                        defense,
+                        opportunity.quality,
+                    );
+            close_opportunity(
+                ms,
+                opportunity,
+                scorer_actor,
+                goal,
+                opportunity.quality,
+                None,
+            );
+            goal
+        } else if ms.shared_model {
+            use goat_core::match_model::{sample_attack, AttackContext, TeamLines};
+            let lines = |profile: &TacticalProfile| TeamLines {
+                attack: profile.attack,
+                midfield: profile.midfield,
+                defense: profile.defense,
+            };
+            let (own, opp) = match possession {
+                Possession::Own => (
+                    lines(&manpower_profile(
+                        &ms.setup.own_profile,
+                        ms.shared_context
+                            .own_players
+                            .saturating_sub(u8::from(ms.red_card)),
+                    )),
+                    lines(&manpower_profile(
+                        &ms.setup.opp_profile,
+                        ms.shared_context.opp_players,
+                    )),
+                ),
+                Possession::Opp => (
+                    lines(&manpower_profile(
+                        &ms.setup.opp_profile,
+                        ms.shared_context.opp_players,
+                    )),
+                    lines(&manpower_profile(
+                        &ms.setup.own_profile,
+                        ms.shared_context
+                            .own_players
+                            .saturating_sub(u8::from(ms.red_card)),
+                    )),
+                ),
+            };
+            // Detailed decisions account for PC opportunities separately; background
+            // flow uses the same NPC attack kernel, without legacy mercy multipliers.
+            let (chance, goal) = sample_attack(
+                own,
+                opp,
+                AttackContext {
+                    minutes: ms.tick_minutes,
+                    home: match possession {
+                        Possession::Own => {
+                            ms.shared_context.venue == goat_core::match_model::Venue::Home
+                        }
+                        Possession::Opp => {
+                            ms.shared_context.venue == goat_core::match_model::Venue::Away
+                        }
+                    },
+                    players: match possession {
+                        Possession::Own => ms
+                            .shared_context
+                            .own_players
+                            .saturating_sub(u8::from(ms.red_card)),
+                        Possession::Opp => ms.shared_context.opp_players,
+                    },
+                },
+                rng,
+            );
+            let side = usize::from(possession == Possession::Opp);
+            ms.npc_observations.attacking_minutes[side] += ms.tick_minutes;
+            ms.npc_observations.chances[side] += u32::from(chance);
+            ms.npc_observations.goals[side] += u32::from(goal);
+            goal
+        } else {
+            rng.next_range_u64(1, 100) <= p.max(1)
+        };
+        if scored {
             let ev = match ms.possession {
                 Possession::Own => ScoreEvent::GoalFor,
                 Possession::Opp => ScoreEvent::GoalAgainst,
@@ -1412,7 +1970,7 @@ fn resolve_choice(
     );
     let context_mod = desp_mod + ms.momentum / MOMENTUM_CONTEST_DIV;
 
-    let success = resolve_contest(
+    let execution_success = resolve_contest(
         ms.setup.player_attrs[choice.primary as usize],
         choice.difficulty,
         &ms.headspace,
@@ -1420,15 +1978,61 @@ fn resolve_choice(
         context_mod,
         rng,
     );
-    let outcome = if success {
+    let scoring = if ms.unified.is_some() {
+        unified_scoring_contest(ms, choice, context_mod, execution_success)
+    } else {
+        None
+    };
+    let success = scoring
+        .map(|(success, _)| success)
+        .unwrap_or(execution_success);
+    let semantic_outcome = if success {
         &choice.success
     } else {
         &choice.failure
     };
+    let mut resolved_outcome = (if execution_success {
+        &choice.success
+    } else {
+        &choice.failure
+    })
+    .clone();
+    if scoring.is_some() {
+        resolved_outcome.score_event = semantic_outcome.score_event;
+        resolved_outcome.text = semantic_outcome.text.clone();
+        if semantic_outcome.score_event.is_none() && execution_success != success {
+            resolved_outcome.text = if choice.success.score_event.is_some() {
+                if choice
+                    .success_credit
+                    .is_some_and(|credit| credit.assist == Some(GoalActor::Pc))
+                {
+                    lib.raw.opportunity_text.delivery_unconverted.clone()
+                } else {
+                    lib.raw.opportunity_text.finish_unconverted.clone()
+                }
+            } else {
+                lib.raw.opportunity_text.defence_unconverted.clone()
+            };
+        }
+    }
+    let outcome = &resolved_outcome;
+
+    if let Some((_, quality)) = scoring {
+        if let Some(opportunity) = ms.pending_opportunity.take() {
+            close_opportunity(
+                ms,
+                opportunity,
+                GoalActor::Pc,
+                outcome.score_event.is_some(),
+                quality,
+                Some(execution_success),
+            );
+        }
+    }
 
     // Danger-man duel accounting (counter-only — no RNG, no output effect).
     if let Some(name) = &beat.danger_man {
-        if success {
+        if execution_success {
             ms.danger_duels_won += 1;
         } else {
             ms.danger_duels_lost += 1;
@@ -1501,11 +2105,13 @@ fn resolve_choice(
     // strength, so a hot streak helps but doesn't run the whole game.
     ms.momentum = (ms.momentum + outcome.momentum_delta as i32 / PC_MOMENTUM_DIV)
         .clamp(-MOMENTUM_MAX, MOMENTUM_MAX);
-    if let Some(p) = outcome.possession_to {
-        ms.possession = p;
-    }
-    if let Some(z) = outcome.zone_to {
-        ms.zone = z;
+    if ms.unified.is_none() || outcome.score_event.is_none() {
+        if let Some(p) = outcome.possession_to {
+            ms.possession = p;
+        }
+        if let Some(z) = outcome.zone_to {
+            ms.zone = z;
+        }
     }
 
     award_familiarity_xp(ms, choice.primary);
@@ -1550,14 +2156,25 @@ fn resolve_choice(
     // Chain: the outcome springs an immediate follow-up beat (auto-resolved,
     // capped at CHAIN_MAX per tick so the player always gets control back).
     if let Some(chain_side) = outcome.chain {
-        if chain_depth < CHAIN_MAX && !ms.red_card && ms.minute < FULL_TIME {
+        if (ms.unified.is_none() || outcome.score_event.is_none())
+            && ms.unified.is_none_or(|o| o.chains)
+            && chain_depth < CHAIN_MAX
+            && !ms.red_card
+            && ms.minute < FULL_TIME
+        {
             ms.possession = chain_side;
             let lens = make_lens(ms);
             let (sf, sa) = mercy_flags(ms);
             if let Some(next) = lib.build_beat(&lens, ms.setup.player_role, &ms.setup, sf, sa, rng)
             {
-                let idx = auto_pick_generated_choice(&next.choices, &ms.setup.player_attrs);
-                resolve_choice(ms, &next, idx, lib, rng, chain_depth + 1);
+                if let Some(next) = eligible_unified_beat(ms, next) {
+                    let idx = if ms.unified.is_some_and(|o| o.first_choice) {
+                        0
+                    } else {
+                        auto_pick_generated_choice(&next.choices, &ms.setup.player_attrs)
+                    };
+                    resolve_choice(ms, &next, idx, lib, rng, chain_depth + 1);
+                }
             }
         }
     }
@@ -1576,7 +2193,16 @@ fn apply_card(ms: &mut ActiveMatchState, card: DisciplineEvent) {
                 }
                 ms.sub_exhausted = true;
             }
-            finalize(ms);
+            if ms.shared_model {
+                // Dismissal is not a substitution: remove the PC without a replacement.
+                ms.setup.own_squad.players.retain(|player| !player.is_pc);
+                ms.current = None;
+                ms.force_reckless = false;
+                ms.sub_exhausted = true;
+            } else {
+                // Explicit legacy replay keeps its frozen stopping behavior.
+                finalize(ms);
+            }
         }
     }
 }
@@ -1604,6 +2230,9 @@ fn build_result(ms: &ActiveMatchState) -> MatchResult {
         ms.player_output
     };
     MatchResult {
+        team_observations: ms.team_observations,
+        opportunities: ms.opportunities.clone(),
+        npc_observations: ms.npc_observations,
         player_output,
         goals_for: ms.goals_for,
         goals_against: ms.goals_against,

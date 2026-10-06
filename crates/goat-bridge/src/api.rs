@@ -23,7 +23,10 @@ use goat_fixed::Fixed;
 use goat_match::{
     beats::ScoreEvent,
     discipline::RefPersonality,
-    sim::{advance_beat, auto_play_match, start_match, ActiveMatchState, BeatLibrary, MatchSetup},
+    sim::{
+        advance_beat, auto_play_match_unified, start_match_unified, ActiveMatchState, BeatLibrary,
+        MatchSetup,
+    },
 };
 use goat_meta::{
     all_rankings, compute_axes, compute_golden_boot, compute_player_of_year, compute_reputation,
@@ -940,7 +943,8 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
             let own_str = world.clubs[pc_club_id].strength;
 
             if is_suspended {
-                let (gf, ga) = goat_world::sim_team_match(own_str, opp.strength, &mut match_rng);
+                let (gf, ga) =
+                    goat_world::sim_team_match_shared(own_str, opp.strength, &mut match_rng);
                 (
                     0,
                     0,
@@ -997,7 +1001,8 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
                     sub_context: None,
                 };
 
-                let result = with_beat_lib(|lib| auto_play_match(lib, setup, &mut match_rng));
+                let result =
+                    with_beat_lib(|lib| auto_play_match_unified(lib, setup, &mut match_rng));
 
                 let stars = "★".repeat((result.player_output / 20 + 1).clamp(1, 5) as usize)
                     + &"☆".repeat(5 - (result.player_output / 20 + 1).clamp(1, 5) as usize);
@@ -1114,7 +1119,7 @@ pub fn play_round(interactive: bool) -> (GoatGameState, MatchResultDto) {
                 (0, 0)
             }
         } else {
-            goat_world::sim_team_match(
+            goat_world::sim_team_match_shared(
                 world.clubs[f.home].strength,
                 world.clubs[f.away].strength,
                 &mut sim_rng,
@@ -1854,7 +1859,7 @@ pub fn start_interactive_match() -> Option<ActiveBeatDto> {
             sub_context: None,
         };
 
-        let ms = with_beat_lib(|lib| start_match(lib, setup, &mut rng));
+        let ms = with_beat_lib(|lib| start_match_unified(lib, setup, &mut rng));
         Some(ActiveMatchSession {
             state: ms,
             rng,
@@ -2010,7 +2015,7 @@ pub fn make_beat_choice(choice_idx: u8) -> Option<BeatOutcomeDto> {
                         (0, 0)
                     }
                 } else {
-                    goat_world::sim_team_match(
+                    goat_world::sim_team_match_shared(
                         world.clubs[f.home].strength,
                         world.clubs[f.away].strength,
                         &mut sim_rng,

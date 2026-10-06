@@ -197,6 +197,14 @@ pub fn run_transfer_pass_with_log(
     for (player_idx, winner, fee, valuation) in transfers {
         let seller = pop.club[player_idx] as usize;
         pop.club[player_idx] = winner as u16;
+        // Existing replay resolves both windows at its season epoch; preserve that clock.
+        // New conditions change only future development, never the innate genome.
+        if pop.uses_dated_exposure() {
+            let mut e = pop.exposure_at(player_idx, elapsed_weeks);
+            e.start_week = elapsed_weeks;
+            e.facilities = world.clubs[winner].facilities_mult();
+            pop.record_exposure(player_idx, e);
+        }
         // Conservation: money moves within the closed club economy, never created/destroyed
         // by a transfer fee (only `total_income`, foundation slice 1.2, creates new money) —
         // the fee sums to zero across (buyer, seller), the invariant TDD anchor 5.5 checks.

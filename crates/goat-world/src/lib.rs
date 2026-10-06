@@ -20,6 +20,7 @@ pub mod calendar;
 pub mod continental;
 pub mod domestic_cup;
 pub mod economy;
+pub mod exposure;
 pub mod fixtures;
 pub mod history;
 pub mod layout;
@@ -27,6 +28,7 @@ pub mod manager;
 pub mod names;
 pub mod national_tournament;
 pub mod nations;
+pub mod npc_life;
 pub mod orbit;
 pub mod population;
 pub mod promotion;
@@ -77,7 +79,7 @@ pub use promotion::{apply_season_end, PromoRelegationEvent, ReplayCache, Transit
 pub use scouting::{
     candidates_by_position, gem_hunt_target, gem_targets_by_position, weakest_position_target,
 };
-pub use season::{sim_team_match, Table, TableEntry};
+pub use season::{sim_team_match, sim_team_match_shared, Table, TableEntry};
 pub use transfers::{
     run_transfer_pass, run_transfer_pass_with_log, TransferLane, TransferLogEntry,
 };

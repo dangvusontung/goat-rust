@@ -282,7 +282,9 @@ fn old_v7_save_without_lifestyle_score_defaults_to_balanced() {
     let state = setup_state();
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
-    let data = from_world_state(&state, &view);
+    let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
     let restored = to_world_state(&data, &test_world());
     // setup_state() never touches lifestyle, so the score defaults to 0 = Balanced.
     assert_eq!(restored.pc_lifestyle_score, Fixed::ZERO);
@@ -299,7 +301,9 @@ fn old_v8_save_without_pantheon_signals_defaults_to_zero() {
     let state = setup_state();
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
-    let data = from_world_state(&state, &view);
+    let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
 
     let full_path =
         std::env::temp_dir().join(format!("goat_save_v9_full_{}.gsav", std::process::id()));
@@ -444,7 +448,9 @@ fn old_v10_save_with_zero_suspension_scalar_migrates_to_an_empty_ledger() {
     let state = setup_state();
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
-    let data = from_world_state(&state, &view);
+    let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
 
     let path = std::env::temp_dir().join(format!(
         "goat_save_v11_zero_suspension_{}.gsav",
@@ -503,6 +509,8 @@ fn old_v11_save_without_club_budgets_defaults_to_empty() {
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
     let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
     data.club_budgets = vec![100, 200, 300];
 
     let full_path =
@@ -587,6 +595,8 @@ fn old_v12_save_without_academy_boosts_defaults_to_empty() {
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
     let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
     data.academy_boosts = vec![5, 10, 15];
 
     let full_path =
@@ -655,7 +665,9 @@ fn old_v13_save_without_managers_defaults_to_empty() {
 
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
-    let data = from_world_state(&state, &view);
+    let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
 
     let full_path =
         std::env::temp_dir().join(format!("goat_save_v13_full2_{}.gsav", std::process::id()));
@@ -844,7 +856,9 @@ fn old_v14_save_without_assists_defaults_to_zero() {
     state.pc_career_assists = 42;
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
-    let data = from_world_state(&state, &view);
+    let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
 
     let full_path =
         std::env::temp_dir().join(format!("goat_save_v15_full_{}.gsav", std::process::id()));
@@ -903,7 +917,9 @@ fn old_v15_save_without_decisive_moments_defaults_to_zero() {
     state.pc_season_decisive_moments = 5;
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
-    let data = from_world_state(&state, &view);
+    let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
 
     let full_path =
         std::env::temp_dir().join(format!("goat_save_v16_full_{}.gsav", std::process::id()));
@@ -961,7 +977,9 @@ fn old_v16_save_without_clutch_index_defaults_to_zero() {
     state.pc_career_clutch_index = 17;
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
-    let data = from_world_state(&state, &view);
+    let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
 
     let full_path =
         std::env::temp_dir().join(format!("goat_save_v17_full_{}.gsav", std::process::id()));
@@ -1023,7 +1041,9 @@ fn old_v17_save_without_membership_defaults_to_genesis_static() {
     state.pc_nation_membership = (0..60).collect();
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
-    let data = from_world_state(&state, &view);
+    let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
 
     let full_path =
         std::env::temp_dir().join(format!("goat_save_v18_full_{}.gsav", std::process::id()));
@@ -1079,7 +1099,9 @@ fn old_v18_save_without_career_base_year_defaults_to_2025() {
     state.career_base_year = 2031;
     let pc_id = state.pc_player_id.unwrap();
     let view = state.players.snapshot(pc_id);
-    let data = from_world_state(&state, &view);
+    let mut data = from_world_state(&state, &view);
+    // Historical layout fixture predates the v22 history extension.
+    data.pc_development_history = Default::default();
 
     let full_path =
         std::env::temp_dir().join(format!("goat_save_v19_full_{}.gsav", std::process::id()));
@@ -1191,4 +1213,92 @@ fn save_load_restores_manager_relation_v11() {
         restored.pc_manager_favor, 21,
         "manager favor survives round-trip"
     );
+}
+
+#[test]
+fn development_history_roundtrips_and_continues_identically() {
+    use goat_save::save::{from_bytes, to_bytes};
+    let mut state = setup_state();
+    state = reduce(
+        state,
+        Intent::ApplyMatchResult {
+            familiarity_xp: [Fixed::ZERO; NUM_ROLES],
+            energy_cost: Fixed::from_int(15),
+            injury_weeks: Some(3),
+        },
+        &mut GoatRng::new(71),
+    );
+    let view = state.players.snapshot(state.pc_player_id.unwrap());
+    let bytes = to_bytes(&from_world_state(&state, &view));
+    let data = from_bytes(&bytes).unwrap();
+    let restored = to_world_state(&data, &test_world());
+    assert!(!state.pc_development_history.weeks.is_empty());
+    assert_eq!(
+        restored.pc_development_history,
+        state.pc_development_history
+    );
+    assert_eq!(restored.pc_development_history.matches.len(), 1);
+    let a = reduce(
+        state,
+        Intent::StartSeason { fixtures: vec![] },
+        &mut GoatRng::new(93),
+    );
+    let b = reduce(
+        restored,
+        Intent::StartSeason { fixtures: vec![] },
+        &mut GoatRng::new(93),
+    );
+    assert_eq!(a.pc_development_history, b.pc_development_history);
+    assert_eq!(a.players.snapshot(0).current, b.players.snapshot(0).current);
+}
+
+#[test]
+fn malformed_history_counts_and_truncation_are_rejected() {
+    use goat_save::save::{from_bytes, to_bytes};
+    let state = setup_state();
+    let view = state.players.snapshot(state.pc_player_id.unwrap());
+    let bytes = to_bytes(&from_world_state(&state, &view));
+    let marker = 0x4853_5459u32.to_le_bytes();
+    let offset = bytes.windows(4).rposition(|w| w == marker).unwrap();
+    let mut corrupt = bytes.clone();
+    corrupt[offset + 4..offset + 8].copy_from_slice(&u32::MAX.to_le_bytes());
+    assert!(from_bytes(&corrupt).is_err());
+    for end in offset + 4..bytes.len() {
+        assert!(from_bytes(&bytes[..end]).is_err(), "end={end}");
+    }
+}
+
+#[test]
+fn history_storage_stays_small_for_twenty_years() {
+    use goat_core::history::{DevelopmentHistory, MatchWorkload, TrainingWeek};
+    use goat_save::save::to_bytes;
+    let state = setup_state();
+    let view = state.players.snapshot(state.pc_player_id.unwrap());
+    let mut data = from_world_state(&state, &view);
+    data.pc_development_history = DevelopmentHistory::default();
+    let baseline = to_bytes(&data).len();
+    for week in 0..20 * 52 {
+        data.pc_development_history.weeks.push(TrainingWeek {
+            epoch_day: week * 7,
+            age_weeks: 16 * 52 + week,
+            focus_mask: 1,
+            requested_intensity: 1,
+            effective_intensity: 1,
+            facilities: Fixed::ONE,
+            energy_before: Fixed::from_int(75),
+            energy_after: Fixed::from_int(75),
+            injury_before: 0,
+            injury_after: 0,
+            total_attribute_delta: Fixed::ZERO,
+        });
+        data.pc_development_history.matches.push(MatchWorkload {
+            epoch_day: week * 7,
+            energy_before: Fixed::from_int(90),
+            energy_after: Fixed::from_int(75),
+            energy_cost: Fixed::from_int(15),
+            injury_before: 0,
+            injury_after: 0,
+        });
+    }
+    assert_eq!(to_bytes(&data).len() - baseline, 16 + 1040 * (38 + 24));
 }
