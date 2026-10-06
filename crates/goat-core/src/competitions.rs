@@ -80,6 +80,10 @@ pub struct CompetitionCalendar {
     pub coefficients: Vec<CoefficientYear>,
     pub pc_cards: Vec<NpcCardEvent>,
     pub pc_played_fixture_ids: Vec<u64>,
+    /// Fresh SIM15 careers use dated markets; migrated SIM14 retains annual rosters.
+    pub market_enabled: bool,
+    pub pc_affiliations: Vec<(u32, u16)>,
+    pub pc_contract_end: Option<u32>,
 }
 /// Explicit, renderer-independent input for legal named match squads.
 #[derive(Clone, Debug)]

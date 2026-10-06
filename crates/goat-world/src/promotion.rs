@@ -331,6 +331,7 @@ fn open_transfer_windows(
 /// of `WorldState::managers`/`club_manager`/`free_agents`).
 pub struct ReplayCache {
     world_seed: u64,
+    market_events: u32,
     /// Highest season whose promotion/relegation has been resolved into `membership`.
     /// `0` means genesis-static membership (no season played yet).
     resolved_through: u32,
@@ -363,6 +364,7 @@ impl ReplayCache {
     pub fn new(world: &WorldGenesis, world_seed: u64) -> Self {
         Self {
             world_seed,
+            market_events: 0,
             resolved_through: 0,
             ranking: None,
             membership: world.static_league_clubs(),
@@ -562,16 +564,19 @@ impl ReplayCache {
         world: &mut WorldGenesis,
         records: &[goat_core::state::OrbitMatchRecord],
         scores: &[goat_core::deep::DeepFixtureResult],
-        coefficients: &[goat_core::competitions::CoefficientYear],
+        calendar: &goat_core::competitions::CompetitionCalendar,
     ) -> Vec<PromoRelegationEvent> {
-        self.advance_scored_season(world, records, scores, Some(coefficients))
+        let season = self.resolved_through + 1;
+        let c = self.pop.calendar_for_replay().unwrap();
+        self.advance_market(world, season, c.frame(season).end_day, Some(calendar));
+        self.advance_scored_season(world, records, scores, Some(calendar))
     }
     fn advance_scored_season(
         &mut self,
         world: &mut WorldGenesis,
         records: &[goat_core::state::OrbitMatchRecord],
         scores: &[goat_core::deep::DeepFixtureResult],
-        coefficients: Option<&[goat_core::competitions::CoefficientYear]>,
+        dated_calendar: Option<&goat_core::competitions::CompetitionCalendar>,
     ) -> Vec<PromoRelegationEvent> {
         let season = self.resolved_through + 1;
         let elapsed_weeks = self.pop.season_end_week(season);
@@ -616,51 +621,65 @@ impl ReplayCache {
         let league_of = league_of_club(&self.membership, world.clubs.len());
         let mut transfers = Vec::new();
 
-        // 1. Winter window: budgets top up, then both buy-lanes run, then youth investment.
-        open_transfer_windows(world, &self.pop, &league_of, elapsed_weeks);
-        transfers.extend(run_transfer_pass_with_log(
-            &mut self.pop,
-            world,
-            self.world_seed,
-            season,
-            0,
-            TransferLane::WeakestPosition,
-        ));
-        transfers.extend(run_transfer_pass_with_log(
-            &mut self.pop,
-            world,
-            self.world_seed,
-            season,
-            0,
-            TransferLane::GemHunt,
-        ));
-        run_academy_investment_pass(world); // Slice 6 §6.4's always-invest-the-cap policy
-
+        // Legacy economy keeps its frozen annual ordering. Dated careers already
+        // executed these operations through their chronological market cursor.
+        if !self.pop.dated_rosters {
+            // 1. Winter window: budgets top up, then both buy-lanes run, then youth investment.
+            open_transfer_windows(world, &self.pop, &league_of, elapsed_weeks);
+            transfers.extend(run_transfer_pass_with_log(
+                &mut self.pop,
+                world,
+                self.world_seed,
+                season,
+                0,
+                TransferLane::WeakestPosition,
+            ));
+            transfers.extend(run_transfer_pass_with_log(
+                &mut self.pop,
+                world,
+                self.world_seed,
+                season,
+                0,
+                TransferLane::GemHunt,
+            ));
+            run_academy_investment_pass(world); // Slice 6 §6.4's always-invest-the-cap policy
+        }
         // 2. The season's matches — captures per-match points for manager form (Slice 8.1).
-        let (_results, tables, match_points) = if overlay.is_some() || !scores.is_empty() {
-            crate::batch_tick::batch_tick_season_deep_with_match_points(
-                &mut self.pop,
-                world,
-                &self.membership,
-                self.world_seed,
-                season,
-                elapsed_weeks,
-                overlay.as_ref(),
-                scores,
-            )
-        } else {
-            batch_tick_season_with_match_points(
-                &mut self.pop,
-                world,
-                &self.membership,
-                self.world_seed,
-                season,
-                elapsed_weeks,
-            )
-        };
+        let (_results, tables, match_points) =
+            if let Some(cal) = dated_calendar.filter(|cal| cal.market_enabled) {
+                crate::market::finish_dated_season(
+                    &mut self.pop,
+                    world,
+                    &self.membership,
+                    cal,
+                    self.world_seed,
+                    season,
+                    records,
+                )
+            } else if overlay.is_some() || !scores.is_empty() {
+                crate::batch_tick::batch_tick_season_deep_with_match_points(
+                    &mut self.pop,
+                    world,
+                    &self.membership,
+                    self.world_seed,
+                    season,
+                    elapsed_weeks,
+                    overlay.as_ref(),
+                    scores,
+                )
+            } else {
+                batch_tick_season_with_match_points(
+                    &mut self.pop,
+                    world,
+                    &self.membership,
+                    self.world_seed,
+                    season,
+                    elapsed_weeks,
+                )
+            };
         if let Some(history) = &mut self.ranking {
-            let year = coefficients
-                .and_then(|years| years.iter().find(|y| y.season == season))
+            let year = dated_calendar
+                .and_then(|cal| cal.coefficients.iter().find(|y| y.season == season))
                 .map(|y| crate::ranking::AnnualCoefficient {
                     season: y.season,
                     points: y.points.clone(),
@@ -673,30 +692,34 @@ impl ReplayCache {
         }
         self.managers.record_match_points(&match_points);
 
-        // 3. Summer window: same three passes again, off the post-season-matches budget
-        // state.
-        open_transfer_windows(world, &self.pop, &league_of, elapsed_weeks);
-        transfers.extend(run_transfer_pass_with_log(
-            &mut self.pop,
-            world,
-            self.world_seed,
-            season,
-            1,
-            TransferLane::WeakestPosition,
-        ));
-        transfers.extend(run_transfer_pass_with_log(
-            &mut self.pop,
-            world,
-            self.world_seed,
-            season,
-            1,
-            TransferLane::GemHunt,
-        ));
-        run_academy_investment_pass(world);
+        if !self.pop.dated_rosters {
+            // 3. Summer window: same three passes again, off the post-season-matches budget
+            // state.
+            open_transfer_windows(world, &self.pop, &league_of, elapsed_weeks);
+            transfers.extend(run_transfer_pass_with_log(
+                &mut self.pop,
+                world,
+                self.world_seed,
+                season,
+                1,
+                TransferLane::WeakestPosition,
+            ));
+            transfers.extend(run_transfer_pass_with_log(
+                &mut self.pop,
+                world,
+                self.world_seed,
+                season,
+                1,
+                TransferLane::GemHunt,
+            ));
+            run_academy_investment_pass(world);
+        }
         for club in &mut world.clubs {
             decay_academy_boost(club); // once per season, after both windows (Slice 6.3)
         }
-        self.last_transfers = transfers;
+        if !self.pop.dated_rosters {
+            self.last_transfers = transfers;
+        }
 
         // 4. Manager evaluation — after a full season of form data, before next season's
         //    roster churn (round-3 Slice 4's youth intake) so a freshly-fired club's
@@ -728,7 +751,9 @@ impl ReplayCache {
         }
 
         // 5. Existing round-3/round-2 machinery, untouched.
-        apply_youth_intake(&mut self.pop, world, self.world_seed, season); // round-3 §4.6
+        if !self.pop.dated_rosters {
+            apply_youth_intake(&mut self.pop, world, self.world_seed, season);
+        } // round-3 §4.6
         let events = apply_season_end(world, &mut self.membership, season, &tables);
         self.resolved_through = season;
 
@@ -1190,6 +1215,7 @@ mod tests {
 
 crate::checkpoint::fields!(ReplayCache {
     world_seed,
+    market_events,
     resolved_through,
     ranking,
     membership,
@@ -1274,5 +1300,96 @@ impl ReplayCache {
             return false;
         }
         true
+    }
+}
+
+impl ReplayCache {
+    pub(crate) fn enable_dated_market(&mut self) {
+        self.pop.enable_dated_rosters();
+    }
+    /// Fixed domain dates, independent of fixture count and renderer reads.
+    pub(crate) fn advance_market(
+        &mut self,
+        world: &mut WorldGenesis,
+        season: u32,
+        through: u32,
+        calendar: Option<&goat_core::competitions::CompetitionCalendar>,
+    ) {
+        if !self.pop.dated_rosters {
+            return;
+        }
+        let c = self.pop.calendar_for_replay().unwrap();
+        for (index, event) in crate::market::events(c, season).into_iter().enumerate() {
+            let serial = (season - 1) * crate::market::EVENTS_PER_SEASON + index as u32;
+            if serial < self.market_events || event.day > through {
+                continue;
+            }
+            assert_eq!(
+                serial, self.market_events,
+                "market dates must advance monotonically"
+            );
+            for (i, club) in world.clubs.iter_mut().enumerate() {
+                club.budget = self.club_budgets[i];
+                club.academy_boost = self.academy_boosts[i];
+            }
+            let week = event.day / 7;
+            if event.kind == crate::market::MarketEventKind::SummerOpen {
+                for idx in 0..self.pop.len() {
+                    if self.pop.contract_ends[idx] <= event.day && !self.pop.is_retired(idx, week) {
+                        self.pop.contract_ends[idx] = self.pop.initial_contract_end(idx, event.day);
+                    }
+                }
+                if season > 1 {
+                    crate::population::apply_youth_intake_at(
+                        &mut self.pop,
+                        world,
+                        self.world_seed,
+                        season - 1,
+                        week,
+                        Some(event.day),
+                    );
+                }
+            }
+            let opening = matches!(
+                event.kind,
+                crate::market::MarketEventKind::SummerOpen
+                    | crate::market::MarketEventKind::WinterOpen
+            );
+            let league_of = league_of_club(&self.membership, world.clubs.len());
+            if opening {
+                open_transfer_windows(world, &self.pop, &league_of, week);
+            }
+            let window = u8::from(matches!(
+                event.kind,
+                crate::market::MarketEventKind::SummerOpen
+                    | crate::market::MarketEventKind::SummerClose
+            ));
+            let lane = if opening {
+                TransferLane::WeakestPosition
+            } else {
+                TransferLane::GemHunt
+            };
+            self.last_transfers = crate::transfers::run_transfer_pass_at(
+                &mut self.pop,
+                world,
+                self.world_seed,
+                season,
+                window,
+                lane,
+                week,
+                Some(event.day),
+            );
+            if !opening {
+                run_academy_investment_pass(world);
+            }
+            for (i, club) in world.clubs.iter().enumerate() {
+                self.club_budgets[i] = club.budget;
+                self.academy_boosts[i] = club.academy_boost;
+            }
+            if let Some(cal) = calendar {
+                self.pop.apply_fixture_dates(cal, season);
+            }
+            self.market_events += 1;
+        }
     }
 }

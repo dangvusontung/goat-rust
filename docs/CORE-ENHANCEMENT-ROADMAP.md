@@ -1,13 +1,13 @@
-# Core enhancement roadmap — checkpoint v13, 2026-10-06
+# Core enhancement roadmap — checkpoint v15, 2026-10-06
 
 Owner priority: complete the simulation core; TUI is a test adapter. The current
-baseline has dated seasons, retained replay and detailed NPC fixtures in the PC
-league plus five ranked leagues. Historical continental coefficients now replace
-the bootstrap gradually over five seasons. Save layout 28/SIM13; 625 workspace tests pass. Medical continuity,
-lossless save/runtime journal storage and reactive autonomous NPC league matches
-are implemented. Milestones 1–3 are complete within the documented model scope;
-calendar integration and the remaining football approximations are listed in
-[the v13 report](CORE-STEPS-2-3.md).
+baseline is save layout 30 / SIM15 with a dated all-competition calendar, historical
+club registrations, summer/winter NPC auctions, dated contract expiry and July youth
+intake. The PC league plus five ranked leagues retain detailed simulation. Historical
+continental coefficients replace the bootstrap gradually over five seasons.
+Milestones 1–5 are implemented within the documented baseline policies. NPC contracts
+currently auto-renew; free-agent/Bosman negotiation and other market limits are
+explicit in [the dated market report](DATED-MARKET.md).
 
 | Order | Milestone | Acceptance gate |
 | --- | --- | --- |
@@ -15,7 +15,7 @@ calendar integration and the remaining football approximations are listed in
 | 2 | Medical continuity and compact history — implemented v13 | Preserve dated injury, rehabilitation, fatigue and match congestion across PC/NPC play and season boundaries; reduce old minute/credit journal size without changing replay, DNPs or accounting. Compare long-career save/load and peak memory. |
 | 3 | NPC match realism — implemented v13 | Score- and fatigue-reactive substitutions, tactical adjustments and competition-specific NPC cards/suspensions; decide and implement named goalkeeper coverage separately from the deferred PC goalkeeper career. Conserve team minutes and verify the shared scoring kernel statistically. |
 | 4 | Full competition calendar — implemented SIM14 | Date cups, continental/national games and friendlies; persist tournament progress across June/July and save/load. Temporarily deepen imminent opponents. Verify rest gaps, overlaps and cross-competition suspensions. |
-| 5 | Dated roster and market changes | Execute transfers, contracts, youth intake and roster changes at their actual dates. Verify light/deep transitions and that old appearances, health and goal records stay attached to the correct player and club. |
+| 5 | Dated roster and market changes — implemented SIM15 baseline | Execute transfers, contracts, youth intake and roster changes at their actual dates. Verify light/deep transitions and that old appearances, health and goal records stay attached to the correct player and club. |
 | 6 | Capacity and mobile measurements | Measure cold resume, active weekly progression, annual boundaries, long-career saves and memory at 200k capacity and on native ARM64. Set the deep budget from measurements before integrating 150 countries. |
 
 The 150-country expansion remains a separate [backlog task](../tasks/TASK-CORE-150-COUNTRIES.md).
@@ -23,12 +23,12 @@ Renderer enhancements follow core completion. No mobile throughput claim is made
 from desktop timing. A 200k benchmark is a capacity check, not an instruction to
 increase the live population immediately.
 
-Recommended next coding milestone: **5 — dated roster and market changes**.
-Move the existing annual transfer/intake machinery to actual windows and retain
-the club affiliation at each historical appearance. Milestone 4 is documented in
-[dated competitions](DATED-COMPETITIONS.md), including model limits and validation.
-The permanent deep budget remains six leagues; capacity/ARM64 measurements stay
-in milestone 6.
+Recommended next milestone: **6 — capacity and mobile measurements**.
+Measure weekly progression and annual boundaries, cold/checkpoint resume, saves and
+memory at 200k capacity and on native ARM64. Keep the current six-league permanent
+deep budget until those measurements support a change. The 150-country integration
+remains separate. Market policy follow-ups (Bosman/free agents, loans, country-specific
+registration rules and keeper recruitment) are listed in [dated markets](DATED-MARKET.md).
 
 [The runtime journal task](../tasks/TASK-CORE-JOURNAL-CHECKPOINTS.md) is fulfilled by
 lossless completed-season cache compression and exact streaming comparison. An optional
@@ -47,4 +47,5 @@ Implementation evidence and remaining approximations: [ranked deep leagues](DEEP
 Every milestone retains seeded determinism, integer/fixed-point math, existing
 frozen goldens and clear simulation/save compatibility. Future migrations must be
 tested explicitly; SIM13 legacy saves remain supported without dated competitions,
-while incompatible older simulation versions are rejected.
+SIM14 dated saves migrate with annual markets retained; incompatible older simulation
+versions are rejected.

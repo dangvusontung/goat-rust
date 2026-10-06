@@ -973,7 +973,16 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
                 state.realistic_npc = true;
                 state
                     .competition_calendar
-                    .get_or_insert_with(Default::default);
+                    .get_or_insert_with(Default::default)
+                    .market_enabled = true;
+                let end = state
+                    .chronology()
+                    .unwrap()
+                    .frame(state.pc_contract_seasons_left.max(1) + 1)
+                    .preparation_start;
+                let cal = state.competition_calendar.as_mut().unwrap();
+                cal.pc_affiliations = vec![(0, state.pc_club_idx)];
+                cal.pc_contract_end = Some(end);
             }
             state
         }
@@ -1260,6 +1269,20 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             new_length,
             new_club_idx: _,
         } => {
+            if state
+                .competition_calendar
+                .as_ref()
+                .is_some_and(|cal| cal.market_enabled)
+            {
+                if new_length == 0 {
+                    return state;
+                }
+                let c = state.chronology().unwrap();
+                state.competition_calendar.as_mut().unwrap().pc_contract_end = Some(
+                    c.frame(c.planning_season(state.pc_epoch_day) + new_length)
+                        .preparation_start,
+                );
+            }
             state.pc_contract_seasons_left = new_length;
             state.pc_wage_annual = new_wage;
             state.pc_power_ladder = 0; // happy again
@@ -1287,6 +1310,40 @@ pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -
             staff_mods,
             fee_bonus,
         } => {
+            if state
+                .competition_calendar
+                .as_ref()
+                .is_some_and(|cal| cal.market_enabled)
+                && state
+                    .chronology()
+                    .is_some_and(|c| !matches!(c.date(state.pc_epoch_day).month, 1 | 7 | 8))
+            {
+                return state;
+            }
+            if state
+                .competition_calendar
+                .as_ref()
+                .is_some_and(|cal| cal.market_enabled)
+            {
+                if new_length == 0 {
+                    return state;
+                }
+                let c = state.chronology().unwrap();
+                let cal = state.competition_calendar.as_mut().unwrap();
+                if cal
+                    .pc_affiliations
+                    .last()
+                    .is_some_and(|&(day, _)| day == state.pc_epoch_day)
+                {
+                    cal.pc_affiliations.last_mut().unwrap().1 = to_club_idx;
+                } else {
+                    cal.pc_affiliations.push((state.pc_epoch_day, to_club_idx));
+                }
+                cal.pc_contract_end = Some(
+                    c.frame(c.planning_season(state.pc_epoch_day) + new_length)
+                        .preparation_start,
+                );
+            }
             state.pc_club_idx = to_club_idx;
             state.pc_div_idx = to_div_idx;
             state.pc_club = new_club_name;

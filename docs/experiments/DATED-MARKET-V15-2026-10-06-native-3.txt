@@ -1,0 +1,18 @@
+season=1 season_us=16350125 fixtures=25571 detailed=3028 postponed=2668 cards=8770 loads=149381 coefficients=1 pending_national=12
+save_bytes=21397711 checkpoint_bytes=17724347 encode_us=187385
+resume_us=235694 exact=true rebuilds=0
+cold_us=691929 retained_cold_equal=true
+summer_continuation_equal=true season=2
+season=2 season_us=27332043 fixtures=25581 detailed=3023 postponed=2958 cards=17592 loads=312013 coefficients=2 pending_national=0
+save_bytes=34928670 checkpoint_bytes=27507447 encode_us=307170
+resume_us=426926 exact=true rebuilds=0
+cold_us=1857074 retained_cold_equal=true
+summer_continuation_equal=true season=3
+season=3 season_us=48839091 fixtures=25571 detailed=2995 postponed=3108 cards=26338 loads=484285 coefficients=3 pending_national=12
+save_bytes=48580425 checkpoint_bytes=37375137 encode_us=431744
+resume_us=615403 exact=true rebuilds=0
+cold_us=3293165 retained_cold_equal=true
+whole_run_us=104782206
+VmHWM:	  422476 kB
+VmRSS:	  241656 kB
+process_wall_seconds=104.799897 user_seconds=102.136188 system_seconds=0.399128 peak_rss_kib=422476 exit=0

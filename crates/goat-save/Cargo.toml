@@ -9,3 +9,10 @@ goat-fixed    = { path = "../goat-fixed"    }
 goat-core     = { path = "../goat-core"     }
 goat-world    = { path = "../goat-world"    }
 goat-calendar = { path = "../goat-calendar" }
+
+[features]
+capacity-bench = ["goat-world/capacity-bench"]
+
+[[example]]
+name = "bench_capacity"
+required-features = ["capacity-bench"]

@@ -1,5 +1,9 @@
 # Milestone 4 — dated competition design (SIM14)
 
+Historical SIM14 report. Fresh careers now use [SIM15 dated markets](DATED-MARKET.md);
+layout29/SIM14 saves retain the annual roster model during migration.
+
+
 The owner approved implementation after the local resume checkpoint. Core first;
 150 countries, larger permanent deep sets and renderer enhancements stay deferred.
 Legacy SIM13 paths and frozen outputs remain available; the new model is explicit.

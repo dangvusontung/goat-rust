@@ -1,0 +1,5 @@
+mode=cold players_target=200000 deep_budget=6 season=1 population=200000 load_first_query_us=2159282 restored=false fingerprint=10290559745025018835
+memory=loaded_single_session VmHWM:	  134040 kB
+memory=loaded_single_session VmRSS:	   93144 kB
+rebuilds=1
+process_wall_seconds=2.166616 user_seconds=2.057559 system_seconds=0.107867 peak_rss_kib=134040 exit=0

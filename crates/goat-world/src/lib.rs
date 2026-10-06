@@ -100,3 +100,10 @@ pub mod checkpoint;
 
 /// Dated multi-competition scheduling and persistent progress.
 pub mod competitions;
+
+/// Dated transfer windows and registration policy.
+pub mod market;
+
+/// Diagnostic-only world profile; never compiled into the default gameplay build.
+#[cfg(feature = "capacity-bench")]
+pub mod capacity;

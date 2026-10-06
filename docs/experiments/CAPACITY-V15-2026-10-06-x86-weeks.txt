@@ -1,0 +1,28 @@
+profile=dense_rosters arch=x86_64 sim=15 players_target=200000 genesis_population=200000 clubs=1200 leagues=60 nations=20 deep_budget=6 selected_deep=6 startup_us=1225544
+memory=startup_game_only VmHWM:	   63752 kB
+memory=startup_game_only VmRSS:	   63752 kB
+season=1 week=1 from=0 through=7 weekly_us=18 fixtures=0 market=false
+season=1 week=2 from=7 through=14 weekly_us=2 fixtures=0 market=false
+season=1 week=3 from=14 through=21 weekly_us=1 fixtures=0 market=false
+season=1 week=4 from=21 through=28 weekly_us=1 fixtures=0 market=false
+season=1 week=5 from=28 through=35 weekly_us=522544 fixtures=600 market=false
+season=1 week=6 from=35 through=42 weekly_us=549400 fixtures=600 market=false
+season=1 week=7 from=42 through=49 weekly_us=346580 fixtures=600 market=false
+season=1 week=8 from=49 through=56 weekly_us=739486 fixtures=1200 market=false
+season=1 week=9 from=56 through=63 weekly_us=1089018 fixtures=600 market=true
+season=1 week=10 from=63 through=70 weekly_us=665787 fixtures=608 market=false
+season=1 week=11 from=70 through=77 weekly_us=5 fixtures=0 market=false
+season=1 week=12 from=77 through=84 weekly_us=791926 fixtures=1107 market=false
+season=1 week=13 from=84 through=91 weekly_us=1468909 fixtures=1243 market=false
+season=1 week=14 from=91 through=98 weekly_us=980722 fixtures=722 market=false
+season=1 week=15 from=98 through=105 weekly_us=1132113 fixtures=608 market=false
+season=1 week=16 from=105 through=112 weekly_us=273790 fixtures=492 market=false
+season=1 progression_us=8724018 allocated=200000 active=200000 fixtures=8380 detailed=990 loads=325261 cards=2840 fingerprint=10290559745025018835
+memory=warm_game_only VmHWM:	  141624 kB
+memory=warm_game_only VmRSS:	  129232 kB
+season=1 canonical_save_bytes=3170751 checkpoint_bytes=60820559 full_save_bytes=63991334 export_us=231746 encode_write_us=126234 file=/tmp/goat-capacity/players-200000-deep-6-year-1.capbench
+season=1 checkpoint_exact=true
+memory=after_save_validation VmHWM:	  374260 kB
+memory=after_save_validation VmRSS:	  113728 kB
+whole_run_us=10803820 rebuilds=1
+process_wall_seconds=10.813924 user_seconds=10.567202 system_seconds=0.244428 peak_rss_kib=374260 exit=0

@@ -133,8 +133,36 @@ pub fn run_transfer_pass_with_log(
     window: u8, // 0 = winter, 1 = summer — folded into the auction seed (5.4)
     lane: TransferLane,
 ) -> Vec<TransferLogEntry> {
-    let elapsed_weeks = season * 52;
-    let candidates = candidates_by_position(pop, elapsed_weeks);
+    run_transfer_pass_at(
+        pop,
+        world,
+        world_seed,
+        season,
+        window,
+        lane,
+        season * 52,
+        None,
+    )
+}
+
+/// Dated windows value players at the actual date; legacy callers retain their epoch.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_transfer_pass_at(
+    pop: &mut Population,
+    world: &mut WorldGenesis,
+    world_seed: u64,
+    season: u32,
+    window: u8,
+    lane: TransferLane,
+    elapsed_weeks: u32,
+    day: Option<u32>,
+) -> Vec<TransferLogEntry> {
+    let mut candidates = candidates_by_position(pop, elapsed_weeks);
+    if day.is_some() {
+        for list in &mut candidates {
+            list.retain(|&idx| !pop.goalkeeper[idx] && pop.intake_week[idx] <= elapsed_weeks);
+        }
+    }
     let gem_lists = gem_targets_by_position(pop, &candidates, elapsed_weeks);
     let squads = squads_by_club(pop, world.clubs.len());
 
@@ -193,15 +221,37 @@ pub fn run_transfer_pass_with_log(
         }
     }
 
+    if day.is_some() {
+        transfers.sort_by_key(|&(idx, _, _, _)| idx);
+    }
+    let mut active_counts = squads
+        .iter()
+        .map(|s| {
+            s.iter()
+                .filter(|&&idx| !pop.is_retired(idx, elapsed_weeks))
+                .count()
+        })
+        .collect::<Vec<_>>();
     let mut log = Vec::with_capacity(transfers.len());
     for (player_idx, winner, fee, valuation) in transfers {
         let seller = pop.club[player_idx] as usize;
-        pop.club[player_idx] = winner as u16;
+        if day.is_some()
+            && (fee > world.clubs[winner].budget || seller == winner || active_counts[seller] <= 11)
+        {
+            continue;
+        }
+        active_counts[seller] = active_counts[seller].saturating_sub(1);
+        active_counts[winner] += 1;
+        if let Some(day) = day {
+            pop.move_club(player_idx, winner as u16, day);
+        } else {
+            pop.club[player_idx] = winner as u16;
+        }
         // Existing replay resolves both windows at its season epoch; preserve that clock.
         // New conditions change only future development, never the innate genome.
         if pop.uses_dated_exposure() {
             let mut e = pop.exposure_at(player_idx, elapsed_weeks);
-            e.start_week = elapsed_weeks;
+            e.start_week = day.map_or(elapsed_weeks, |d| d.div_ceil(7));
             e.facilities = world.clubs[winner].facilities_mult();
             pop.record_exposure(player_idx, e);
         }

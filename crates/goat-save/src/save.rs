@@ -88,7 +88,8 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 /// v26 encodes workload rows with a lossless fixture dictionary.
 /// v27 adds the NPC match-model choice and discipline journal.
 /// v29 adds canonical dated competition progress before the optional checkpoint.
-pub const VERSION: u32 = 29;
+/// v30 adds dated-market policy and PC registration/contract decisions.
+pub const VERSION: u32 = 30;
 
 /// The SIMULATION-BEHAVIOUR version — independent of the layout VERSION above.
 /// Bump this whenever a change alters sim outcomes without changing the binary layout
@@ -113,7 +114,9 @@ pub const VERSION: u32 = 29;
 /// v14 opts in to dated all-competition outcomes and named PC squads. SIM13 saves
 /// without competition progress retain their frozen legacy paths; old derived
 /// checkpoint format 1 is discarded and rebuilt once.
-pub const SIM_VERSION: u32 = 14;
+/// 15: dated registration, transfer windows, contracts and academy intake. SIM14
+/// dated saves retain annual markets; derived format 2 is rebuilt once.
+pub const SIM_VERSION: u32 = 15;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
@@ -1235,7 +1238,14 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
 /// `from_bytes_layout_only` only for layout-migration tests / future migration tooling.
 pub fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     let (data, sim_version) = parse(b, true)?;
-    if sim_version != SIM_VERSION && !(sim_version == 13 && data.competition_calendar.is_none()) {
+    if sim_version != SIM_VERSION
+        && !((sim_version == 13 && data.competition_calendar.is_none())
+            || (sim_version == 14
+                && data
+                    .competition_calendar
+                    .as_ref()
+                    .is_none_or(|cal| !cal.market_enabled)))
+    {
         return Err(SaveError::SimVersionMismatch {
             found: sim_version,
             expected: SIM_VERSION,
@@ -1773,8 +1783,12 @@ fn parse(b: &[u8], strict_history: bool) -> Result<(SaveData, u32), SaveError> {
             return Err(SaveError::Corrupt("invalid competition calendar size"));
         }
         competition_calendar = Some(
-            goat_world::competitions::decode_calendar(&b[cur..cur + count])
-                .ok_or(SaveError::Corrupt("invalid competition progress"))?,
+            if ver >= 30 {
+                goat_world::competitions::decode_calendar(&b[cur..cur + count])
+            } else {
+                goat_world::competitions::decode_calendar_v14(&b[cur..cur + count])
+            }
+            .ok_or(SaveError::Corrupt("invalid competition progress"))?,
         );
         cur += count;
     }

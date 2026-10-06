@@ -1,0 +1,5 @@
+mode=checkpoint players_target=200000 deep_budget=6 season=1 population=200000 load_first_query_us=358535 restored=true fingerprint=10290559745025018835
+memory=loaded_single_session VmHWM:	  159908 kB
+memory=loaded_single_session VmRSS:	   88872 kB
+rebuilds=0
+process_wall_seconds=0.365897 user_seconds=0.265330 system_seconds=0.100194 peak_rss_kib=159908 exit=0

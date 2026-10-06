@@ -1,9 +1,11 @@
 # Development checkpoint — 2026-10-06
 
-Latest core update: [SIM14 dated competitions](DATED-COMPETITIONS.md) —
-all competitions share one career clock, with persisted progress and actual
-NPC minutes/cards; named PC squads continue after dismissal. Layout 29 and
-checkpoint format 2. Milestone 4 implemented; milestone 5 is next.
+Latest core update: [SIM15 dated roster and market](DATED-MARKET.md) —
+summer/winter NPC transfers, absolute contract expiry, July academy entry and
+historical registrations are connected to the competition clock. PC transfers
+refresh live league/deep scope. Layout 30 and checkpoint format 3. Milestone 5
+implements the baseline policy; free-agent/Bosman negotiation is still deferred.
+Milestone 6 measures capacity and native mobile performance.
 
 Local resume update: [derived-state checkpoint](LOCAL-RESUME-CHECKPOINT.md) —
 optional exact cache in save layout 28, unchanged SIM13; canonical journals and

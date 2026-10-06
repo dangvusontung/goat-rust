@@ -45,12 +45,19 @@ fn roll_potential_ovr(rng: &mut GoatRng, club_strength: u8) -> u8 {
     (base + variance).clamp(POTENTIAL_MIN as i32, POTENTIAL_MAX as i32) as u8
 }
 
+type FixtureDateBinding = (u32, Vec<(u64, u64, u32, u32, u32, u32)>);
 type DevelopmentCache = Option<(u32, [Fixed; goat_core::attrs::NUM_ATTRS], u8)>;
 
 /// Background population as parallel columns. Index `i` identifies one player across all
 /// columns — there is no per-player struct.
 #[derive(Debug, Clone, Default)]
 pub struct Population {
+    fixture_date_binding: FixtureDateBinding,
+    registration_fixtures: Vec<Vec<crate::workload::MatchDose>>,
+    pub(crate) dated_rosters: bool,
+    pub(crate) original_clubs: Vec<u16>,
+    pub(crate) affiliations: std::collections::BTreeMap<usize, Vec<(u32, u16)>>,
+    pub(crate) contract_ends: Vec<u32>,
     dated_exposure: bool,
     sampled_health: bool,
     scheduled_load: bool,
@@ -611,6 +618,28 @@ impl Population {
             return schedule.week(self.seed[idx], self.load_world_seed, week, e);
         };
         self.ensure_calendar_week(week);
+        if self.dated_rosters {
+            let mut plan = Vec::new();
+            let mut clubs = std::iter::once(self.original_clubs[idx])
+                .chain(self.club_history(idx).iter().map(|&(_, club)| club))
+                .collect::<Vec<_>>();
+            clubs.sort_unstable();
+            clubs.dedup();
+            for club in clubs {
+                if let Some(fixtures) = self.registration_fixtures.get(club as usize) {
+                    let start = fixtures.partition_point(|d| d.epoch_day < week * 7);
+                    let end = fixtures.partition_point(|d| d.epoch_day < (week + 1) * 7);
+                    plan.extend(
+                        fixtures[start..end]
+                            .iter()
+                            .filter(|d| self.club_at(idx, d.epoch_day) == Some(club))
+                            .copied(),
+                    );
+                }
+            }
+            plan.sort_by_key(|d| (d.epoch_day, d.fixture_id));
+            return schedule.week_with_plan(self.seed[idx], week, e, &plan);
+        }
         if self
             .fixture_overrides
             .range((idx, 0)..=(idx, u64::MAX))
@@ -1607,7 +1636,26 @@ pub fn apply_youth_intake(
     world_seed: u64,
     season: u32,
 ) -> u32 {
-    let elapsed_weeks = pop.season_end_week(season);
+    apply_youth_intake_at(
+        pop,
+        world,
+        world_seed,
+        season,
+        pop.season_end_week(season),
+        None,
+    )
+}
+
+/// Academy entry is dated July 1; identities retain stable seed/club/cohort indices.
+pub(crate) fn apply_youth_intake_at(
+    pop: &mut Population,
+    world: &WorldGenesis,
+    world_seed: u64,
+    season: u32,
+    elapsed_weeks: u32,
+    entry: Option<u32>,
+) -> u32 {
+    pop.fixture_date_binding = (0, Vec::new());
     let mut total_added = 0u32;
 
     let mut active_counts = vec![0u32; world.clubs.len()];
@@ -1652,7 +1700,8 @@ pub fn apply_youth_intake(
             pop.potential_ovr.push(potential_ovr);
             pop.intake_week.push(elapsed_weeks);
             if let Some(c) = pop.chronology {
-                pop.entry_days.push(c.frame(season + 1).preparation_start);
+                pop.entry_days
+                    .push(entry.unwrap_or(c.frame(season + 1).preparation_start));
                 pop.entry_cycles.push(season + 1);
                 pop.retirement_days.push(
                     c.frame(season + 1 + RETIRE_AGE_YEARS - INTAKE_AGE_YEARS)
@@ -1663,6 +1712,12 @@ pub fn apply_youth_intake(
             pop.career_apps.push(0);
             pop.career_titles.push(0);
             pop.form.push(50);
+            if pop.dated_rosters {
+                let day = entry.expect("dated intake requires entry day");
+                pop.original_clubs.push(club.id as u16);
+                pop.contract_ends
+                    .push(pop.initial_contract_end(pop.len() - 1, day));
+            }
             total_added += 1;
             if pop.uses_shared_model() {
                 pop.shared_facilities.push(club.facilities_mult());
@@ -2715,6 +2770,12 @@ mod calendar_tests {
 }
 
 crate::checkpoint::fields!(Population {
+    fixture_date_binding,
+    registration_fixtures,
+    dated_rosters,
+    original_clubs,
+    affiliations,
+    contract_ends,
     dated_exposure,
     sampled_health,
     scheduled_load,
@@ -2756,6 +2817,77 @@ impl Population {
         cal: &goat_core::competitions::CompetitionCalendar,
         season: u32,
     ) {
+        let mut binding = cal
+            .fixtures
+            .iter()
+            .chain(cal.results.iter().map(|r| &r.fixture))
+            .filter(|f| f.season == season && f.competition == 1)
+            .map(|f| (f.id, f.workload_id, f.home, f.away, f.original_day, f.day))
+            .collect::<Vec<_>>();
+        binding.sort_unstable();
+        if self.fixture_date_binding.0 == season && self.fixture_date_binding.1 == binding {
+            return;
+        }
+        self.fixture_date_binding = (season, binding);
+        if self.dated_rosters {
+            let clubs = self
+                .original_clubs
+                .iter()
+                .chain(self.club.iter())
+                .copied()
+                .max()
+                .map_or(0, |club| club as usize + 1)
+                .max(crate::world::NUM_CLUBS);
+            let mut fixtures = vec![Vec::new(); clubs];
+            for f in cal
+                .fixtures
+                .iter()
+                .chain(cal.results.iter().map(|r| &r.fixture))
+                .filter(|f| f.season <= season && f.competition == 1)
+            {
+                let dose = crate::workload::MatchDose {
+                    competition_id: 1,
+                    fixture_id: f.workload_id,
+                    epoch_day: f.day,
+                    minutes: 0,
+                    observed: false,
+                };
+                fixtures[f.home as usize].push(dose);
+                fixtures[f.away as usize].push(dose);
+            }
+            for club in &mut fixtures {
+                club.sort_by_key(|d| (d.epoch_day, d.fixture_id));
+            }
+            let old_days = self
+                .registration_fixtures
+                .iter()
+                .flatten()
+                .map(|d| (d.fixture_id, d.epoch_day))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let new_days = fixtures
+                .iter()
+                .flatten()
+                .map(|d| (d.fixture_id, d.epoch_day))
+                .collect::<std::collections::BTreeMap<_, _>>();
+            let affected = old_days
+                .iter()
+                .filter(|(id, day)| new_days.get(id) != Some(day))
+                .map(|(_, day)| *day)
+                .chain(
+                    new_days
+                        .iter()
+                        .filter(|(id, day)| old_days.get(id) != Some(day))
+                        .map(|(_, day)| *day),
+                )
+                .min();
+            if let Some(day) = affected {
+                for idx in 0..self.len() {
+                    self.invalidate_registration_forecast(idx, day / 7);
+                }
+            }
+            self.registration_fixtures = fixtures;
+            return;
+        }
         let overridden_ids = self
             .fixture_overrides
             .keys()
@@ -2776,32 +2908,52 @@ impl Population {
             by_club.entry(f.home).or_default().push(f);
             by_club.entry(f.away).or_default().push(f);
         }
+        let mut clubs = Vec::new();
         for idx in 0..self.len() {
-            if let Some(fixtures) = by_club.get(&(self.club[idx] as u32)) {
-                for f in fixtures {
-                    let key = (idx, f.workload_id);
-                    if self.fixture_overrides.get(&key) == Some(&f.day) {
-                        continue;
+            clubs.clear();
+            if self.dated_rosters {
+                clubs.push(self.original_clubs[idx] as u32);
+                for &(_, club) in self.club_history(idx) {
+                    if !clubs.contains(&(club as u32)) {
+                        clubs.push(club as u32);
                     }
-                    let previous = if f.day == f.original_day {
-                        self.fixture_overrides.remove(&key)
-                    } else {
-                        self.fixture_overrides.insert(key, f.day)
-                    }
-                    .unwrap_or(f.original_day);
-                    if previous == f.day {
-                        continue;
-                    }
-                    let affected = previous.min(f.original_day).min(f.day) / 7;
-                    if self.shared_cache.get_mut()[idx].is_some_and(|(week, _, _)| week > affected)
-                    {
-                        self.shared_cache.get_mut()[idx] = None;
-                        self.life_cache.get_mut()[idx] = None;
-                    }
-                    if self.availability_cache.get_mut()[idx]
-                        .is_some_and(|(week, _, _)| week > affected)
-                    {
-                        self.availability_cache.get_mut()[idx] = None;
+                }
+            } else {
+                clubs.push(self.club[idx] as u32);
+            }
+            for &club in &clubs {
+                if let Some(fixtures) = by_club.get(&club) {
+                    for f in fixtures {
+                        if self.dated_rosters
+                            && self.club_at(idx, f.day).map(u32::from) != Some(club)
+                        {
+                            continue;
+                        }
+                        let key = (idx, f.workload_id);
+                        if self.fixture_overrides.get(&key) == Some(&f.day) {
+                            continue;
+                        }
+                        let previous = if f.day == f.original_day {
+                            self.fixture_overrides.remove(&key)
+                        } else {
+                            self.fixture_overrides.insert(key, f.day)
+                        }
+                        .unwrap_or(f.original_day);
+                        if previous == f.day {
+                            continue;
+                        }
+                        let affected = previous.min(f.original_day).min(f.day) / 7;
+                        if self.shared_cache.get_mut()[idx]
+                            .is_some_and(|(week, _, _)| week > affected)
+                        {
+                            self.shared_cache.get_mut()[idx] = None;
+                            self.life_cache.get_mut()[idx] = None;
+                        }
+                        if self.availability_cache.get_mut()[idx]
+                            .is_some_and(|(week, _, _)| week > affected)
+                        {
+                            self.availability_cache.get_mut()[idx] = None;
+                        }
                     }
                 }
             }
@@ -2817,6 +2969,28 @@ impl Population {
         calendar: goat_core::chronology::Chronology,
     ) -> bool {
         let n = self.len();
+        if self.dated_rosters
+            && (self.registration_fixtures.iter().any(|fs| {
+                fs.windows(2)
+                    .any(|v| (v[0].epoch_day, v[0].fixture_id) > (v[1].epoch_day, v[1].fixture_id))
+            }) || self.original_clubs.len() != n
+                || self.contract_ends.len() != n
+                || self
+                    .original_clubs
+                    .iter()
+                    .any(|&club| club as usize >= clubs)
+                || self.affiliations.iter().any(|(&idx, entries)| {
+                    idx >= n
+                        || entries.is_empty()
+                        || entries.windows(2).any(|v| v[0].0 >= v[1].0)
+                        || entries
+                            .iter()
+                            .any(|&(day, club)| day < self.entry_day(idx) || club as usize >= clubs)
+                        || entries.last().unwrap().1 != self.club[idx]
+                }))
+        {
+            return false;
+        }
         if n == 0
             || !self.dated_exposure
             || !self.sampled_health
@@ -2926,5 +3100,65 @@ mod dated_reschedule_tests {
         let cold = genesis_dated(42, &world, 2023);
         assert_eq!(pop.current_ovr(0, 20), cold.current_ovr(0, 20));
         assert_eq!(pop.medical_status(0, 20), cold.medical_status(0, 20));
+    }
+}
+
+impl Population {
+    /// Club registration at the actual date, including before a mid-season move.
+    pub fn club_at(&self, idx: usize, day: u32) -> Option<u16> {
+        if idx >= self.len() || day < self.entry_day(idx) {
+            return None;
+        }
+        if !self.dated_rosters {
+            return Some(self.club[idx]);
+        }
+        let entries = self.club_history(idx);
+        let n = entries.partition_point(|&(d, _)| d <= day);
+        Some(
+            n.checked_sub(1)
+                .map_or(self.original_clubs[idx], |n| entries[n].1),
+        )
+    }
+    /// Sparse registration history; player indices never change after a transfer.
+    pub fn club_history(&self, idx: usize) -> &[(u32, u16)] {
+        self.affiliations.get(&idx).map_or(&[], Vec::as_slice)
+    }
+    /// Exclusive contract expiry: June 30 is covered, July 1 requires renewal.
+    pub fn contract_end_day(&self, idx: usize) -> Option<u32> {
+        self.contract_ends.get(idx).copied()
+    }
+    pub(crate) fn initial_contract_end(&self, idx: usize, day: u32) -> u32 {
+        let c = self.chronology.expect("dated contracts require chronology");
+        let years = 1 + (self.seed[idx] % 4) as u32;
+        c.frame(c.planning_season(day) + years).preparation_start
+    }
+    pub(crate) fn enable_dated_rosters(&mut self) {
+        self.dated_rosters = true;
+        self.original_clubs = self.club.clone();
+        self.affiliations.clear();
+        self.contract_ends = (0..self.len())
+            .map(|i| self.initial_contract_end(i, self.entry_day(i)))
+            .collect();
+    }
+    fn invalidate_registration_forecast(&mut self, idx: usize, week: u32) {
+        if self.shared_cache.get_mut()[idx].is_some_and(|(date, _, _)| date > week) {
+            self.shared_cache.get_mut()[idx] = None;
+            self.life_cache.get_mut()[idx] = None;
+        }
+        if self.availability_cache.get_mut()[idx].is_some_and(|(date, _, _)| date > week) {
+            self.availability_cache.get_mut()[idx] = None;
+        }
+    }
+    pub(crate) fn move_club(&mut self, idx: usize, club: u16, day: u32) {
+        self.invalidate_registration_forecast(idx, day / 7);
+        self.fixture_date_binding = (0, Vec::new());
+        let entries = self.affiliations.entry(idx).or_default();
+        if entries.last().is_some_and(|&(d, _)| d == day) {
+            entries.last_mut().unwrap().1 = club;
+        } else {
+            entries.push((day, club));
+        }
+        self.club[idx] = club;
+        self.contract_ends[idx] = self.initial_contract_end(idx, day);
     }
 }

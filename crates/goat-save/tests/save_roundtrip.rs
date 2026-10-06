@@ -1825,3 +1825,27 @@ fn sim13_legacy_remains_readable_but_cannot_claim_dated_competitions() {
     bytes[trailer..].copy_from_slice(&13u32.to_le_bytes());
     assert!(goat_save::save::from_bytes(&bytes).is_err());
 }
+
+#[test]
+fn sim14_dated_layout29_migrates_without_enabling_dated_market() {
+    let mut state = WorldState::new();
+    state.world_seed = 42;
+    state.dated_calendar = true;
+    state.career_base_year = 2023;
+    state.season_number = 1;
+    state.pc_player_id = Some(state.players.push(Default::default()));
+    state.competition_calendar = Some(Default::default());
+    let mut bytes = goat_save::save::to_bytes(&from_world_state(&state, &state.pc_display_view()));
+    let tag = 0x434F_4D50u32.to_le_bytes();
+    let pos = bytes.windows(4).rposition(|w| w == tag).unwrap();
+    let count = u32::from_le_bytes(bytes[pos + 4..pos + 8].try_into().unwrap()) as usize;
+    // Layout29 ends at pc_played_fixture_ids; layout30 adds flag/list/optional end.
+    bytes.drain(pos + 8 + count - 6..pos + 8 + count);
+    bytes[pos + 4..pos + 8].copy_from_slice(&((count - 6) as u32).to_le_bytes());
+    bytes[4..8].copy_from_slice(&29u32.to_le_bytes());
+    let trailer = bytes.len() - 4;
+    bytes[trailer..].copy_from_slice(&14u32.to_le_bytes());
+    let loaded = goat_save::save::from_bytes(&bytes).unwrap();
+    assert_eq!(loaded.competition_calendar, state.competition_calendar);
+    assert!(!loaded.competition_calendar.unwrap().market_enabled);
+}

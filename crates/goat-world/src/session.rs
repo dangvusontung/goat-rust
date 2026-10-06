@@ -39,6 +39,8 @@ impl RetainedWorld {
 /// Legacy scheduled, dated and scored deep APIs explicitly choose their replay inputs.
 #[derive(Default)]
 pub struct SimulationSession {
+    #[cfg(feature = "capacity-bench")]
+    capacity: Option<crate::capacity::CapacityProfile>,
     retained: Option<RetainedWorld>,
     rebuilds: u32,
     pub(crate) deep_progress: Option<crate::deep::DeepProgress>,
@@ -98,6 +100,24 @@ impl SimulationSession {
             Some(&state.deep_results),
             state.competition_calendar.as_ref(),
         );
+        if state.competition_calendar.is_some() {
+            let r = self.retained.as_mut().unwrap();
+            let end = state
+                .chronology()
+                .unwrap()
+                .frame(state.season_number)
+                .end_day;
+            r.replay.advance_market(
+                &mut r.world,
+                state.season_number,
+                state.pc_epoch_day.min(end),
+                state.competition_calendar.as_ref(),
+            );
+            r.replay.population_mut().apply_fixture_dates(
+                state.competition_calendar.as_ref().unwrap(),
+                state.season_number,
+            );
+        }
         if let Some(cal) = &state.competition_calendar {
             self.retained
                 .as_mut()
@@ -201,6 +221,8 @@ impl SimulationSession {
         let unchanged = self.retained.as_ref().is_some_and(|r| {
             r.seed == seed
                 && r.ranked == deep.is_some()
+                && r.replay.pop().dated_rosters
+                    == competitions.is_some_and(|cal| cal.market_enabled)
                 && r.calendar == calendar
                 && r.season == season
                 && if r.ranked {
@@ -222,6 +244,8 @@ impl SimulationSession {
         let reset = self.retained.as_ref().is_none_or(|r| {
             if r.seed != seed
                 || r.ranked != deep.is_some()
+                || r.replay.pop().dated_rosters
+                    != competitions.is_some_and(|cal| cal.market_enabled)
                 || r.calendar != calendar
                 || season < r.season
             {
@@ -259,8 +283,8 @@ impl SimulationSession {
             }
         });
         if reset {
-            let world = WorldGenesis::generate(seed);
-            let replay = calendar.map_or_else(
+            let world = self.generated_world(seed);
+            let mut replay = calendar.map_or_else(
                 || ReplayCache::new_scheduled(&world, seed),
                 |c| {
                     if deep.is_some() {
@@ -270,6 +294,9 @@ impl SimulationSession {
                     }
                 },
             );
+            if competitions.is_some_and(|cal| cal.market_enabled) {
+                replay.enable_dated_market();
+            }
             self.retained = Some(RetainedWorld {
                 seed,
                 ranked: deep.is_some(),
@@ -327,7 +354,7 @@ impl SimulationSession {
                         &mut r.world,
                         records,
                         deep.unwrap_or(&[]),
-                        &cal.coefficients,
+                        cal,
                     );
                 } else {
                     r.replay.advance_one_season_with_deep(
@@ -343,6 +370,20 @@ impl SimulationSession {
             }
         }
         if let Some(cal) = competitions {
+            let c = calendar.unwrap();
+            let frame = c.frame(season);
+            r.replay.advance_market(
+                &mut r.world,
+                season,
+                cal.resolved_day
+                    .max(frame.preparation_start)
+                    .min(frame.end_day),
+                Some(cal),
+            );
+            // July intake precedes any new-cohort credits and pending observations.
+            for load in loads {
+                r.replay.record_match_load(*load);
+            }
             r.replay.population_mut().apply_fixture_dates(cal, season);
         }
         if records
@@ -782,6 +823,11 @@ impl SimulationSession {
         }
         let sum = crate::checkpoint::checksum(&out);
         sum.write(&mut out);
+        #[cfg(feature = "capacity-bench")]
+        if let Some(profile) = self.capacity {
+            let wrapped = profile.wrap_checkpoint(out);
+            return (wrapped.len() <= crate::checkpoint::MAX_BYTES).then_some(wrapped);
+        }
         Some(out)
     }
     /// Restore the optional cache only after integrity, structure and exact input checks.
@@ -804,6 +850,12 @@ impl SimulationSession {
         bytes: &[u8],
     ) -> Option<RetainedWorld> {
         use crate::checkpoint::{Reader, Snapshot};
+        #[cfg(feature = "capacity-bench")]
+        let bytes = if let Some(profile) = self.capacity {
+            profile.checkpoint_body(bytes)?
+        } else {
+            bytes
+        };
         if bytes.len() < 12
             || bytes.len() > crate::checkpoint::MAX_BYTES
             || !state.dated_calendar
@@ -825,7 +877,7 @@ impl SimulationSession {
             return None;
         }
         let replay = ReplayCache::read(&mut r)?;
-        let mut world = WorldGenesis::generate(state.world_seed);
+        let mut world = self.generated_world(state.world_seed);
         let clubs = Vec::<(i64, u8, goat_core::tactical_identity::TacticalIdentity)>::read(&mut r)?;
         if clubs.len() != world.clubs.len() {
             return None;
@@ -851,6 +903,14 @@ impl SimulationSession {
             league.clubs = members;
         }
         let calendar = state.chronology()?;
+        if replay.pop().dated_rosters
+            != state
+                .competition_calendar
+                .as_ref()
+                .is_some_and(|cal| cal.market_enabled)
+        {
+            return None;
+        }
         let retained = RetainedWorld {
             seed: state.world_seed,
             ranked: true,
@@ -890,5 +950,34 @@ impl SimulationSession {
             return None;
         }
         Some(retained)
+    }
+}
+
+impl SimulationSession {
+    fn generated_world(&self, seed: u64) -> WorldGenesis {
+        let world = WorldGenesis::generate(seed);
+        #[cfg(feature = "capacity-bench")]
+        if let Some(profile) = self.capacity {
+            return profile.world(world);
+        }
+        world
+    }
+    pub(crate) fn permanent_top_leagues(&self) -> usize {
+        #[cfg(feature = "capacity-bench")]
+        if let Some(profile) = self.capacity {
+            return profile.deep_budget as usize - 1;
+        }
+        crate::deep::DEFAULT_TOP_LEAGUES
+    }
+    /// Construct a stress profile without enabling a different live-world/save model.
+    /// `players=0` keeps genesis squad sizes; a nonzero target is distributed among
+    /// the same 1,200 clubs. Profile checkpoints cannot be read by normal sessions.
+    #[cfg(feature = "capacity-bench")]
+    pub fn capacity_benchmark(players: u32, deep_budget: u32) -> Result<Self, &'static str> {
+        let profile = crate::capacity::CapacityProfile::new(players, deep_budget)?;
+        Ok(Self {
+            capacity: Some(profile),
+            ..Self::new()
+        })
     }
 }

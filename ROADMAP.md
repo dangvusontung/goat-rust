@@ -1,11 +1,13 @@
 # ROADMAP — Become the GOAT
 
-Latest core update: [SIM14 dated competitions](docs/DATED-COMPETITIONS.md) —
-leagues, domestic/continental cups, national qualifiers/finals and friendlies share
-one clock; persisted brackets, actual NPC minutes/cards and named PC match squads.
-Layout 29 / checkpoint format 2. Core milestone 4 is implemented; milestone 5
-(dated roster and market changes) is next. The TUI test adapter opts in with
-`--dated-competitions`; compatible SIM13 saves keep their legacy behavior.
+Latest core update: [SIM15 dated roster and market](docs/DATED-MARKET.md) —
+NPC transfers run in summer/winter windows, academy entry is July 1, and dated
+registration/contracts survive replay and save/load. PC acceptance validates the
+live club/league and refreshes ranked deep scope. Layout 30 / checkpoint format 3.
+Milestones 4–5 are implemented within documented baseline policies; NPC expiry
+still automatically renews. Capacity/mobile measurements are milestone 6.
+Fresh TUI test careers use `--dated-competitions`; migrated SIM14 dated careers
+retain their annual market behavior.
 
 Local resume update: [derived-state checkpoint](docs/LOCAL-RESUME-CHECKPOINT.md) —
 optional exact cache in save layout 28, unchanged SIM13; canonical journals and

@@ -92,6 +92,23 @@ fn main() {
         let a = session.population_deep(&state);
         let b = cold.population_deep(&state);
         assert_eq!(a.fingerprint(), b.fingerprint());
+        for i in 0..a.len() {
+            assert_eq!(
+                a.club_history(i),
+                b.club_history(i),
+                "registration history idx={i}"
+            );
+            assert_eq!(
+                a.contract_end_day(i),
+                b.contract_end_day(i),
+                "contract idx={i}"
+            );
+            assert_eq!(
+                a.exposure_history(i),
+                b.exposure_history(i),
+                "exposure idx={i}"
+            );
+        }
         if a.career_fingerprint() != b.career_fingerprint() {
             for i in (0..a.len())
                 .filter(|&i| {

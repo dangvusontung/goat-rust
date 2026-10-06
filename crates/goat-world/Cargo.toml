@@ -7,3 +7,7 @@ edition.workspace = true
 goat-rng   = { path = "../goat-rng"   }
 goat-fixed = { path = "../goat-fixed" }
 goat-core  = { path = "../goat-core"  }
+
+[features]
+# Explicit diagnostics only; no change to the default career model.
+capacity-bench = []

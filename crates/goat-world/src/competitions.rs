@@ -394,8 +394,11 @@ fn prepare(cal: &mut CompetitionCalendar, world: &WorldGenesis, state: &WorldSta
             );
             let w = crate::round_to_week(f.round);
             let slot = f.round - crate::week_to_rounds(w).start;
-            dated.workload_id =
-                crate::workload::league_fixture_id(state.world_seed, season, f.round, slot);
+            dated.workload_id = if cal.market_enabled {
+                dated.id
+            } else {
+                crate::workload::league_fixture_id(state.world_seed, season, f.round, slot)
+            };
             cal.fixtures.push(dated);
         }
     }
@@ -728,7 +731,7 @@ fn banned(
     } else {
         pop.club[idx] as u32
     };
-    discipline_banned(cal, &events, team, f)
+    discipline_banned_for_player(cal, &events, team, f, Some((pop, idx)))
 }
 fn discipline_banned(
     cal: &CompetitionCalendar,
@@ -736,13 +739,73 @@ fn discipline_banned(
     team: u32,
     f: &DatedFixture,
 ) -> bool {
+    discipline_banned_for_player(cal, events, team, f, None)
+}
+fn discipline_banned_for_player(
+    cal: &CompetitionCalendar,
+    events: &[NpcCardEvent],
+    team: u32,
+    f: &DatedFixture,
+    player: Option<(&Population, usize)>,
+) -> bool {
+    if !events
+        .iter()
+        .any(|e| e.competition_id == f.competition && e.epoch_day < f.day)
+    {
+        return false;
+    }
+    let clubs = if f.national() {
+        vec![team]
+    } else if let Some((pop, idx)) = player {
+        std::iter::once(
+            pop.original_clubs
+                .get(idx)
+                .copied()
+                .unwrap_or(pop.club[idx]) as u32,
+        )
+        .chain(pop.club_history(idx).iter().map(|&(_, club)| club as u32))
+        .collect::<Vec<_>>()
+    } else if cal.market_enabled && !cal.pc_affiliations.is_empty() {
+        cal.pc_affiliations
+            .iter()
+            .map(|&(_, club)| club as u32)
+            .collect::<Vec<_>>()
+    } else {
+        vec![team]
+    };
     let mut dates = cal
         .results
         .iter()
         .map(|r| &r.fixture)
         .chain(cal.fixtures.iter())
         .filter(|other| {
-            other.competition == f.competition && (other.home == team || other.away == team)
+            if other.competition != f.competition
+                || other.day >= f.day
+                || !clubs
+                    .iter()
+                    .any(|&club| other.home == club || other.away == club)
+            {
+                return false;
+            }
+            let registered = if other.national() {
+                Some(team)
+            } else {
+                player.map_or_else(
+                    || {
+                        if cal.market_enabled && !cal.pc_affiliations.is_empty() {
+                            let n = cal
+                                .pc_affiliations
+                                .partition_point(|&(day, _)| day <= other.day);
+                            n.checked_sub(1).map(|n| cal.pc_affiliations[n].1 as u32)
+                        } else {
+                            Some(team)
+                        }
+                    },
+                    |(pop, idx)| pop.club_at(idx, other.day).map(u32::from),
+                )
+            };
+            other.competition == f.competition
+                && registered.is_some_and(|club| other.home == club || other.away == club)
         })
         .map(|other| other.day)
         .collect::<Vec<_>>();
@@ -824,7 +887,7 @@ fn roster_from_population(
                 if f.national() {
                     pop.nation[i] as u32 == team
                 } else {
-                    pop.club[i] as u32 == team
+                    pop.club_at(i, f.day).map(u32::from) == Some(team)
                 }
             })
             .collect::<Vec<_>>();
@@ -1065,7 +1128,7 @@ impl SimulationSession {
         let chosen = crate::deep::select_leagues(
             &actual,
             state.pc_div_idx as usize,
-            crate::deep::DEFAULT_TOP_LEAGUES,
+            self.permanent_top_leagues(),
             &scores,
         );
         let scope = DeepScope {
@@ -1474,6 +1537,13 @@ impl SimulationSession {
             season_continental_championships_won: state.pc_season_continental_championships_won,
         };
         if state.pc_seasons_played < season {
+            if state
+                .competition_calendar
+                .as_ref()
+                .is_some_and(|cal| cal.market_enabled)
+            {
+                state = reduce(state, Intent::CollectWage, &mut GoatRng::new(0));
+            }
             state = reduce(state, legacy, &mut GoatRng::new(0));
         }
         state = reduce(
@@ -1502,6 +1572,16 @@ impl SimulationSession {
             },
             &mut GoatRng::new(0),
         );
+        if let Some(end) = state
+            .competition_calendar
+            .as_ref()
+            .filter(|cal| cal.market_enabled)
+            .and_then(|cal| cal.pc_contract_end)
+        {
+            state.pc_contract_seasons_left = c
+                .planning_season(end)
+                .saturating_sub(c.planning_season(state.pc_epoch_day));
+        }
         self.prepare_competitions(state, world)
     }
 }
@@ -1672,6 +1752,16 @@ pub fn decode_calendar(bytes: &[u8]) -> Option<CompetitionCalendar> {
     Some(cal)
 }
 pub fn valid_calendar(cal: &CompetitionCalendar) -> bool {
+    if cal.pc_affiliations.windows(2).any(|v| v[0].0 >= v[1].0)
+        || cal
+            .pc_affiliations
+            .iter()
+            .any(|&(_, club)| club as usize >= crate::world::NUM_CLUBS)
+        || (!cal.market_enabled
+            && (!cal.pc_affiliations.is_empty() || cal.pc_contract_end.is_some()))
+    {
+        return false;
+    }
     let all = cal
         .fixtures
         .iter()
@@ -1851,8 +1941,93 @@ crate::checkpoint::fields!(CompetitionCalendar {
     tournaments,
     coefficients,
     pc_cards,
-    pc_played_fixture_ids
+    pc_played_fixture_ids,
+    market_enabled,
+    pc_affiliations,
+    pc_contract_end
 });
+
+/// Layout29 has no market flag; preserve its frozen annual roster behavior.
+pub fn decode_calendar_v14(bytes: &[u8]) -> Option<CompetitionCalendar> {
+    if bytes.len() >= crate::checkpoint::MAX_BYTES {
+        return None;
+    }
+    let mut migrated = bytes.to_vec();
+    migrated.push(0); // market_enabled
+    migrated.extend_from_slice(&0u32.to_le_bytes()); // PC affiliations
+    migrated.push(0); // contract_end = None
+    decode_calendar(&migrated)
+}
+
+impl SimulationSession {
+    /// Validate an accepted PC transfer against dated registration and live membership.
+    /// Offer negotiation remains an existing meta policy; renderers supply the acceptance.
+    pub fn transfer_pc_on_date(
+        &mut self,
+        mut state: WorldState,
+        world: &WorldGenesis,
+        intent: Intent,
+    ) -> Result<WorldState, CalendarError> {
+        let c = state.chronology().ok_or(CalendarError::InvalidClock)?;
+        if !crate::market::registration_open(c, state.pc_epoch_day) {
+            return Err(CalendarError::InvalidClock);
+        }
+        let Intent::ExecuteTransfer {
+            to_club_idx,
+            new_wage,
+            new_length,
+            fee_bonus,
+            ..
+        } = intent
+        else {
+            return Err(CalendarError::InvalidProgress);
+        };
+        if new_length == 0 || to_club_idx as usize >= world.clubs.len() {
+            return Err(CalendarError::InvalidProgress);
+        }
+        self.population_deep(&state);
+        let actual = self.deep_world().ok_or(CalendarError::InvalidProgress)?;
+        let club = &actual.clubs[to_club_idx as usize];
+        let league = actual
+            .leagues
+            .iter()
+            .find(|l| l.clubs.contains(&(to_club_idx as usize)))
+            .ok_or(CalendarError::InvalidProgress)?
+            .id;
+        state = reduce(
+            state,
+            Intent::ExecuteTransfer {
+                to_club_idx,
+                to_div_idx: league as u8,
+                new_wage,
+                new_length,
+                new_club_name: club.name.clone(),
+                facilities_mult: club.facilities_mult(),
+                staff_mods: crate::staff::club_staff_mods(club.strength),
+                fee_bonus,
+            },
+            &mut GoatRng::new(0),
+        );
+        let chosen = crate::deep::select_leagues(
+            &actual,
+            league,
+            self.permanent_top_leagues(),
+            &self.league_scores(&state),
+        );
+        let scope = DeepScope {
+            season: state.season_number,
+            epoch_day: state.pc_epoch_day,
+            pc_league: league as u32,
+            pc_club: to_club_idx as u32,
+            leagues: chosen.iter().map(|&l| l as u32).collect(),
+        };
+        Ok(reduce(
+            state,
+            Intent::SelectDeepScope { scope },
+            &mut GoatRng::new(0),
+        ))
+    }
+}
 
 #[cfg(test)]
 mod tests {
