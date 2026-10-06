@@ -33,3 +33,8 @@ pub mod tuning;
 pub mod week;
 
 pub use goat_calendar::chronology;
+
+pub mod competitions;
+
+/// Legal named NPC roster and match progression shared across adapters.
+pub mod npc_match;

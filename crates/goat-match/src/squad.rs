@@ -19,6 +19,7 @@ use goat_fixed::Fixed;
 use goat_rng::{GoatRng, RngSource};
 
 /// Position groups, matching the population convention (0=DEF, 1=MID, 2=FWD).
+pub const POS_KEEPER: u8 = 3;
 pub const POS_DEF: u8 = 0;
 pub const POS_MID: u8 = 1;
 pub const POS_FWD: u8 = 2;
@@ -201,7 +202,7 @@ impl SquadSheet {
     /// PC's side): forwards 3, midfielders 2, defenders 1; the PC is never drawn.
     pub fn pick_teammate(&self, rng: &mut impl RngSource) -> Option<&SquadPlayer> {
         let weight = |p: &SquadPlayer| {
-            if p.is_pc {
+            if p.is_pc || p.position == POS_KEEPER {
                 0
             } else {
                 match p.position {

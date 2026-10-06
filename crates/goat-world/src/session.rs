@@ -65,7 +65,7 @@ impl SimulationSession {
         records: &[OrbitMatchRecord],
         loads: &[NpcMatchLoad],
     ) -> &Population {
-        self.population_model(seed, None, season, records, loads, None)
+        self.population_model(seed, None, season, records, loads, None, None)
     }
     pub fn population_dated(
         &mut self,
@@ -82,6 +82,7 @@ impl SimulationSession {
             records,
             loads,
             None,
+            None,
         )
     }
     /// V10 tiered replay: detailed scorelines are authoritative season inputs.
@@ -95,7 +96,16 @@ impl SimulationSession {
             &state.orbit_records,
             &state.npc_match_loads,
             Some(&state.deep_results),
-        )
+            state.competition_calendar.as_ref(),
+        );
+        if let Some(cal) = &state.competition_calendar {
+            self.retained
+                .as_mut()
+                .unwrap()
+                .replay
+                .override_coefficients(&cal.coefficients);
+        }
+        self.retained.as_ref().unwrap().replay.pop()
     }
     /// Season-opening scores use completed history only, independent of menu reads.
     pub fn league_scores(
@@ -139,6 +149,7 @@ impl SimulationSession {
             &state.orbit_records,
             &state.npc_match_loads,
             Some(&state.deep_results),
+            state.competition_calendar.as_ref(),
         );
         let r = self.retained.as_ref().unwrap();
         let membership = r.replay.membership().to_vec();
@@ -180,8 +191,13 @@ impl SimulationSession {
         records: &[OrbitMatchRecord],
         loads: &[NpcMatchLoad],
         deep: Option<&[goat_core::deep::DeepFixtureResult]>,
+        competitions: Option<&goat_core::competitions::CompetitionCalendar>,
     ) -> &Population {
         let season = season.max(1);
+        if let (Some(r), Some(cal)) = (self.retained.as_mut(), competitions) {
+            r.replay.population_mut().apply_fixture_dates(cal, r.season);
+        }
+
         let unchanged = self.retained.as_ref().is_some_and(|r| {
             r.seed == seed
                 && r.ranked == deep.is_some()
@@ -278,7 +294,11 @@ impl SimulationSession {
             .collect::<BTreeMap<_, _>>();
         let active_start = if r.ranked { r.active_start() } else { 0 };
         for load in loads.iter().filter(|l| {
-            l.epoch_day >= active_start && !old_loads.contains_key(&(l.pop_idx, l.fixture_id))
+            l.epoch_day >= active_start
+                && !old_loads.contains_key(&(l.pop_idx, l.fixture_id))
+                && (competitions.is_none()
+                    || season == r.season
+                    || l.epoch_day < calendar.unwrap().frame(r.season).next_preparation_start)
         }) {
             r.replay.record_match_load(*load);
         }
@@ -293,63 +313,120 @@ impl SimulationSession {
             r.originals.clear();
             while r.season < season {
                 // Newly created youth can now accept previously pending observations.
-                for load in loads {
+                for load in loads.iter().filter(|l| {
+                    competitions.is_none()
+                        || l.epoch_day < calendar.unwrap().frame(r.season).next_preparation_start
+                }) {
                     r.replay.record_match_load(*load);
                 }
-                r.replay
-                    .advance_one_season_with_deep(&mut r.world, records, deep.unwrap_or(&[]));
+                if let Some(cal) = competitions {
+                    r.replay.population_mut().apply_fixture_dates(cal, r.season);
+                }
+                if let Some(cal) = competitions {
+                    r.replay.advance_one_season_with_dated(
+                        &mut r.world,
+                        records,
+                        deep.unwrap_or(&[]),
+                        &cal.coefficients,
+                    );
+                } else {
+                    r.replay.advance_one_season_with_deep(
+                        &mut r.world,
+                        records,
+                        deep.unwrap_or(&[]),
+                    );
+                }
                 r.season += 1;
             }
             for load in loads {
                 r.replay.record_match_load(*load);
             }
         }
-        let previous = r
-            .records
+        if let Some(cal) = competitions {
+            r.replay.population_mut().apply_fixture_dates(cal, season);
+        }
+        if records
             .iter()
-            .map(|rec| ((rec.season, rec.round, rec.div), rec))
-            .collect::<BTreeMap<_, _>>();
-        for (index, record) in records
-            .iter()
-            .enumerate()
-            .filter(|(_, v)| v.season == season)
+            .any(|rec| rec.round & goat_core::competitions::EXTRA_ROUND != 0)
         {
-            if deep.is_none() && !advanced && index < r.records.len() {
-                continue;
+            for (&idx, &(apps, goals, form)) in &r.originals {
+                let pop = r.replay.population_mut();
+                pop.career_apps[idx] = apps;
+                pop.career_goals[idx] = goals;
+                pop.form[idx] = form;
             }
-            let old = if advanced || deep.is_none() {
-                None
-            } else {
-                previous
-                    .get(&(record.season, record.round, record.div))
-                    .copied()
-            };
-            let credits = record
-                .credits
-                .iter()
-                .filter(|credit| {
-                    old.is_none_or(|rec| !rec.credits.iter().any(|c| c.pop_idx == credit.pop_idx))
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            let pop = r.replay.population_mut();
-            for credit in &credits {
-                let idx = credit.pop_idx as usize;
-                if idx < pop.len() {
-                    r.originals.entry(idx).or_insert((
-                        pop.career_apps[idx],
-                        pop.career_goals[idx],
-                        pop.form[idx],
-                    ));
+            r.originals.clear();
+            for record in records.iter().filter(|rec| rec.season == season) {
+                for credit in &record.credits {
+                    let idx = credit.pop_idx as usize;
+                    let pop = r.replay.population_mut();
+                    if idx < pop.len() {
+                        r.originals.entry(idx).or_insert((
+                            pop.career_apps[idx],
+                            pop.career_goals[idx],
+                            pop.form[idx],
+                        ));
+                    }
                 }
             }
-            crate::orbit::apply_orbit_record(
-                pop,
-                &OrbitMatchRecord {
-                    credits,
-                    ..record.clone()
-                },
+            crate::orbit::apply_dated_records(
+                r.replay.population_mut(),
+                seed,
+                calendar.unwrap(),
+                season,
+                records,
+                loads,
             );
+        } else {
+            let previous = r
+                .records
+                .iter()
+                .map(|rec| ((rec.season, rec.round, rec.div), rec))
+                .collect::<BTreeMap<_, _>>();
+            for (index, record) in records
+                .iter()
+                .enumerate()
+                .filter(|(_, v)| v.season == season)
+            {
+                if deep.is_none() && !advanced && index < r.records.len() {
+                    continue;
+                }
+                let old = if advanced || deep.is_none() {
+                    None
+                } else {
+                    previous
+                        .get(&(record.season, record.round, record.div))
+                        .copied()
+                };
+                let credits = record
+                    .credits
+                    .iter()
+                    .filter(|credit| {
+                        old.is_none_or(|rec| {
+                            !rec.credits.iter().any(|c| c.pop_idx == credit.pop_idx)
+                        })
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let pop = r.replay.population_mut();
+                for credit in &credits {
+                    let idx = credit.pop_idx as usize;
+                    if idx < pop.len() {
+                        r.originals.entry(idx).or_insert((
+                            pop.career_apps[idx],
+                            pop.career_goals[idx],
+                            pop.form[idx],
+                        ));
+                    }
+                }
+                crate::orbit::apply_orbit_record(
+                    pop,
+                    &OrbitMatchRecord {
+                        credits,
+                        ..record.clone()
+                    },
+                );
+            }
         }
         if r.ranked {
             let start_day = r.active_start();
@@ -610,7 +687,8 @@ crate::checkpoint::fields!(CheckpointBinding {
     cards,
     scores,
     loads,
-    records
+    records,
+    competitions
 });
 struct CheckpointBinding {
     model: u32,
@@ -624,6 +702,7 @@ struct CheckpointBinding {
     scores: Vec<goat_core::deep::DeepFixtureResult>,
     loads: Vec<u8>,
     records: Vec<u8>,
+    competitions: Vec<u8>,
 }
 impl CheckpointBinding {
     fn matches(&self, state: &goat_core::state::WorldState) -> bool {
@@ -633,6 +712,11 @@ impl CheckpointBinding {
             && self.season == state.season_number
             && self.day == state.pc_epoch_day
             && self.realistic == state.realistic_npc
+            && self.competitions
+                == state
+                    .competition_calendar
+                    .as_ref()
+                    .map_or_else(Vec::new, crate::competitions::encode_calendar)
             && self.scopes == state.deep_scopes
             && self.cards == state.npc_cards
             && self.scores == state.deep_results
@@ -653,6 +737,10 @@ impl SimulationSession {
         let mut loads = Vec::new();
         goat_core::journal::write(&mut loads, &state.npc_match_loads);
         let binding = CheckpointBinding {
+            competitions: state
+                .competition_calendar
+                .as_ref()
+                .map_or_else(Vec::new, crate::competitions::encode_calendar),
             model: crate::checkpoint::MODEL,
             seed: state.world_seed,
             year: state.career_base_year,

@@ -1,5 +1,8 @@
 # Runtime journals and reactive NPC matches — v13
 
+Subsequent calendar work: [SIM14 dated competitions](DATED-COMPETITIONS.md),
+core milestone 4. This report remains the v13 league-focused baseline.
+
 Subsequent storage work: [local resume checkpoint](LOCAL-RESUME-CHECKPOINT.md),
 save layout 28 / unchanged SIM13. The tables below remain the journal-only baseline.
 

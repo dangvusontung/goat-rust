@@ -1796,3 +1796,32 @@ fn atomic_save_replaces_complete_file_and_cleans_failed_rename() {
         .ends_with(".tmp")));
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+#[test]
+fn sim13_legacy_remains_readable_but_cannot_claim_dated_competitions() {
+    let state = setup_state();
+    let mut bytes = goat_save::save::to_bytes(&from_world_state(&state, &state.pc_display_view()));
+    let trailer = bytes.len() - 4;
+    bytes[trailer..].copy_from_slice(&13u32.to_le_bytes());
+    assert!(goat_save::save::from_bytes(&bytes).is_ok());
+    bytes[trailer..].copy_from_slice(&12u32.to_le_bytes());
+    assert!(goat_save::save::from_bytes(&bytes).is_err());
+    let mut existing = state;
+    existing.dated_calendar = true;
+    let existing = reduce(
+        existing,
+        Intent::EnableDatedCompetitions,
+        &mut GoatRng::new(0),
+    );
+    assert!(existing.competition_calendar.is_none());
+    let mut dated = WorldState::new();
+    dated.dated_calendar = true;
+    dated.career_base_year = 2023;
+    dated.pc_player_id = Some(dated.players.push(Default::default()));
+    dated = reduce(dated, Intent::EnableDatedCompetitions, &mut GoatRng::new(0));
+    assert!(dated.competition_calendar.is_some());
+    let mut bytes = goat_save::save::to_bytes(&from_world_state(&dated, &dated.pc_display_view()));
+    let trailer = bytes.len() - 4;
+    bytes[trailer..].copy_from_slice(&13u32.to_le_bytes());
+    assert!(goat_save::save::from_bytes(&bytes).is_err());
+}

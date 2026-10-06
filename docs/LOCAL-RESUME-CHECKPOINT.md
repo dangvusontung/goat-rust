@@ -1,5 +1,9 @@
 # Local resume checkpoint — save layout 28 / SIM13
 
+Subsequent [SIM14 dated competitions](DATED-COMPETITIONS.md) use layout 29 and
+checkpoint format 2, including exact calendar binding. The layout-28/SIM13 figures
+below remain the historical league-only baseline.
+
 User-approved storage work after the 20-season v13 cold reconstruction took
 175.884 seconds. One optional derived-state checkpoint is stored in the local
 save. The seed and complete journals remain canonical. Football, development,

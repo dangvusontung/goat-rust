@@ -87,7 +87,8 @@ pub const MAGIC: &[u8; 4] = b"GOAT";
 // v25 adds dated deep-scope decisions and authoritative NPC fixture scorelines.
 /// v26 encodes workload rows with a lossless fixture dictionary.
 /// v27 adds the NPC match-model choice and discipline journal.
-pub const VERSION: u32 = 28;
+/// v29 adds canonical dated competition progress before the optional checkpoint.
+pub const VERSION: u32 = 29;
 
 /// The SIMULATION-BEHAVIOUR version — independent of the layout VERSION above.
 /// Bump this whenever a change alters sim outcomes without changing the binary layout
@@ -109,11 +110,15 @@ pub const VERSION: u32 = 28;
 /// 11: rolling continental coefficients and disjoint ranked cup entrants.
 /// 12: dated rest recovery uses its actual elapsed-week endpoint.
 /// 13: reactive NPC matches, named keeping and dated competition discipline.
-pub const SIM_VERSION: u32 = 13;
+/// v14 opts in to dated all-competition outcomes and named PC squads. SIM13 saves
+/// without competition progress retain their frozen legacy paths; old derived
+/// checkpoint format 1 is discarded and rebuilt once.
+pub const SIM_VERSION: u32 = 14;
 
 /// All the path-dependent data that must be persisted across save/load.
 #[derive(Debug, Clone)]
 pub struct SaveData {
+    pub competition_calendar: Option<goat_core::competitions::CompetitionCalendar>,
     /// Optional disposable derived-state cache; canonical journals remain authoritative.
     pub resume_checkpoint: Vec<u8>,
     pub pc_development_history: goat_core::history::DevelopmentHistory,
@@ -317,6 +322,7 @@ pub fn from_world_state(state: &WorldState, view: &PlayerView) -> SaveData {
     let routine_intensity: u8 = state.pc_routine.intensity as u8;
 
     SaveData {
+        competition_calendar: state.competition_calendar.clone(),
         resume_checkpoint: Vec::new(),
         world_seed: state.world_seed,
         pc_name: view.name.clone(),
@@ -926,6 +932,7 @@ pub fn to_world_state(data: &SaveData, world: &goat_world::world::WorldGenesis) 
     state.npc_cards = data.npc_cards.clone();
     state.realistic_npc = data.realistic_npc;
     state.dated_calendar = data.dated_calendar;
+    state.competition_calendar = data.competition_calendar.clone();
     state.deep_scopes = data.deep_scopes.clone();
     state.deep_results = data.deep_results.clone();
     state.pc_played_fixture_ids = data.pc_played_fixture_ids.clone();
@@ -1206,6 +1213,12 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
             v.push(card.kind);
         }
     }
+    if let Some(cal) = &d.competition_calendar {
+        let bytes = goat_world::competitions::encode_calendar(cal);
+        push_u32(&mut v, 0x434F_4D50);
+        push_u32(&mut v, bytes.len() as u32);
+        v.extend_from_slice(&bytes);
+    }
     if !d.resume_checkpoint.is_empty() {
         push_u32(&mut v, 0x4350_4B54);
         push_u32(&mut v, d.resume_checkpoint.len() as u32);
@@ -1222,7 +1235,7 @@ pub fn to_bytes(d: &SaveData) -> Vec<u8> {
 /// `from_bytes_layout_only` only for layout-migration tests / future migration tooling.
 pub fn from_bytes(b: &[u8]) -> Result<SaveData, SaveError> {
     let (data, sim_version) = parse(b, true)?;
-    if sim_version != SIM_VERSION {
+    if sim_version != SIM_VERSION && !(sim_version == 13 && data.competition_calendar.is_none()) {
         return Err(SaveError::SimVersionMismatch {
             found: sim_version,
             expected: SIM_VERSION,
@@ -1747,6 +1760,24 @@ fn parse(b: &[u8], strict_history: bool) -> Result<(SaveData, u32), SaveError> {
             npc_cards.push(card);
         }
     }
+    let mut competition_calendar = None;
+    if ver >= 29
+        && b.get(cur..cur + 4)
+            .is_some_and(|tag| tag == 0x434F_4D50u32.to_le_bytes())
+    {
+        cur += 4;
+        let count = read_u32(b, &mut cur)? as usize;
+        if count > goat_world::checkpoint::MAX_BYTES
+            || count > b.len().saturating_sub(cur).saturating_sub(4)
+        {
+            return Err(SaveError::Corrupt("invalid competition calendar size"));
+        }
+        competition_calendar = Some(
+            goat_world::competitions::decode_calendar(&b[cur..cur + count])
+                .ok_or(SaveError::Corrupt("invalid competition progress"))?,
+        );
+        cur += count;
+    }
     let mut resume_checkpoint = Vec::new();
     if ver >= 28
         && b.get(cur..cur + 4)
@@ -1774,6 +1805,7 @@ fn parse(b: &[u8], strict_history: bool) -> Result<(SaveData, u32), SaveError> {
 
     Ok((
         SaveData {
+            competition_calendar,
             resume_checkpoint,
             pc_development_history,
             npc_match_loads,

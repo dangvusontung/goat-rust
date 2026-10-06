@@ -50,7 +50,10 @@ pub fn apply_orbit_record(pop: &mut Population, rec: &OrbitMatchRecord) {
 pub fn season_overlay(records: &[OrbitMatchRecord], season: u32) -> Option<OrbitSeasonOverlay> {
     let mut overlay = OrbitSeasonOverlay::default();
     let mut any = false;
-    for rec in records.iter().filter(|r| r.season == season) {
+    for rec in records
+        .iter()
+        .filter(|r| r.season == season && r.round & goat_core::competitions::EXTRA_ROUND == 0)
+    {
         any = true;
         let div = rec.div as usize;
         if !overlay.divs.contains(&div) {
@@ -474,5 +477,50 @@ mod scheduled_replay_tests {
                 cache.pop().current_ovr(idx, 104)
             );
         }
+    }
+}
+
+/// Multi-competition form follows actual appearance dates, including postponed leagues.
+pub(crate) fn apply_dated_records(
+    pop: &mut Population,
+    seed: u64,
+    calendar: goat_core::chronology::Chronology,
+    season: u32,
+    records: &[OrbitMatchRecord],
+    loads: &[goat_core::history::NpcMatchLoad],
+) {
+    let dates = loads
+        .iter()
+        .map(|l| ((l.pop_idx, l.fixture_id), l.epoch_day))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut credits = Vec::new();
+    for record in records.iter().filter(|r| r.season == season) {
+        for credit in &record.credits {
+            let day = if record.round & goat_core::competitions::EXTRA_ROUND != 0 {
+                (record.round & !goat_core::competitions::EXTRA_ROUND) >> 8
+            } else {
+                let round = (record.round as usize).min(crate::ROUNDS_PER_SEASON - 1);
+                let w = crate::round_to_week(round);
+                let slot = round - crate::week_to_rounds(w).start;
+                let id = crate::workload::league_fixture_id(seed, season, round, slot);
+                dates
+                    .get(&(credit.pop_idx, id))
+                    .copied()
+                    .unwrap_or_else(|| crate::calendar::dated_fixture_day(calendar, season, round))
+            };
+            credits.push((day, record.round, record.div, credit));
+        }
+    }
+    credits.sort_by_key(|(day, round, div, credit)| (*day, *round, *div, credit.pop_idx));
+    for (_, _, _, credit) in credits {
+        apply_orbit_record(
+            pop,
+            &OrbitMatchRecord {
+                season,
+                round: 0,
+                div: 0,
+                credits: vec![*credit],
+            },
+        );
     }
 }

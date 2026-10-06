@@ -97,3 +97,6 @@ pub mod session;
 
 /// Optional local resume cache codec; canonical seed/journals remain authoritative.
 pub mod checkpoint;
+
+/// Dated multi-competition scheduling and persistent progress.
+pub mod competitions;

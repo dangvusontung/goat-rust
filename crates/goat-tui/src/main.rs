@@ -451,6 +451,10 @@ fn run_new_game(
                         Intent::StartSeason { fixtures },
                         &mut GoatRng::new(0),
                     );
+                    if std::env::args().any(|a| a == "--dated-competitions") {
+                        state =
+                            reduce(state, Intent::EnableDatedCompetitions, &mut GoatRng::new(0));
+                    }
                     // Career epoch: the real-world year, read from wall-clock HERE
                     // (renderer layer) exactly once at new-game — never inside the
                     // core (§9 determinism). Persisted in the save (v19+).
@@ -783,6 +787,18 @@ fn run_game_loop(
     mut world: WorldGenesis,
     mut simulation_session: goat_world::session::SimulationSession,
 ) {
+    if state.competition_calendar.is_some() {
+        run_dated_competition_loop(
+            lines,
+            out,
+            state,
+            beat_lib,
+            pc_traits,
+            world,
+            simulation_session,
+        );
+        return;
+    }
     // Season number for which the season-end pipeline (wage collection, awards,
     // legacy accrual, peer batch-tick, transfer window, contract renewal, retirement
     // suggestion) has already run. The end-of-season gate below re-enters every loop
@@ -5193,5 +5209,116 @@ fn prompt_or_exit(
             out.flush().unwrap();
             std::process::exit(0);
         }
+    }
+}
+
+/// Thin test adapter for the canonical dated competition subsystem.
+fn run_dated_competition_loop(
+    lines: &mut impl Iterator<Item = io::Result<String>>,
+    out: &mut impl Write,
+    mut state: WorldState,
+    lib: &BeatLibrary,
+    traits: PlayerTraits,
+    world: WorldGenesis,
+    mut session: goat_world::session::SimulationSession,
+) {
+    loop {
+        state = match session.advance_until_pc_fixture(state, &world) {
+            Ok(s) => s,
+            Err(e) => {
+                writeln!(out, "Calendar error: {e:?}").unwrap();
+                return;
+            }
+        };
+        let fixture = goat_world::competitions::next_pc_fixture(&state, &world).cloned();
+        let Some(fixture) = fixture else {
+            writeln!(
+                out,
+                "Season {} complete. [N] Next season [S] Save [Q] Quit",
+                state.season_number
+            )
+            .unwrap();
+            out.flush().unwrap();
+            match lines
+                .next()
+                .and_then(Result::ok)
+                .map(|s| s.trim().to_uppercase())
+                .as_deref()
+            {
+                Some("N") => {
+                    state = match session.start_next_competition_season(state, &world) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            writeln!(out, "Calendar error: {e:?}").unwrap();
+                            return;
+                        }
+                    };
+                    continue;
+                }
+                Some("S") => {
+                    run_save(lines, out, &state, &mut session);
+                    continue;
+                }
+                _ => return,
+            }
+        };
+        writeln!(
+            out,
+            "\nSeason {} | day {} | competition {} | {} vs {}\n[P] Play [K] Auto [S] Save [Q] Quit",
+            state.season_number, fixture.day, fixture.competition, fixture.home, fixture.away
+        )
+        .unwrap();
+        out.flush().unwrap();
+        let command = lines
+            .next()
+            .and_then(Result::ok)
+            .map(|s| s.trim().to_uppercase());
+        match command.as_deref() {
+            Some("S") => {
+                run_save(lines, out, &state, &mut session);
+                continue;
+            }
+            Some("P" | "K") => {}
+            _ => return,
+        }
+        let roster = goat_world::competitions::match_roster(&mut session, &state, &fixture);
+        let setup = goat_match::sim::dated_match_setup(&state, &roster, traits);
+        let seed = state.world_seed ^ fixture.id;
+        let mut rng = GoatRng::new(seed);
+        let mut active =
+            goat_match::sim::start_match_dated(lib, setup, roster.clone(), seed, &mut rng);
+        while !active.is_complete {
+            let choice = if command.as_deref() == Some("P") && active.current_beat().is_some() {
+                render_beat(out, &active);
+                out.flush().unwrap();
+                let Some(input) = lines.next().and_then(Result::ok) else {
+                    return;
+                };
+                input.trim().parse::<usize>().unwrap_or(1).saturating_sub(1)
+            } else {
+                active.current_beat().map_or(0, |beat| {
+                    goat_match::contest::auto_pick_generated_choice(
+                        &beat.choices,
+                        &active.setup.player_attrs,
+                    )
+                })
+            };
+            active = advance_beat(active, choice, lib, &mut rng);
+        }
+        let result = active.final_result.as_ref().unwrap();
+        writeln!(
+            out,
+            "Full time: {}–{} | PC {} minutes | red {}",
+            result.goals_for, result.goals_against, result.minutes_played, result.red_card
+        )
+        .unwrap();
+        let receipt = goat_match::sim::dated_match_receipt(result, &roster);
+        state = match session.apply_dated_pc_match(state, &world, receipt) {
+            Ok(s) => s,
+            Err(e) => {
+                writeln!(out, "Match commit error: {e:?}").unwrap();
+                return;
+            }
+        };
     }
 }

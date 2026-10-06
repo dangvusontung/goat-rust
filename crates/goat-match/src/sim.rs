@@ -619,6 +619,10 @@ pub struct ResolvedOpportunity {
 /// Final result of a completed match.
 #[derive(Debug, Clone)]
 pub struct MatchResult {
+    pub npc_cards: Vec<goat_core::discipline::NpcCardEvent>,
+    pub pc_cards: Vec<goat_core::discipline::NpcCardEvent>,
+    pub npc_substitutions: [Vec<goat_core::npc_match::Substitution>; 2],
+    pub keeper_ids: [Option<u32>; 2],
     pub team_observations: goat_core::match_model::MatchObservations,
     pub opportunities: Vec<ResolvedOpportunity>,
     /// Automatic NPC opportunities only; authored PC contests are separate.
@@ -708,6 +712,7 @@ pub fn is_clutch(m: &MomentSummary) -> bool {
 /// Live match state, advanced tick by tick through the flow.
 #[derive(Debug, Clone)]
 pub struct ActiveMatchState {
+    realistic: Option<DatedMatch>,
     pub setup: MatchSetup,
     shared_model: bool,
     unified: Option<UnifiedOptions>,
@@ -822,9 +827,11 @@ fn start_match_model(
             ..Default::default()
         },
         None,
+        None,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn initialize_match(
     lib: &BeatLibrary,
     setup: MatchSetup,
@@ -833,6 +840,7 @@ fn initialize_match(
     allow_pc: bool,
     shared_context: goat_core::match_model::MatchContext,
     unified: Option<UnifiedOptions>,
+    realistic: Option<DatedMatch>,
 ) -> ActiveMatchState {
     let headspace = Headspace::from_form(setup.form);
     // Kickoff possession: the midfield battle decides.
@@ -870,6 +878,7 @@ fn initialize_match(
         )
         .collect();
     let mut ms = ActiveMatchState {
+        realistic,
         shared_model,
         unified,
         pending_opportunity: None,
@@ -1050,7 +1059,7 @@ pub fn observe_npc_match_with_context(
         .opp_squad
         .players
         .truncate(context.opp_players.min(11) as usize);
-    let ms = initialize_match(lib, setup, rng, true, false, context, None);
+    let ms = initialize_match(lib, setup, rng, true, false, context, None, None);
     ms.final_result
         .expect("NPC observer always runs to full time")
 }
@@ -1062,7 +1071,16 @@ pub fn start_match_unified(
     rng: &mut impl RngSource,
 ) -> ActiveMatchState {
     let options = UnifiedOptions::default();
-    initialize_match(lib, setup, rng, true, true, options.context, Some(options))
+    initialize_match(
+        lib,
+        setup,
+        rng,
+        true,
+        true,
+        options.context,
+        Some(options),
+        None,
+    )
 }
 
 /// Version-5 default decision policy, also used by production skip-match adapters.
@@ -1081,7 +1099,16 @@ pub fn auto_play_match_unified_with_options(
     options: UnifiedOptions,
     rng: &mut impl RngSource,
 ) -> MatchResult {
-    let mut ms = initialize_match(lib, setup, rng, true, true, options.context, Some(options));
+    let mut ms = initialize_match(
+        lib,
+        setup,
+        rng,
+        true,
+        true,
+        options.context,
+        Some(options),
+        None,
+    );
     while !ms.is_complete {
         let idx = if options.first_choice {
             0
@@ -1118,7 +1145,7 @@ pub fn observe_npc_match_unified_with_context(
         context,
         ..Default::default()
     };
-    let ms = initialize_match(lib, setup, rng, true, false, context, Some(options));
+    let ms = initialize_match(lib, setup, rng, true, false, context, Some(options), None);
     ms.final_result.expect("unified observer finishes")
 }
 
@@ -1157,8 +1184,20 @@ fn tick(ms: &mut ActiveMatchState, lib: &BeatLibrary, rng: &mut impl RngSource) 
     ms.tick_minutes = ms.minute - previous_minute;
 
     // 1.5 Substitutions (PA2 M4): side-stream rolls only — never the match RNG.
-    maybe_substitute(ms);
-    maybe_opp_substitute(ms);
+    if ms.realistic.is_some() {
+        // Hit legal roster decision boundaries exactly in the new model only.
+        for boundary in [30, 45, 60, 75, 85, 90] {
+            if previous_minute < boundary && ms.minute > boundary {
+                ms.minute = boundary;
+                break;
+            }
+        }
+        ms.tick_minutes = ms.minute - previous_minute;
+        dated_roster_tick(ms, previous_minute);
+    } else {
+        maybe_substitute(ms);
+        maybe_opp_substitute(ms);
+    }
 
     // 2. Momentum decays toward zero; the conceding side's surge winds down.
     ms.momentum -= ms.momentum / MOMENTUM_DECAY_DIV;
@@ -2214,6 +2253,21 @@ fn resolve_choice(
 }
 
 fn apply_card(ms: &mut ActiveMatchState, card: DisciplineEvent) {
+    if let Some(live) = ms.realistic.as_mut() {
+        live.cards.push(goat_core::discipline::NpcCardEvent {
+            season: live.fixture.season,
+            competition_id: live.fixture.competition,
+            pop_idx: PC_MATCH_ID,
+            fixture_id: live.fixture.workload_id,
+            epoch_day: live.fixture.day,
+            minute: ms.minute as u8,
+            kind: match card {
+                DisciplineEvent::YellowCard => 0,
+                DisciplineEvent::RedCard if ms.yellow_cards > 0 => 1,
+                DisciplineEvent::RedCard => 2,
+            },
+        });
+    }
     match card {
         DisciplineEvent::YellowCard => ms.yellow_cards += 1,
         DisciplineEvent::RedCard => {
@@ -2263,6 +2317,31 @@ fn build_result(ms: &ActiveMatchState) -> MatchResult {
         ms.player_output
     };
     MatchResult {
+        npc_cards: ms.realistic.as_ref().map_or_else(Vec::new, |live| {
+            live.cards
+                .iter()
+                .filter(|c| c.pop_idx != PC_MATCH_ID)
+                .copied()
+                .collect()
+        }),
+        pc_cards: ms.realistic.as_ref().map_or_else(Vec::new, |live| {
+            live.cards
+                .iter()
+                .filter(|c| c.pop_idx == PC_MATCH_ID)
+                .copied()
+                .collect()
+        }),
+        npc_substitutions: ms.realistic.as_ref().map_or_else(
+            || [Vec::new(), Vec::new()],
+            |live| {
+                live.teams
+                    .each_ref()
+                    .map(|team| team.substitutions().to_vec())
+            },
+        ),
+        keeper_ids: ms.realistic.as_ref().map_or([None, None], |live| {
+            live.teams.each_ref().map(|team| team.keeper_id())
+        }),
         team_observations: ms.team_observations,
         opportunities: ms.opportunities.clone(),
         npc_observations: ms.npc_observations,
@@ -2276,17 +2355,28 @@ fn build_result(ms: &ActiveMatchState) -> MatchResult {
         goal_credits: ms.goal_credits.clone(),
         minutes_played,
         opp_subs_on: ms.opp_subs_on.clone(),
-        npc_minutes: ms
-            .npc_stints
-            .iter()
-            .map(
-                |(&pop_idx, &(start, total))| goat_core::history::NpcMinutes {
-                    pop_idx,
-                    minutes: (total + start.map_or(0, |start| ms.minute.saturating_sub(start)))
-                        .min(FULL_TIME) as u16,
-                },
-            )
-            .collect(),
+        npc_minutes: if let Some(live) = &ms.realistic {
+            live.teams
+                .iter()
+                .flat_map(|team| team.appearances().iter())
+                .filter(|a| a.player != PC_MATCH_ID)
+                .map(|a| goat_core::history::NpcMinutes {
+                    pop_idx: a.player,
+                    minutes: a.minutes,
+                })
+                .collect()
+        } else {
+            ms.npc_stints
+                .iter()
+                .map(
+                    |(&pop_idx, &(start, total))| goat_core::history::NpcMinutes {
+                        pop_idx,
+                        minutes: (total + start.map_or(0, |start| ms.minute.saturating_sub(start)))
+                            .min(FULL_TIME) as u16,
+                    },
+                )
+                .collect()
+        },
         danger_duels_won: ms.danger_duels_won,
         danger_duels_lost: ms.danger_duels_lost,
         danger_man_name: ms.danger_man_name.clone(),
@@ -2594,4 +2684,478 @@ pub fn stub_strength(club: &str) -> u8 {
         .position(|&c| c == club)
         .map(|i| STUB_CLUB_STRENGTHS[i])
         .unwrap_or(50)
+}
+
+/// A per-match sentinel only; it is never persisted as an NPC identity.
+pub const PC_MATCH_ID: u32 = u32::MAX;
+#[derive(Debug, Clone)]
+struct DatedMatch {
+    teams: [goat_core::npc_match::LiveTeam; 2],
+    roster: [Vec<goat_core::competitions::RosterPlayer>; 2],
+    fixture: goat_core::competitions::DatedFixture,
+    cards: Vec<goat_core::discipline::NpcCardEvent>,
+    rng: GoatRng,
+}
+fn dated_sheet(
+    team: &goat_core::npc_match::LiveTeam,
+    players: &[goat_core::competitions::RosterPlayer],
+) -> SquadSheet {
+    let active = team.active_ids();
+    let keeper = team.keeper_id();
+    let convert = |p: &goat_core::competitions::RosterPlayer| SquadPlayer {
+        name: p.name.clone(),
+        position: if keeper == Some(p.id) {
+            crate::squad::POS_KEEPER
+        } else {
+            p.position
+        },
+        attrs: p.attrs,
+        is_pc: p.id == PC_MATCH_ID,
+        id: if p.id == PC_MATCH_ID {
+            None
+        } else {
+            Some(p.id)
+        },
+        form: p.form,
+    };
+    SquadSheet {
+        players: active
+            .iter()
+            .filter_map(|id| players.iter().find(|p| p.id == *id))
+            .map(convert)
+            .collect(),
+        bench: players
+            .iter()
+            .filter(|p| !active.contains(&p.id) && !p.banned)
+            .map(convert)
+            .collect(),
+    }
+}
+/// Core setup builder: names/availability come from the dated roster, not a renderer.
+pub fn dated_match_setup(
+    state: &goat_core::state::WorldState,
+    roster: &goat_core::competitions::MatchRoster,
+    traits: PlayerTraits,
+) -> MatchSetup {
+    let view = state.pc_display_view();
+    let own = roster.pc_side.unwrap_or(0) as usize;
+    let role = match roster.pc_position {
+        0 => RoleId::CentreBack,
+        1 => RoleId::CentralMid,
+        _ => RoleId::CompleteForward,
+    };
+    let mut ref_rng = GoatRng::new(state.world_seed ^ roster.fixture.id ^ 0x5245_4645_5245_4500);
+    MatchSetup {
+        player_role: role,
+        player_attrs: view.current,
+        player_familiarity: view.familiarity,
+        own_profile: roster.profiles[own],
+        opp_profile: roster.profiles[1 - own],
+        opp_name: "Opposition",
+        form: state.pc_form,
+        player_aggression: view.current[AttrId::Aggression as usize]
+            .to_int()
+            .clamp(1, 99) as u8,
+        ref_personality: RefPersonality::from_rng(&mut ref_rng),
+        dirty_rep: state.pc_discipline_rep,
+        player_traits: traits,
+        staff_mods: state.pc_staff_mods,
+        own_squad: SquadSheet {
+            players: Vec::new(),
+            bench: Vec::new(),
+        },
+        opp_squad: SquadSheet {
+            players: Vec::new(),
+            bench: Vec::new(),
+        },
+        sub_context: None,
+    }
+}
+/// Opt-in SIM14 beat adapter with the same keeper/substitution rules as NPC matches.
+/// Legacy shared/unified entry points and their RNG draws remain unchanged.
+pub fn start_match_dated(
+    lib: &BeatLibrary,
+    mut setup: MatchSetup,
+    roster: goat_core::competitions::MatchRoster,
+    seed: u64,
+    rng: &mut impl RngSource,
+) -> ActiveMatchState {
+    use goat_core::{
+        competitions::RosterPlayer,
+        npc_match::{Candidate, LiveTeam},
+    };
+    let own = roster.pc_side.unwrap_or(0) as usize;
+    let mut players = [roster.teams[own].clone(), roster.teams[1 - own].clone()];
+    let rating = roster.pc_rating as i32;
+    players[0].push(RosterPlayer {
+        id: PC_MATCH_ID,
+        name: "You".into(),
+        attrs: setup.player_attrs,
+        position: roster.pc_position,
+        keeper: false,
+        rating: rating.clamp(1, 99) as u8,
+        form: setup.form.to_int(),
+        keeping: 1,
+        energy: roster.pc_energy,
+        aggression: setup.player_aggression,
+        returning: roster.pc_returning,
+        banned: !roster.pc_eligible || roster.pc_side.is_none(),
+    });
+    let candidates = players.each_ref().map(|team| {
+        team.iter()
+            .map(|p| Candidate {
+                player: p.id,
+                position: p.position,
+                keeper: p.keeper,
+                rating: p.rating,
+                keeping: p.keeping,
+                energy: p.energy,
+                stamina: p.attrs[AttrId::Stamina as usize].to_int().clamp(1, 99) as u8,
+                aggression: p.aggression,
+                returning: p.returning,
+                banned: p.banned,
+            })
+            .collect::<Vec<_>>()
+    });
+    let teams = [
+        LiveTeam::new(&candidates[0], setup.own_profile),
+        LiveTeam::new(&candidates[1], setup.opp_profile),
+    ];
+    setup.own_squad = dated_sheet(&teams[0], &players[0]);
+    setup.opp_squad = dated_sheet(&teams[1], &players[1]);
+    setup.sub_context = Some(SubContext {
+        pc_starts_on_bench: !teams[0].active_ids().contains(&PC_MATCH_ID),
+        seed,
+        manager_patience: 50,
+        manager_trust: 50,
+        pc_returning_from_injury: roster.pc_returning,
+    });
+    for (profile, team) in [&mut setup.own_profile, &mut setup.opp_profile]
+        .into_iter()
+        .zip(&teams)
+    {
+        let lines = team.unscaled_lines(0, 0);
+        profile.attack = lines.attack;
+        profile.midfield = lines.midfield;
+        profile.defense = lines.defense;
+    }
+    let context = goat_core::match_model::MatchContext {
+        venue: if own == 0 {
+            goat_core::match_model::Venue::Home
+        } else {
+            goat_core::match_model::Venue::Away
+        },
+        own_players: teams[0].active_ids().len() as u8,
+        opp_players: teams[1].active_ids().len() as u8,
+    };
+    let options = UnifiedOptions {
+        context,
+        ..Default::default()
+    };
+    let live = DatedMatch {
+        teams,
+        roster: players,
+        fixture: roster.fixture,
+        cards: Vec::new(),
+        rng: GoatRng::new(seed ^ 0x4C49_5645_524F_5354),
+    };
+    initialize_match(
+        lib,
+        setup,
+        rng,
+        true,
+        true,
+        context,
+        Some(options),
+        Some(live),
+    )
+}
+fn dated_roster_tick(ms: &mut ActiveMatchState, previous: u32) {
+    let mut live = ms.realistic.take().unwrap();
+    let minute = previous as u8;
+    if ms.red_card {
+        live.teams[0].dismiss(PC_MATCH_ID, minute);
+    }
+    for (side, team) in live.teams.iter_mut().enumerate() {
+        let deficit = if side == 0 {
+            ms.goals_against as i32 - ms.goals_for as i32
+        } else {
+            ms.goals_for as i32 - ms.goals_against as i32
+        };
+        team.substitute(minute, deficit);
+        if minute > 0 {
+            let rules = goat_core::npc_match::MatchRules {
+                yellow_per_1000: 80 * ms.tick_minutes / 5,
+                red_per_1000: ms.tick_minutes.div_ceil(5),
+            };
+            if let Some(card) = team.foul(minute, rules, Some(PC_MATCH_ID), &mut live.rng) {
+                live.cards.push(goat_core::discipline::NpcCardEvent {
+                    season: live.fixture.season,
+                    competition_id: live.fixture.competition,
+                    pop_idx: card.player,
+                    fixture_id: live.fixture.workload_id,
+                    epoch_day: live.fixture.day,
+                    minute: card.minute,
+                    kind: card.kind,
+                });
+            }
+        }
+    }
+    let pc_active = live.teams[0].active_ids().contains(&PC_MATCH_ID) && !ms.red_card;
+    let saved_minute = ms.minute;
+    ms.minute = previous;
+    if pc_active && !ms.pc_on_pitch {
+        sub_pc_on(ms, "The manager sends you on.");
+    }
+    if !pc_active && ms.pc_on_pitch {
+        sub_pc_off(ms, "Your shift is over; the team plays on.");
+    }
+    ms.minute = saved_minute;
+    ms.setup.own_squad = dated_sheet(&live.teams[0], &live.roster[0]);
+    ms.setup.opp_squad = dated_sheet(&live.teams[1], &live.roster[1]);
+    ms.shared_context.own_players = live.teams[0].active_ids().len() as u8 + u8::from(ms.red_card);
+    ms.shared_context.opp_players = live.teams[1].active_ids().len() as u8;
+    for (side, profile) in [&mut ms.setup.own_profile, &mut ms.setup.opp_profile]
+        .into_iter()
+        .enumerate()
+    {
+        let score = if side == 0 {
+            ms.goals_for as i32 - ms.goals_against as i32
+        } else {
+            ms.goals_against as i32 - ms.goals_for as i32
+        };
+        let lines = live.teams[side].unscaled_lines(score, minute);
+        profile.attack = lines.attack;
+        profile.midfield = lines.midfield;
+        profile.defense = lines.defense;
+    }
+    for team in &mut live.teams {
+        team.elapse(ms.tick_minutes as u16);
+    }
+    ms.realistic = Some(live);
+}
+
+/// Convert finalized named-match observations to canonical world bookkeeping.
+/// No new draws or injury/development rolls occur here.
+pub fn dated_match_receipt(
+    result: &MatchResult,
+    roster: &goat_core::competitions::MatchRoster,
+) -> goat_core::competitions::DatedMatchReceipt {
+    use goat_core::{
+        competitions::{DatedMatchReceipt, FixtureResult},
+        history::NpcMatchLoad,
+        state::NpcMatchCredit,
+    };
+    let own = roster.pc_side.unwrap_or(0) as usize;
+    let goals = if own == 0 {
+        [result.goals_for, result.goals_against]
+    } else {
+        [result.goals_against, result.goals_for]
+    };
+    let pc_goals = result
+        .goal_credits
+        .iter()
+        .filter(|g| g.scorer == GoalActor::Pc)
+        .count() as u32;
+    let pc_assists = result
+        .goal_credits
+        .iter()
+        .filter(|g| g.assist == Some(GoalActor::Pc))
+        .count() as u32;
+    let mut credits = Vec::new();
+    let mut loads = Vec::new();
+    for (side, players) in roster.teams.iter().enumerate() {
+        for player in players {
+            let minutes = result
+                .npc_minutes
+                .iter()
+                .find(|m| m.pop_idx == player.id)
+                .map_or(0, |m| m.minutes);
+            loads.push(NpcMatchLoad {
+                competition_id: roster.fixture.competition,
+                pop_idx: player.id,
+                fixture_id: roster.fixture.workload_id,
+                epoch_day: roster.fixture.day,
+                minutes,
+            });
+            if minutes > 0 {
+                credits.push(NpcMatchCredit {
+                    pop_idx: player.id,
+                    goals: result
+                        .goal_credits
+                        .iter()
+                        .filter(|g| g.scorer == GoalActor::Npc(Some(player.id)))
+                        .count() as u8,
+                    assists: result
+                        .goal_credits
+                        .iter()
+                        .filter(|g| g.assist == Some(GoalActor::Npc(Some(player.id))))
+                        .count() as u8,
+                    result: if goals[side] > goals[1 - side] {
+                        1
+                    } else if goals[side] < goals[1 - side] {
+                        -1
+                    } else {
+                        0
+                    },
+                });
+            }
+        }
+    }
+    DatedMatchReceipt {
+        result: FixtureResult {
+            fixture: roster.fixture.clone(),
+            goals,
+            winner: None,
+            detailed: true,
+        },
+        credits,
+        loads,
+        cards: result.npc_cards.clone(),
+        pc_cards: result.pc_cards.clone(),
+        pc_goals,
+        pc_assists,
+        pc_output: result.player_output,
+        pc_minutes: result.minutes_played,
+        familiarity_xp: result.familiarity_xp,
+        decisive: result.moments.iter().filter(|m| is_decisive(m)).count() as u32,
+        clutch: result.moments.iter().filter(|m| is_clutch(m)).count() as u32,
+    }
+}
+
+#[cfg(test)]
+mod dated_tests {
+    use super::*;
+    use goat_core::competitions::{DatedFixture, MatchRoster, RosterPlayer};
+    fn roster() -> MatchRoster {
+        MatchRoster {
+            profiles: [
+                TacticalProfile::derive(60, 0, 42),
+                TacticalProfile::derive(60, 1, 42),
+            ],
+            pc_side: Some(0),
+            pc_position: 2,
+            pc_rating: 99,
+            pc_energy: 100,
+            pc_returning: false,
+            pc_eligible: true,
+            fixture: DatedFixture {
+                id: 99,
+                workload_id: 99,
+                season: 1,
+                competition: 2,
+                region: 0,
+                round: 0,
+                slot: 0,
+                stage: 1,
+                leg: 1,
+                original_day: 100,
+                day: 100,
+                home: 0,
+                away: 1,
+                priority: 3,
+            },
+            teams: [0, 1].map(|side| {
+                (0..25)
+                    .map(|i| RosterPlayer {
+                        id: side * 25 + i,
+                        name: format!("NPC {side}:{i}"),
+                        attrs: [Fixed::from_int(60); NUM_ATTRS],
+                        position: (i % 3) as u8,
+                        keeper: i >= 23,
+                        rating: 60,
+                        form: 50,
+                        keeping: 70,
+                        energy: 100,
+                        aggression: 30,
+                        returning: false,
+                        banned: false,
+                    })
+                    .collect()
+            }),
+            cards: vec![],
+        }
+    }
+    fn setup(roster: &MatchRoster) -> MatchSetup {
+        let mut state = goat_core::state::WorldState::new();
+        let player = goat_core::player::PlayerView {
+            current: [Fixed::from_int(99); NUM_ATTRS],
+            ..Default::default()
+        };
+        state.pc_player_id = Some(state.players.push(player));
+        dated_match_setup(&state, roster, PlayerTraits::default())
+    }
+    fn finish(
+        mut active: ActiveMatchState,
+        lib: &BeatLibrary,
+        rng: &mut GoatRng,
+    ) -> ActiveMatchState {
+        for _ in 0..500 {
+            if active.is_complete {
+                return active;
+            }
+            active = advance_beat(active, 0, lib, rng);
+        }
+        panic!("dated match failed to reach full time");
+    }
+    #[test]
+    fn pc_red_continues_named_npcs_to_full_time() {
+        let lib = BeatLibrary::load(include_str!("../../../beats.json")).unwrap();
+        let roster = roster();
+        let mut rng = GoatRng::new(42);
+        let mut active = start_match_dated(&lib, setup(&roster), roster.clone(), 42, &mut rng);
+        assert!(active.pc_on_pitch);
+        let sent_off = active.minute;
+        apply_card(&mut active, DisciplineEvent::RedCard);
+        assert!(!active.is_complete);
+        active = finish(active, &lib, &mut rng);
+        assert_eq!(active.current_minute(), 90);
+        let result = active.final_result.as_ref().unwrap();
+        assert!(result.red_card);
+        assert_eq!(result.minutes_played, sent_off);
+        assert!(result.npc_minutes.iter().any(|p| p.minutes == 90));
+        assert!(result
+            .npc_minutes
+            .iter()
+            .all(|p| p.pop_idx != PC_MATCH_ID && p.minutes <= 90));
+        let receipt = dated_match_receipt(result, &roster);
+        assert_eq!(receipt.loads.len(), 50);
+        assert_eq!(
+            receipt.credits.iter().map(|c| c.goals as u32).sum::<u32>() + receipt.pc_goals,
+            result.goals_for + result.goals_against
+        );
+        assert_eq!(receipt.pc_cards.len(), 1);
+    }
+    #[test]
+    fn missing_keeper_uses_legal_emergency_and_substitution_budget() {
+        let lib = BeatLibrary::load(include_str!("../../../beats.json")).unwrap();
+        let mut roster = roster();
+        for p in &mut roster.teams[1] {
+            if p.keeper {
+                p.banned = true;
+            }
+        }
+        let mut rng = GoatRng::new(7);
+        let active = start_match_dated(&lib, setup(&roster), roster.clone(), 7, &mut rng);
+        assert!(active.realistic.as_ref().unwrap().teams[1]
+            .keeper_id()
+            .is_some());
+        let active = finish(active, &lib, &mut rng);
+        let result = active.final_result.unwrap();
+        for subs in result.npc_substitutions {
+            assert!(subs.len() <= 5);
+            let windows = subs
+                .iter()
+                .filter(|s| s.minute != 45)
+                .map(|s| s.minute)
+                .collect::<std::collections::BTreeSet<_>>();
+            assert!(windows.len() <= 3);
+        }
+        for p in roster.teams[1].iter().filter(|p| p.keeper) {
+            assert!(result
+                .npc_minutes
+                .iter()
+                .all(|m| m.pop_idx != p.id || m.minutes == 0));
+        }
+    }
 }

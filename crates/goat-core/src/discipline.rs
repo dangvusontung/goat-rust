@@ -44,11 +44,32 @@ pub fn status(
     competition: u32,
     fixtures: &[u32],
 ) -> DisciplineStatus {
-    let rules = DisciplineRules::for_competition(competition);
+    status_with_rules(
+        events,
+        season,
+        day,
+        competition,
+        fixtures,
+        DisciplineRules::for_competition(competition),
+        None,
+    )
+}
+/// Versioned competition policy; yellow resets never erase already earned bans.
+#[allow(clippy::too_many_arguments)]
+pub fn status_with_rules(
+    events: &[NpcCardEvent],
+    season: u32,
+    day: u32,
+    competition: u32,
+    fixtures: &[u32],
+    rules: DisciplineRules,
+    yellow_reset_day: Option<u32>,
+) -> DisciplineStatus {
     let mut result = DisciplineStatus::default();
     let mut last_day = None;
     let mut last_season = 0;
     let mut last_yellow_fixture = None;
+    let mut reset_applied = false;
     for event in events
         .iter()
         .filter(|e| e.competition_id == competition && e.epoch_day < day)
@@ -64,6 +85,11 @@ pub fn status(
             result.yellows = 0;
             last_season = event.season;
             last_yellow_fixture = None;
+        }
+        if !reset_applied && yellow_reset_day.is_some_and(|reset| event.epoch_day >= reset) {
+            result.yellows = 0;
+            last_yellow_fixture = None;
+            reset_applied = true;
         }
         match event.kind {
             0 => {
@@ -94,6 +120,9 @@ pub fn status(
             .saturating_sub(fixtures.partition_point(|&d| d <= previous))
             as u32;
         result.ban_games = result.ban_games.saturating_sub(served);
+    }
+    if yellow_reset_day.is_some_and(|reset| day >= reset) && !reset_applied {
+        result.yellows = 0;
     }
     if last_season != season {
         result.yellows = 0;

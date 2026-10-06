@@ -419,6 +419,20 @@ impl ReplayCache {
     pub fn ranking_history(&self) -> Option<&crate::ranking::RankingHistory> {
         self.ranking.as_ref()
     }
+    pub(crate) fn override_coefficients(
+        &mut self,
+        years: &[goat_core::competitions::CoefficientYear],
+    ) {
+        if let Some(ranking) = &mut self.ranking {
+            for year in years {
+                ranking.replace_year(crate::ranking::AnnualCoefficient {
+                    season: year.season,
+                    points: year.points.clone(),
+                    entrants: year.entrants.clone(),
+                });
+            }
+        }
+    }
     pub fn record_match_load(&mut self, load: goat_core::history::NpcMatchLoad) -> bool {
         self.pop.record_match_load(load)
     }
@@ -540,12 +554,53 @@ impl ReplayCache {
         records: &[goat_core::state::OrbitMatchRecord],
         scores: &[goat_core::deep::DeepFixtureResult],
     ) -> Vec<PromoRelegationEvent> {
+        self.advance_scored_season(world, records, scores, None)
+    }
+    /// Dated continental scores replace the batch coefficient simulation.
+    pub(crate) fn advance_one_season_with_dated(
+        &mut self,
+        world: &mut WorldGenesis,
+        records: &[goat_core::state::OrbitMatchRecord],
+        scores: &[goat_core::deep::DeepFixtureResult],
+        coefficients: &[goat_core::competitions::CoefficientYear],
+    ) -> Vec<PromoRelegationEvent> {
+        self.advance_scored_season(world, records, scores, Some(coefficients))
+    }
+    fn advance_scored_season(
+        &mut self,
+        world: &mut WorldGenesis,
+        records: &[goat_core::state::OrbitMatchRecord],
+        scores: &[goat_core::deep::DeepFixtureResult],
+        coefficients: Option<&[goat_core::competitions::CoefficientYear]>,
+    ) -> Vec<PromoRelegationEvent> {
         let season = self.resolved_through + 1;
         let elapsed_weeks = self.pop.season_end_week(season);
         let apps_before = self.pop.career_apps.clone();
-        for record in records.iter().filter(|r| r.season == season) {
-            crate::orbit::apply_orbit_record(&mut self.pop, record);
+        if records
+            .iter()
+            .any(|r| r.round & goat_core::competitions::EXTRA_ROUND != 0)
+        {
+            let calendar = self
+                .pop
+                .calendar_for_replay()
+                .expect("dated competition credits need chronology");
+            let loads = (0..self.pop.len())
+                .flat_map(|i| self.pop.observed_match_loads(i))
+                .collect::<Vec<_>>();
+            crate::orbit::apply_dated_records(
+                &mut self.pop,
+                self.world_seed,
+                calendar,
+                season,
+                records,
+                &loads,
+            );
+        } else {
+            for record in records.iter().filter(|r| r.season == season) {
+                crate::orbit::apply_orbit_record(&mut self.pop, record);
+            }
         }
+
         let overlay = crate::orbit::season_overlay(records, season);
 
         // Overlay this cache's own path-dependent budget/academy state onto `world.clubs`
@@ -604,7 +659,16 @@ impl ReplayCache {
             )
         };
         if let Some(history) = &mut self.ranking {
-            let year = crate::ranking::simulate_annual(world, &tables, self.world_seed, season);
+            let year = coefficients
+                .and_then(|years| years.iter().find(|y| y.season == season))
+                .map(|y| crate::ranking::AnnualCoefficient {
+                    season: y.season,
+                    points: y.points.clone(),
+                    entrants: y.entrants.clone(),
+                })
+                .unwrap_or_else(|| {
+                    crate::ranking::simulate_annual(world, &tables, self.world_seed, season)
+                });
             assert!(history.record(year));
         }
         self.managers.record_match_points(&match_points);

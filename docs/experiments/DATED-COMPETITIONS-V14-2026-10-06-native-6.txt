@@ -1,0 +1,33 @@
+season=1 season_us=17755911 fixtures=25571 detailed=3023 postponed=2667 cards=8745 loads=149913 coefficients=1 pending_national=12
+save_bytes=21286590 checkpoint_bytes=17648271 encode_us=209340
+resume_us=313353 exact=true rebuilds=0
+cold_us=196746 retained_cold_equal=true
+summer_continuation_equal=true season=2
+season=2 season_us=26748970 fixtures=25581 detailed=2998 postponed=2952 cards=17540 loads=311686 coefficients=2 pending_national=0
+save_bytes=35771189 checkpoint_bytes=28429897 encode_us=324338
+resume_us=508688 exact=true rebuilds=0
+cold_us=1294359 retained_cold_equal=true
+summer_continuation_equal=true season=3
+season=3 season_us=46189715 fixtures=25571 detailed=3001 postponed=3100 cards=26267 loads=484539 coefficients=3 pending_national=12
+save_bytes=50798436 checkpoint_bytes=39705341 encode_us=439668
+resume_us=778404 exact=true rebuilds=0
+cold_us=2548412 retained_cold_equal=true
+summer_continuation_equal=true season=4
+season=4 season_us=71896025 fixtures=25581 detailed=3007 postponed=5231 cards=35119 loads=665712 coefficients=4 pending_national=0
+save_bytes=67543671 checkpoint_bytes=52654077 encode_us=609013
+resume_us=1096775 exact=true rebuilds=0
+cold_us=4107566 retained_cold_equal=true
+summer_continuation_equal=true season=5
+season=5 season_us=81733133 fixtures=25571 detailed=2992 postponed=4257 cards=43819 loads=846174 coefficients=5 pending_national=12
+save_bytes=83157796 checkpoint_bytes=64484062 encode_us=739313
+resume_us=1352215 exact=true rebuilds=0
+cold_us=5790217 retained_cold_equal=true
+summer_continuation_equal=true season=6
+season=6 season_us=103595899 fixtures=25581 detailed=2997 postponed=2555 cards=52630 loads=1027468 coefficients=6 pending_national=0
+save_bytes=97400923 checkpoint_bytes=74930237 encode_us=850679
+resume_us=1564825 exact=true rebuilds=0
+cold_us=17840916 retained_cold_equal=true
+whole_run_us=429322099
+VmHWM:	  876176 kB
+VmRSS:	  458032 kB
+process_wall_seconds=429.365587 user_seconds=427.781438 system_seconds=0.803057 peak_rss_kib=876176 exit=0

@@ -1,13 +1,18 @@
-# Development checkpoint — 2026-10-05
+# Development checkpoint — 2026-10-06
+
+Latest core update: [SIM14 dated competitions](DATED-COMPETITIONS.md) —
+all competitions share one career clock, with persisted progress and actual
+NPC minutes/cards; named PC squads continue after dismissal. Layout 29 and
+checkpoint format 2. Milestone 4 implemented; milestone 5 is next.
 
 Local resume update: [derived-state checkpoint](LOCAL-RESUME-CHECKPOINT.md) —
 optional exact cache in save layout 28, unchanged SIM13; canonical journals and
 fallback reconstruction retained. Long-career file measurements are recorded there.
 
-Latest core update: [v13 runtime journals and reactive NPC matches](CORE-STEPS-2-3.md) —
+Previous core update: [v13 runtime journals and reactive NPC matches](CORE-STEPS-2-3.md) —
 lossless runtime storage, exact replay, score/fatigue substitutions, NPC discipline
 and named keeper coverage; save layout 27/SIM13. Core roadmap milestones 2 and 3
-are implemented for autonomous dated league fixtures; full competition calendar is next.
+are implemented for autonomous dated league fixtures; SIM14 extends the dated calendar.
 
 Previous core update: [v11 five-season league coefficients](LEAGUE-COEFFICIENTS.md) — normalized
 continental results, distinct cup entrants and ranked deep selection; save 25/SIM11.

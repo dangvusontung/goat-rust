@@ -65,6 +65,7 @@ pub struct Population {
     retirement_days: Vec<u32>,
     load_world_seed: u64,
     observed_loads: crate::workload::LoadColumns,
+    fixture_overrides: std::collections::BTreeMap<(usize, u64), u32>,
     availability_cache: RefCell<Vec<Option<(u32, u32, u32)>>>,
     life_cache: RefCell<Vec<Option<(u32, crate::npc_life::NpcHealthState)>>>,
     exposures: crate::exposure::ExposureColumns,
@@ -610,12 +611,36 @@ impl Population {
             return schedule.week(self.seed[idx], self.load_world_seed, week, e);
         };
         self.ensure_calendar_week(week);
-        schedule.week_with_plan(
-            self.seed[idx],
-            week,
-            e,
-            &self.dated_fixtures.borrow()[week as usize],
-        )
+        if self
+            .fixture_overrides
+            .range((idx, 0)..=(idx, u64::MAX))
+            .next()
+            .is_none()
+        {
+            return schedule.week_with_plan(
+                self.seed[idx],
+                week,
+                e,
+                &self.dated_fixtures.borrow()[week as usize],
+            );
+        }
+        let mut plan = self.dated_fixtures.borrow()[week as usize]
+            .iter()
+            .filter(|dose| !self.fixture_overrides.contains_key(&(idx, dose.fixture_id)))
+            .copied()
+            .collect::<Vec<_>>();
+        for (&(_, id), &day) in self.fixture_overrides.range((idx, 0)..=(idx, u64::MAX)) {
+            if day / 7 == week {
+                plan.push(crate::workload::MatchDose {
+                    competition_id: 1,
+                    fixture_id: id,
+                    epoch_day: day,
+                    minutes: 0,
+                    observed: false,
+                });
+            }
+        }
+        schedule.week_with_plan(self.seed[idx], week, e, &plan)
     }
     fn reset_calendar_apps(&self, week: u32, health: &mut crate::npc_life::NpcHealthState) {
         if self.chronology.is_some() {
@@ -2704,6 +2729,7 @@ crate::checkpoint::fields!(Population {
     retirement_days,
     load_world_seed,
     observed_loads,
+    fixture_overrides,
     availability_cache,
     life_cache,
     exposures,
@@ -2724,6 +2750,66 @@ crate::checkpoint::fields!(Population {
 });
 
 impl Population {
+    /// Per-player planned dates suppress phantom league load before a postponed match.
+    pub(crate) fn apply_fixture_dates(
+        &mut self,
+        cal: &goat_core::competitions::CompetitionCalendar,
+        season: u32,
+    ) {
+        let overridden_ids = self
+            .fixture_overrides
+            .keys()
+            .map(|&(_, id)| id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let mut by_club =
+            std::collections::BTreeMap::<u32, Vec<&goat_core::competitions::DatedFixture>>::new();
+        for f in cal
+            .fixtures
+            .iter()
+            .chain(cal.results.iter().map(|r| &r.fixture))
+            .filter(|f| {
+                f.season == season
+                    && f.competition == 1
+                    && (f.day != f.original_day || overridden_ids.contains(&f.workload_id))
+            })
+        {
+            by_club.entry(f.home).or_default().push(f);
+            by_club.entry(f.away).or_default().push(f);
+        }
+        for idx in 0..self.len() {
+            if let Some(fixtures) = by_club.get(&(self.club[idx] as u32)) {
+                for f in fixtures {
+                    let key = (idx, f.workload_id);
+                    if self.fixture_overrides.get(&key) == Some(&f.day) {
+                        continue;
+                    }
+                    let previous = if f.day == f.original_day {
+                        self.fixture_overrides.remove(&key)
+                    } else {
+                        self.fixture_overrides.insert(key, f.day)
+                    }
+                    .unwrap_or(f.original_day);
+                    if previous == f.day {
+                        continue;
+                    }
+                    let affected = previous.min(f.original_day).min(f.day) / 7;
+                    if self.shared_cache.get_mut()[idx].is_some_and(|(week, _, _)| week > affected)
+                    {
+                        self.shared_cache.get_mut()[idx] = None;
+                        self.life_cache.get_mut()[idx] = None;
+                    }
+                    if self.availability_cache.get_mut()[idx]
+                        .is_some_and(|(week, _, _)| week > affected)
+                    {
+                        self.availability_cache.get_mut()[idx] = None;
+                    }
+                }
+            }
+        }
+    }
+    pub(crate) fn calendar_for_replay(&self) -> Option<goat_core::chronology::Chronology> {
+        self.chronology
+    }
     pub(crate) fn checkpoint_valid(
         &self,
         clubs: usize,
@@ -2767,6 +2853,7 @@ impl Population {
                 .iter()
                 .any(|&v| v as usize >= crate::world::NUM_NATIONS)
             || self.week_cycles.borrow().len() != self.dated_fixtures.borrow().len()
+            || self.fixture_overrides.keys().any(|&(idx, _)| idx >= n)
             || !self.observed_loads.checkpoint_valid(n)
             || !self.exposures.checkpoint_valid(n)
         {
@@ -2796,5 +2883,48 @@ impl Population {
             }
         }
         true
+    }
+}
+
+#[cfg(test)]
+mod dated_reschedule_tests {
+    use super::*;
+    #[test]
+    fn cancelling_postponement_removes_old_load_override() {
+        use goat_core::competitions::{CompetitionCalendar, DatedFixture};
+        let world = WorldGenesis::generate(42);
+        let mut pop = genesis_dated(42, &world, 2023);
+        let id = crate::workload::league_fixture_id(42, 1, 0, 0);
+        let original =
+            crate::calendar::dated_fixture_day(goat_core::chronology::Chronology::new(2023), 1, 0);
+        let mut cal = CompetitionCalendar {
+            prepared_through: 1,
+            fixtures: vec![DatedFixture {
+                id: 1,
+                workload_id: id,
+                season: 1,
+                competition: 1,
+                region: 0,
+                round: 0,
+                slot: 0,
+                stage: 0,
+                leg: 0,
+                original_day: original,
+                day: original + 7,
+                home: 0,
+                away: 1,
+                priority: 1,
+            }],
+            ..Default::default()
+        };
+        pop.apply_fixture_dates(&cal, 1);
+        assert_eq!(pop.fixture_overrides.get(&(0, id)), Some(&(original + 7)));
+        let _ = pop.current_ovr(0, 20);
+        cal.fixtures[0].day = original;
+        pop.apply_fixture_dates(&cal, 1);
+        assert!(!pop.fixture_overrides.contains_key(&(0, id)));
+        let cold = genesis_dated(42, &world, 2023);
+        assert_eq!(pop.current_ovr(0, 20), cold.current_ovr(0, 20));
+        assert_eq!(pop.medical_status(0, 20), cold.medical_status(0, 20));
     }
 }

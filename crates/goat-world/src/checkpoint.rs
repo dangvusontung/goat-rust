@@ -6,9 +6,9 @@ use std::{
 };
 
 /// Cache format, independent of the save container and frozen football model.
-pub const FORMAT: u32 = 1;
+pub const FORMAT: u32 = 2;
 /// Football/medical behavior version captured by this derived cache.
-pub const MODEL: u32 = 13;
+pub const MODEL: u32 = 14;
 /// Reject oversized/unbounded optional cache payloads before allocating.
 pub const MAX_BYTES: usize = 256 * 1024 * 1024;
 pub(crate) struct Reader<'a> {

@@ -1,6 +1,8 @@
 # Core milestone 4 — full dated competition calendar
 
-Next after [v13 milestones 2–3](../docs/CORE-STEPS-2-3.md). Keep the existing
+Implemented in SIM14 / layout 29. See [design, evidence and limits](../docs/DATED-COMPETITIONS.md).
+
+Follows [v13 milestones 2–3](../docs/CORE-STEPS-2-3.md). Keep the existing
 league deep budget. 150 countries and renderer enhancement remain deferred.
 
 1. Represent cup, continental, national and friendly fixtures by stable competition,

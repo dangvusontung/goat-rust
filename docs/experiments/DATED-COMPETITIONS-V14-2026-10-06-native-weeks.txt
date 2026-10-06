@@ -1,0 +1,24 @@
+week=1 weekly_us=18357
+week=2 weekly_us=2
+week=3 weekly_us=2
+week=4 weekly_us=1
+week=5 weekly_us=184177
+week=6 weekly_us=183569
+week=7 weekly_us=143815
+week=8 weekly_us=289902
+week=9 weekly_us=147077
+week=10 weekly_us=373535
+week=11 weekly_us=4
+week=12 weekly_us=312276
+week=13 weekly_us=587764
+week=14 weekly_us=343761
+week=15 weekly_us=350924
+week=16 weekly_us=98434
+season=1 season_us=3038616 fixtures=8380 detailed=990 postponed=327 cards=2838 loads=48651 coefficients=0 pending_national=24
+save_bytes=13475004 checkpoint_bytes=11383511 encode_us=86621
+resume_us=166990 exact=true rebuilds=0
+cold_us=81222 retained_cold_equal=true
+whole_run_us=3377763
+VmHWM:	  107000 kB
+VmRSS:	   56536 kB
+process_wall_seconds=3.384002 user_seconds=3.340854 system_seconds=0.040356 peak_rss_kib=107000 exit=0

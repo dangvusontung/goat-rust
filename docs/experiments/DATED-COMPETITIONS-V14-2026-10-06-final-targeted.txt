@@ -1,0 +1,19 @@
+   Compiling goat-world v0.1.0 (/workspace/goat-rust/crates/goat-world)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.38s
+     Running unittests src/lib.rs (target/debug/deps/goat_world-8ba0958124b61278)
+
+running 1 test
+test competitions::tests::unresolved_past_fixture_cannot_move_the_career_clock_backwards ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 215 filtered out; finished in 0.30s
+
+   Compiling goat-world v0.1.0 (/workspace/goat-rust/crates/goat-world)
+   Compiling goat-save v0.1.0 (/workspace/goat-rust/crates/goat-save)
+   Compiling goat-tui v0.1.0 (/workspace/goat-rust/crates/goat-tui)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.37s
+     Running tests/dated_competitions.rs (target/debug/deps/dated_competitions-b7deb46a2a76cb6f)
+
+running 1 test
+test dated_pc_match_is_idempotent_and_next_match_survives_save ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 9.94s

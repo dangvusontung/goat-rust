@@ -26,6 +26,8 @@ use crate::week::{DevelopmentEvent, Routine};
 /// The entire world state for a single save.
 #[derive(Debug, Clone)]
 pub struct WorldState {
+    /// Opt-in full dated competitions, retaining legacy SIM13 entry points.
+    pub competition_calendar: Option<crate::competitions::CompetitionCalendar>,
     pub pc_development_history: crate::history::DevelopmentHistory,
     pub dated_calendar: bool,
     pub deep_scopes: Vec<crate::deep::DeepScope>,
@@ -413,6 +415,7 @@ impl WorldState {
             pc_player_id: None,
             pc_routine: Routine::default(),
             pc_club: String::new(),
+            competition_calendar: None,
             pc_nationality: String::new(),
             pc_position: 0, // PrimaryPosition::ST default
             last_week_events: Vec::new(),
@@ -574,6 +577,16 @@ impl Default for WorldState {
 /// Player intents the renderer sends to the core.
 #[derive(Debug, Clone)]
 pub enum Intent {
+    /// Start the dated multi-competition model; no fixtures are resolved by reads.
+    EnableDatedCompetitions,
+    RecordDatedPcMatch {
+        receipt: crate::competitions::DatedMatchReceipt,
+    },
+    /// Atomic canonical progress produced by the headless competition subsystem.
+    SetCompetitionCalendar {
+        calendar: crate::competitions::CompetitionCalendar,
+    },
+
     BeginDatedFixture {
         fixture_id: u64,
     },
@@ -888,6 +901,89 @@ pub enum Intent {
 /// Advance the simulation by one intent.
 pub fn reduce(mut state: WorldState, intent: Intent, rng: &mut impl RngSource) -> WorldState {
     match intent {
+        Intent::RecordDatedPcMatch { receipt } => {
+            if state.competition_calendar.as_ref().is_none_or(|cal| {
+                !cal.results
+                    .iter()
+                    .any(|r| r.fixture.id == receipt.result.fixture.id)
+            }) {
+                return state;
+            }
+            if state
+                .competition_calendar
+                .as_ref()
+                .unwrap()
+                .pc_played_fixture_ids
+                .contains(&receipt.result.fixture.id)
+            {
+                return state;
+            }
+            state
+                .competition_calendar
+                .as_mut()
+                .unwrap()
+                .pc_played_fixture_ids
+                .push(receipt.result.fixture.id);
+            let minutes = receipt.pc_minutes.min(90);
+            if minutes > 0 {
+                state.pc_season_goals += receipt.pc_goals;
+                state.pc_season_assists += receipt.pc_assists;
+                state.pc_season_matches += 1;
+                state.pc_season_output += receipt.pc_output;
+                state.pc_season_decisive_moments += receipt.decisive;
+                state.pc_season_clutch_index += receipt.clutch;
+                state.pc_season_standout_matches +=
+                    u32::from(receipt.pc_output >= crate::tuning::STANDOUT_OUTPUT_THRESHOLD);
+                state.pc_form = state.pc_form * Fixed::raw(850)
+                    + Fixed::from_int(receipt.pc_output.clamp(0, 100)) * Fixed::raw(150);
+                if receipt.result.fixture.national() {
+                    state.pc_season_caps += 1;
+                    state.pc_season_international_goals += receipt.pc_goals;
+                }
+            }
+            if receipt.result.fixture.competition == crate::competitions::LEAGUE {
+                state.season_round += 1;
+            }
+            state
+                .competition_calendar
+                .as_mut()
+                .unwrap()
+                .pc_cards
+                .extend(receipt.pc_cards);
+            reduce(
+                state,
+                Intent::ApplyMatchResult {
+                    familiarity_xp: receipt.familiarity_xp,
+                    energy_cost: Fixed::from_int(20) * Fixed::from_int(minutes as i32)
+                        / Fixed::from_int(90),
+                    injury_weeks: None,
+                },
+                rng,
+            )
+        }
+        Intent::EnableDatedCompetitions => {
+            if state.dated_calendar
+                && state.pc_epoch_day == 0
+                && state.season_round == 0
+                && state.pc_season_matches == 0
+                && state.season_number <= 1
+                && state.orbit_records.is_empty()
+                && state.deep_results.is_empty()
+            {
+                state.realistic_npc = true;
+                state
+                    .competition_calendar
+                    .get_or_insert_with(Default::default);
+            }
+            state
+        }
+        Intent::SetCompetitionCalendar { calendar } => {
+            if state.dated_calendar {
+                state.competition_calendar = Some(calendar);
+            }
+            state
+        }
+
         Intent::SelectDeepScope { mut scope } => {
             if state.dated_calendar
                 && scope.season == state.season_number

@@ -46,6 +46,19 @@ impl RankingHistory {
         }
         true
     }
+    pub(crate) fn replace_year(&mut self, annual: AnnualCoefficient) -> bool {
+        if let Some(old) = self.years.iter_mut().find(|y| y.season == annual.season) {
+            if old.points.len() != annual.points.len()
+                || old.entrants.len() != annual.entrants.len()
+            {
+                return false;
+            }
+            *old = annual;
+            true
+        } else {
+            false
+        }
+    }
     pub fn years(&self) -> &VecDeque<AnnualCoefficient> {
         &self.years
     }
